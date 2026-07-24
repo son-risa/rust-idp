@@ -12,13 +12,17 @@ CLAUDE.md の「拡張安全性の判断基準」に基づき、新しい公開�
 
 ## SigningKeys は trait 化しなかった (src/keys.rs)
 
-署名アルゴリズムは RS256 固定。ES256/PS256 等を追加する具体的な要求がまだないため、`trait SigningKey` のような抽象化はせず、RSA専用の具体型にした。
+署名アルゴリズムは RS256 固定。`trait SigningKey` のような抽象化はせず、RSA専用の具体型にした。
+
+**訂正**: 当初「ES256/PS256等を追加する具体的な要求がまだないため」としていたが、rust-opの実コードを確認すると trait化のトリガーはアルゴリズム追加ではなかった。rust-opの`JwsSigner`トレイトは、`KMS_ES256_KEY`環境変数の有無でローカル署名(`Es256Signer`/`Rs256Signer`)とKMS署名(`KmsSigner`)を起動時に選び、同じ呼び出し口(`Arc<dyn JwsSigner>`)で共存させる必要が生じたことがトリガーだった（開発環境とKMSが使える本番を同じコードパスで動かすため）。rust-idpでtrait化を検討すべき瞬間も、「アルゴリズムを増やす時」ではなく「ローカル署名とKMS署名を実行時に選べるようにする必要が出た時」であり、それはKMS移行に着手する回とほぼ同時になる見込み。
 
 ## id_token 署名は KMS委譲を前提にした手組みのJWS生成にする (src/keys.rs)
 
-現在の `sign_id_token` は `jsonwebtoken::encode()` を使いプロセス内のRSA秘密鍵で署名しているが、これは変更する。本番では秘密鍵をプロセス内に持たずCloud KMSに保持し、KMSの`asymmetricSign`に署名を委譲する設計にする（rust-opの本番構成を踏襲）。`jsonwebtoken`の`EncodingKey`はローカル鍵材料が必須で外部署名者への委譲をサポートしないため、`base64url(header) + "." + base64url(claims)`を自前で組み立て、その署名対象バイト列を渡すと署名済みバイト列が返る、という境界の関数にする。今の段階ではその関数の中身はローカル鍵で署名してよい（KMS配線自体は素朴な土台が動いてからでよい）が、境界の形は最初からこれに合わせておくことで、KMS移行時に呼び出し側を変えずに内部だけ差し替えられるようにする。
+現在の `sign_id_token` は `jsonwebtoken::encode()` を使いプロセス内のRSA秘密鍵で署名しているが、これは変更する。本番では秘密鍵をプロセス内に持たずCloud KMSに保持し、KMSの`asymmetricSign`に署名を委譲する設計にする（rust-opの本番構成を踏襲）。`jsonwebtoken`の`EncodingKey`はローカル鍵材料が必須で外部署名者への委譲をサポートしないため、`base64url(header) + "." + base64url(claims)`を自前で組み立て、その署名対象バイト列を渡すと署名済みバイト列が返る、という境界の関数にする。今の段階ではその関数の中身はローカル鍵で署名してよい（KMS配線自体は素朴な土台が動いてからでよい）が、境界の形は最初からこれに合わせておくことで、KMS移行時の差し替え範囲を`sign_bytes`とその呼び出し元に限定できる。
 
 呼び出し元（`handlers/token.rs`）は `state.keys.sign_id_token(&claims)` の1箇所だけであり、この境界は既に保たれている。
+
+**訂正**: 当初「KMS移行時に呼び出し側を変えずに内部だけ差し替えられる」としていたが、これは不正確だった。rust-opの`JwsSigner::sign`は`async fn`である（Cloud KMSの`asymmetricSign`はネットワーク呼び出しのため）。rust-idpの`sign_bytes`/`sign_id_token`は現在同期関数なので、実際にKMSへ委譲する際はこれらを`async fn`に変える必要があり、`handlers/token.rs`の呼び出しに`.await`を足す変更が発生する（token handler自体は既にasyncなので破壊的ではないが、シグネチャは変わる）。またKMSの`asymmetricSign`はメッセージ全体ではなくSHA-256ダイジェストを渡す契約なので、KMS版`sign_bytes`の内部では署名対象バイト列を先にハッシュ化してから渡す必要がある。
 
 ## /.well-known/jwks.json はJWK JSONを自前で組み立てる (src/keys.rs)
 
