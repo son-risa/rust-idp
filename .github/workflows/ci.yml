@@ -3,7 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
   pull_request:
+    paths-ignore:
+      - '**.md'
 
 # 公開リポジトリ向けの最小権限: workflow が悪用されても書き込み不可（read-only token）。
 permissions:
