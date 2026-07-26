@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 /// RFC 6749 5.2 で定義されたtoken endpointのエラーコード。仕様上ほぼ閉じているためenumで表す。
+#[derive(Debug)]
 pub enum TokenError {
     InvalidRequest(&'static str),
     InvalidClient,
@@ -36,5 +37,46 @@ impl IntoResponse for TokenError {
             Json(json!({ "error": error, "error_description": description })),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn error_body(err: TokenError) -> (StatusCode, serde_json::Value) {
+        let resp = err.into_response();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn invalid_request_maps_to_400() {
+        let (status, body) = error_body(TokenError::InvalidRequest("failed to sign id_token")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_request");
+        assert_eq!(body["error_description"], "failed to sign id_token");
+    }
+
+    #[tokio::test]
+    async fn invalid_client_maps_to_401() {
+        let (status, body) = error_body(TokenError::InvalidClient).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "invalid_client");
+    }
+
+    #[tokio::test]
+    async fn invalid_grant_maps_to_400() {
+        let (status, body) = error_body(TokenError::InvalidGrant).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_grant");
+    }
+
+    #[tokio::test]
+    async fn unsupported_grant_type_maps_to_400() {
+        let (status, body) = error_body(TokenError::UnsupportedGrantType).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "unsupported_grant_type");
     }
 }
