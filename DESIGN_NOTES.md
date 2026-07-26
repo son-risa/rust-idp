@@ -16,7 +16,7 @@ CLAUDE.md の「拡張安全性の判断基準」に基づき、新しい公開�
 
 ## id_token 署名は KMS委譲を前提にした手組みのJWS生成にする (src/keys.rs)
 
-`sign_id_token` は `jsonwebtoken::encode()` のようなライブラリのローカル署名APIには頼らない。本番では秘密鍵をプロセス内に持たずCloud KMSに保持し、KMSの`asymmetricSign`に署名を委譲する設計にする（rust-opの本番構成を踏襲）。`jsonwebtoken`の`EncodingKey`はローカル鍵材料が必須で外部署名者への委譲をサポートしないため、`base64url(header) + "." + base64url(claims)`を自前で組み立て、その署名対象バイト列を渡すと署名済みバイト列が返る、という境界の関数にする。今の段階ではその関数の中身はローカル鍵で署名してよい（KMS配線自体は素朴な土台が動いてからでよい）が、境界の形は最初からこれに合わせておくことで、KMS移行時に呼び出し側を変えずに内部だけ差し替えられるようにする。
+現在の `sign_id_token` は `jsonwebtoken::encode()` を使いプロセス内のRSA秘密鍵で署名しているが、これは変更する。本番では秘密鍵をプロセス内に持たずCloud KMSに保持し、KMSの`asymmetricSign`に署名を委譲する設計にする（rust-opの本番構成を踏襲）。`jsonwebtoken`の`EncodingKey`はローカル鍵材料が必須で外部署名者への委譲をサポートしないため、`base64url(header) + "." + base64url(claims)`を自前で組み立て、その署名対象バイト列を渡すと署名済みバイト列が返る、という境界の関数にする。今の段階ではその関数の中身はローカル鍵で署名してよい（KMS配線自体は素朴な土台が動いてからでよい）が、境界の形は最初からこれに合わせておくことで、KMS移行時に呼び出し側を変えずに内部だけ差し替えられるようにする。
 
 呼び出し元（`handlers/token.rs`）は `state.keys.sign_id_token(&claims)` の1箇所だけであり、この境界は既に保たれている。
 
