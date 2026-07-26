@@ -65,3 +65,97 @@ fn redirect_with_error(redirect_uri: &str, error: &'static str, state: Option<&s
     }
     Redirect::to(&location).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ClientConfig, Config};
+    use crate::keys::SigningKeys;
+    use crate::store::CodeStore;
+    use std::sync::Arc;
+
+    const REDIRECT_URI: &str = "http://localhost:8080/callback";
+
+    fn test_state() -> AppState {
+        AppState {
+            config: Arc::new(Config {
+                issuer: "http://localhost:8080".to_string(),
+                client: ClientConfig {
+                    client_id: "demo-client".to_string(),
+                    client_secret: "demo-secret".to_string(),
+                    redirect_uris: vec![REDIRECT_URI.to_string()],
+                },
+            }),
+            codes: Arc::new(CodeStore::new()),
+            keys: Arc::new(SigningKeys::generate()),
+        }
+    }
+
+    fn valid_query() -> AuthorizeQuery {
+        AuthorizeQuery {
+            response_type: "code".to_string(),
+            client_id: "demo-client".to_string(),
+            redirect_uri: REDIRECT_URI.to_string(),
+            scope: "openid".to_string(),
+            state: Some("xyz".to_string()),
+            nonce: Some("nonce-1".to_string()),
+        }
+    }
+
+    fn location_of(resp: &Response) -> &str {
+        resp.headers().get("location").unwrap().to_str().unwrap()
+    }
+
+    #[tokio::test]
+    async fn unknown_client_id_is_rejected_without_redirect() {
+        let state = test_state();
+        let mut q = valid_query();
+        q.client_id = "someone-else".to_string();
+        let resp = authorize(State(state), Query(q)).await;
+        // client_idを検証できていないのでredirectしてはいけない(オープンリダイレクタ防止)。
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn unregistered_redirect_uri_is_rejected_without_redirect() {
+        let state = test_state();
+        let mut q = valid_query();
+        q.redirect_uri = "http://evil.example/callback".to_string();
+        let resp = authorize(State(state), Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn unsupported_response_type_redirects_with_error() {
+        let state = test_state();
+        let mut q = valid_query();
+        q.response_type = "token".to_string();
+        let resp = authorize(State(state), Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let location = location_of(&resp);
+        assert!(location.starts_with(REDIRECT_URI));
+        assert!(location.contains("error=unsupported_response_type"));
+        assert!(location.contains("state=xyz"));
+    }
+
+    #[tokio::test]
+    async fn missing_openid_scope_redirects_with_error() {
+        let state = test_state();
+        let mut q = valid_query();
+        q.scope = "profile".to_string();
+        let resp = authorize(State(state), Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert!(location_of(&resp).contains("error=invalid_scope"));
+    }
+
+    #[tokio::test]
+    async fn valid_request_redirects_with_code_and_state() {
+        let state = test_state();
+        let resp = authorize(State(state), Query(valid_query())).await;
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let location = location_of(&resp);
+        assert!(location.starts_with(REDIRECT_URI));
+        assert!(location.contains("code="));
+        assert!(location.contains("state=xyz"));
+    }
+}
