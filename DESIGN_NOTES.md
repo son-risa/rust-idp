@@ -24,6 +24,10 @@ CLAUDE.md の「拡張安全性の判断基準」に基づき、新しい公開�
 
 `jsonwebtoken::jwk`モジュールは公開JWKの読み込み専用で生成機能を持たないため、`jwks_document()`は公開鍵の構成要素（RSAならn/e）から素朴にJSONを組み立てている。ライブラリ側にJWK生成ヘルパーは無いという制約を踏まえた実装であり、今後鍵種別が増えても同様に手組みする。
 
+## authorize ハンドラのエラー処理は enum にしなかった (src/handlers/authorize.rs)
+
+OAuth2 の authorize エンドポイントのエラーには「redirect_uri へのリダイレクトで返すもの(response_type/scope不正)」と「直接400を返すもの(client_id不明・redirect_uri未登録)」の2系統があり、後者をリダイレクトしてしまうとオープンリダイレクタになる。この区別は enum で表現するほど複雑でも再利用されるものでもないため、素朴に関数 `bad_request` / `redirect_with_error` を分けて呼ぶだけに留めた。
+
 ## IdTokenClaims は構造体越しに渡す (src/keys.rs)
 
 `SigningKeys::sign_id_token` の引数は `iss/sub/aud/exp/iat/nonce` の直列挙にせず `IdTokenClaims` 構造体越しに渡している。今後 claims が増えても呼び出し側のシグネチャを壊さない。

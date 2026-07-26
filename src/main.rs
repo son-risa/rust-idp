@@ -33,6 +33,7 @@ async fn main() {
             get(handlers::discovery::discovery),
         )
         .route("/.well-known/jwks.json", get(handlers::jwks::jwks))
+        .route("/authorize", get(handlers::authorize::authorize))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
