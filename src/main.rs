@@ -9,7 +9,7 @@ mod util;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 
 use config::Config;
 use keys::SigningKeys;
@@ -34,6 +34,7 @@ async fn main() {
         )
         .route("/.well-known/jwks.json", get(handlers::jwks::jwks))
         .route("/authorize", get(handlers::authorize::authorize))
+        .route("/token", post(handlers::token::token))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
