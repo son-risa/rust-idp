@@ -19,6 +19,8 @@ mod dpop;
 mod error;
 mod es256;
 #[cfg(test)]
+mod formal_ledger_tests;
+#[cfg(test)]
 mod fuzz_tests;
 mod fcm;
 mod fido;

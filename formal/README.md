@@ -16,6 +16,25 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 第一版は `sources`/`reuse` 補題が要る場合がある（open-chain や非終了が出たら追加して iterate）。
 **「Tamarin が詰まる = 足りない前提が見える」こと自体が収穫**であって、最初から完璧な証明である必要はない。
 
+## CI で回す（`.github/workflows/formal.yml`）
+
+`src/**`・`formal/**`・`Cargo.toml`・`Cargo.lock` を触る PR と main への push で、次の 2 つを回す。
+
+- **Tamarin**: `formal/check.sh` が `formal/*.spthy` を全部 `--prove --auto-sources` にかけ、lemma ごとの結果を
+  [`expected.tsv`](./expected.tsv) と突き合わせる。本体のモデルは全 lemma が verified、NEG 版は下の各節に書いた lemma が
+  falsified であることを期待する。結果が違う・表に無いモデルや lemma がある・表にあるのに走らなかった・wellformedness が
+  通らない、のどれでも赤。モデルを足したり lemma を変えたら、`expected.tsv` も同じ PR で直す。
+- **Kani**: `cargo kani` で全ハーネスを回す（Kani 0.67.0）。
+
+```sh
+formal/check.sh      # 手元で Tamarin の期待表を照合
+cargo kani           # 手元で Kani の全ハーネス
+```
+
+下の各節の「表に出た前提 → rust-op の担保」の P-* は、[`premises.json`](./premises.json) に機械が読む形で写してある
+（担保のコード・試験・Kani ハーネス、または試験にできない理由）。`cargo test` の `formal_ledger_tests` が、README の P-* と
+台帳の行が過不足なく対応すること、台帳が指すモデル・関数・試験・ハーネスが実在することを検める。
+
 ## モデル #1: 認可コード + PKCE + クライアント認証 → トークン
 
 対象は confidential client（private_key_jwt 相当 = DCR/FAPI クライアント）。フロー:

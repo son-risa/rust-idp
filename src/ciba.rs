@@ -603,6 +603,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn firestore_store_consume_is_single_use() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let s = FirestoreCibaStore::new(Arc::new(Firestore::new_for_test("proj", host)));
+        let id = s.create("rp", "u", "openid", "", None).await.unwrap();
+        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
+        s.transition_if_pending(id.as_str(), CibaStatus::Approved).await.unwrap();
+        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_some());
+        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn history_record_and_list_newest_first() {
         let s = MemoryCibaStore::default();
         let mk = |id: &str, ts: u64, outcome: &str| CibaHistoryEntry {

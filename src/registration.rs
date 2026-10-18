@@ -407,6 +407,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn webauthn_challenge_is_consumed_once() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "").await.unwrap();
+        let first = consume_webauthn_challenge(&fs, &c).await.unwrap();
+        assert_eq!(first.map(|(e, k, _, _)| (e, k)), Some(("a@example.com".to_string(), ChallengeKind::Auth)));
+        assert_eq!(consume_webauthn_challenge(&fs, &c).await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn list_accounts_returns_all_and_reflects_disabled() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
