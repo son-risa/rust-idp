@@ -669,6 +669,8 @@ pub(crate) mod fake_firestore {
 
     #[derive(Default)]
     pub struct FakeState {
+        /// 削除の門: (col, id) の DELETE が届いたら reached を鳴らし、release まで止める（並走の順を固定する）。
+        delete_gates: Mutex<HashMap<(String, String), (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
         docs: Mutex<HashMap<(String, String), Doc>>,
         next_version: Mutex<u64>,
         /// fcm.rs の send() が投げた message body をそのまま記録する（identifier 一貫性の検証用）。
@@ -702,6 +704,16 @@ pub(crate) mod fake_firestore {
                 }
                 None => false,
             }
+        }
+    }
+
+    impl FakeState {
+        /// (col, id) の次の DELETE を止める門を置く。返す (reached, release) の reached は DELETE が届いたら鳴り、
+        /// release を鳴らすと DELETE が進む。
+        pub fn gate_delete(&self, col: &str, id: &str) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+            let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+            self.delete_gates.lock().unwrap().insert((col.to_string(), id.to_string()), gate.clone());
+            gate
         }
     }
 
@@ -790,6 +802,11 @@ pub(crate) mod fake_firestore {
     ) -> Response {
         if st.take_failure("DELETE", &col, &id) {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        let gate = st.delete_gates.lock().unwrap().remove(&(col.clone(), id.clone()));
+        if let Some((reached, release)) = gate {
+            reached.notify_one();
+            release.notified().await;
         }
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);

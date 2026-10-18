@@ -22,8 +22,10 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-/// 系列の失効で削除に失敗した RT を消し直す回数。
+/// 系列の失効で、ストアの誤りで消せなかった RT を消し直す回数。
 const REVOKE_RETRIES: usize = 3;
+/// 系列の失効で、1 本の RT の CAS 削除に負けたときに読み直す回数。
+const REVOKE_REREADS: usize = 3;
 
 fn doc_expired(fields: &Value) -> bool {
     fs_h::field_ts_secs(fields, "expiresAt").unwrap_or(0) < now()
@@ -53,6 +55,29 @@ pub struct FirestoreStore {
 impl FirestoreStore {
     pub fn new(fs: Arc<Firestore>) -> Self {
         Self { fs }
+    }
+
+    /// RT を 1 本、読んだ updateTime の CAS で消す。消せた（または既に無い）なら gone=true、ストアの誤りで
+    /// 消せなかったら gone=false。どちらでも読めた replacedBy を返す。
+    /// CAS に負けた（読んでから消すまでの間に、その RT のローテーションが replacedBy を書いた）ときは
+    /// 読み直して、新しい replacedBy を拾ってから消す。条件なしで消すと、その間に渡った新しい RT が
+    /// 系列から外れて残る。読み直しは REVOKE_REREADS 回まで（負け続けたら誤りと同じ扱い）。
+    async fn revoke_one_refresh(&self, token: &str) -> (bool, Option<String>) {
+        let mut next = None;
+        for _ in 0..REVOKE_REREADS {
+            let (f, update_time) = match self.fs.get_doc_with_update_time("refreshTokens", token).await {
+                Ok(Some(x)) => x,
+                Ok(None) => return (true, next),
+                Err(_) => return (false, next),
+            };
+            next = fs_h::field_str(&f, "replacedBy").map(str::to_string);
+            match self.fs.delete_doc_if_unchanged("refreshTokens", token, &update_time).await {
+                Ok(true) => return (true, next),
+                Ok(false) => continue,
+                Err(_) => return (false, next),
+            }
+        }
+        (false, next)
     }
 
     /// updateTime CAS で単回削除する。削除に成功（=この呼び出しが初回）したら削除直前の
@@ -349,35 +374,25 @@ impl Store for FirestoreStore {
         // familyId で引く形にしないのは、familyId を書く前（2026-06-11 より前）に始まった鎖を
         // ローテーションし続けた RT が、familyId を空のまま引き継いでいるため（空の familyId で引くと
         // 無関係な系列まで消す）。
-        // 削除に失敗した RT は控えて、走査の後に回数の上限つきで消し直す（seen から外して辿り直すと、
-        // 失敗し続ける循環で終わらない）。
-        let mut seen = std::collections::HashSet::new();
+        // ストアの誤りで消せなかった RT は控えて、走査の後に回数の上限つきで消し直す（seen から外して
+        // 辿り直すと、失敗し続ける循環で終わらない）。
+        let mut seen = std::collections::HashSet::from([start_token.to_string()]);
+        let mut queue = vec![start_token.to_string()];
         let mut failed = Vec::new();
-        let mut cur = Some(start_token.to_string());
-        while let Some(t) = cur.filter(|t| seen.insert(t.clone())) {
-            let next = self
-                .fs
-                .get_doc("refreshTokens", &t)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|f| fs_h::field_str(&f, "replacedBy").map(str::to_string));
-            if self.fs.delete_doc("refreshTokens", &t).await.is_err() {
-                failed.push(t);
-            }
-            cur = next;
-        }
-        for _ in 0..REVOKE_RETRIES {
-            if failed.is_empty() {
-                break;
-            }
-            let mut still = Vec::new();
-            for t in failed {
-                if self.fs.delete_doc("refreshTokens", &t).await.is_err() {
-                    still.push(t);
+        for round in 0..=REVOKE_RETRIES {
+            while let Some(t) = queue.pop() {
+                let (gone, next) = self.revoke_one_refresh(&t).await;
+                if !gone {
+                    failed.push(t);
+                }
+                if let Some(n) = next.filter(|n| seen.insert(n.clone())) {
+                    queue.push(n);
                 }
             }
-            failed = still;
+            if failed.is_empty() || round == REVOKE_RETRIES {
+                break;
+            }
+            queue = std::mem::take(&mut failed);
         }
         if !failed.is_empty() {
             tracing::error!(event = "refresh_family_revoke_incomplete", left = failed.len());
@@ -464,5 +479,46 @@ mod revoke_family_tests {
     async fn a_failed_delete_in_the_middle_of_a_line_is_retried() {
         let chain = [("R1", Some("R2")), ("R2", Some("R3")), ("R3", None)];
         assert_eq!(left_after_revoke(&chain, "R2", "R1").await, Vec::<String>::new());
+    }
+
+    /// 失効が RT1 を読んでから消すまでの間に、RT1 のローテーション（本物の RefreshTokenGrant）が CAS に勝つ。
+    /// 失効は CAS 削除に負けて RT1 を読み直し、新しい replacedBy（渡った RT2）まで辿って消す。
+    #[tokio::test]
+    async fn a_rotation_between_the_read_and_the_delete_does_not_let_the_new_rt_survive() {
+        use crate::grants::{GrantHandler, RefreshTokenGrant};
+        let (host, state) = fake_firestore::spawn().await;
+        let store = Arc::new(FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))));
+        let p = Arc::new(crate::provider::Provider::new("https://op.example").with_store(store.clone()));
+        let client = crate::model::Client {
+            client_id: "rp".into(),
+            redirect_uris: vec!["https://rp.example/cb".into()],
+            post_logout_redirect_uris: vec![],
+            token_endpoint_auth_method: "client_secret_basic".into(),
+            client_secret: Some("hash".into()),
+            grant_types: vec!["refresh_token".into()],
+            dpop_bound: false,
+            jwks: vec![],
+            jwks_uri: None,
+            require_par: false,
+            require_pkce: false,
+            id_token_signed_response_alg: None,
+        };
+        let form = |t: &str| std::collections::HashMap::from([("refresh_token".to_string(), t.to_string())]);
+        store.save_refresh_token(rt("RT0", None)).await;
+        let rt1 = RefreshTokenGrant.handle(&p, &client, &form("RT0"), None).await.unwrap().refresh_token.unwrap();
+
+        let (reached, release) = state.gate_delete("refreshTokens", &rt1);
+        let revoking = tokio::spawn({
+            let store = store.clone();
+            async move { store.revoke_refresh_family("RT0").await }
+        });
+        reached.notified().await;
+        let rt2 = RefreshTokenGrant.handle(&p, &client, &form(&rt1), None).await.unwrap().refresh_token.unwrap();
+        release.notify_one();
+        revoking.await.unwrap();
+
+        for t in ["RT0", rt1.as_str(), rt2.as_str()] {
+            assert!(store.get_refresh_token(t).await.is_none(), "失効の後に {t} が残っている（RT2 は {rt2}）");
+        }
     }
 }
