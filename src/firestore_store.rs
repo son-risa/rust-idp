@@ -375,9 +375,9 @@ impl Store for FirestoreStore {
     }
 
     async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
-        // 札の期限は RT の TTL。札を書いた後はその系列に新しい RT を作らせないので、既存の RT が全部
-        // 切れるまで札が残れば足りる。
-        let tomb = json!({ "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + REFRESH_TTL)) });
+        // 札の期限は RT の TTL に余裕を足したもの。札を書いた後はその系列に新しい RT を作らせないので、既存の
+        // RT が全部切れるまで札が残れば足りる。余裕はインスタンスの間の時計のずれの分。
+        let tomb = json!({ "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + REFRESH_TTL + crate::store::FAMILY_REVOCATION_MARGIN_SECS)) });
         let mut written = false;
         for _ in 0..=REVOKE_RETRIES {
             if self.fs.set_doc(FAMILY_REVOCATIONS, family_id, tomb.clone()).await.is_ok() {

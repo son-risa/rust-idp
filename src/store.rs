@@ -23,6 +23,8 @@ pub const INTERACTION_TTL_SECS: u64 = 3600; // ログイン完了までの猶予
 pub const SESSION_TTL_SECS: u64 = 7 * 24 * 3600; // ブラウザセッション(7日)
 pub const ACCESS_TTL_SECS: u64 = 900; // access token(15分、grants の expires_in と一致)
 pub const REFRESH_TTL_SECS: u64 = 14 * 24 * 3600; // refresh token(14日)
+/// 系列の失効の札を RT の TTL より長く残す余裕（インスタンスの間の時計のずれの分）。
+pub const FAMILY_REVOCATION_MARGIN_SECS: u64 = 24 * 3600;
 
 /// 値に絶対失効時刻を添えるラッパー。expires_at(UNIX 秒)を過ぎたら失効とみなす。
 struct Expiring<T> {
@@ -272,7 +274,7 @@ impl Store for MemoryStore {
         self.revoked_families
             .lock()
             .unwrap()
-            .insert(family_id.to_string(), Expiring::new((), now_secs() + REFRESH_TTL_SECS));
+            .insert(family_id.to_string(), Expiring::new((), now_secs() + REFRESH_TTL_SECS + FAMILY_REVOCATION_MARGIN_SECS));
         // 後片付け: ローテーションは単回なので鎖は枝分かれせず、start から replaced_by を辿れば以後の RT を
         // 全部消せる。壊れた replaced_by の循環は訪れた集合で止める。
         let mut map = self.refresh_tokens.lock().unwrap();

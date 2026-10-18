@@ -1009,6 +1009,31 @@ mod tests {
         }
     }
 
+    /// familyId の欄そのものが無い Firestore の文書（2026-06-11 より前の書き方）も、空と同じく断る。
+    #[tokio::test]
+    async fn an_rt_document_without_the_family_field_is_not_rotated() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let exp = crate::firestore::rfc3339(now() + 3600);
+        fs.set_doc(
+            "refreshTokens",
+            "OLD",
+            serde_json::json!({
+                "clientId": crate::firestore::s("rp"),
+                "accountId": crate::firestore::s("user@example.com"),
+                "scope": crate::firestore::s("openid offline_access"),
+                "expiresAt": crate::firestore::ts(&exp),
+                "used": crate::firestore::b(false),
+            }),
+        )
+        .await
+        .unwrap();
+        let p = provider().with_store(std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs)));
+        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "OLD")]), None).await;
+        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
+        assert!(!p.store.get_refresh_token("OLD").await.unwrap().used);
+    }
+
     /// 後片付けは 1 回の失効で扱う RT の数に上限があり（F6）、上限を超えた鎖でも必ず終わる。残った RT も札で使えない。
     #[tokio::test]
     async fn a_cleanup_longer_than_its_limit_stops_and_the_rest_is_still_refused() {
