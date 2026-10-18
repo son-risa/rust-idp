@@ -161,5 +161,20 @@
     "premise": "iss（発行者）を確認する（IdP mix-up 防止）",
     "guard": ["src/grants.rs: issue_access_and_id"],
     "tests": ["grants::tests::id_token_names_the_issuer_the_client_and_the_request_nonce"]
+  },
+  {
+    "id": "P-RSINGLE",
+    "model": "refresh.spthy",
+    "premise": "RT の使用済み化は原子的に単回（Fresh が linear）",
+    "guard": ["src/store.rs: MemoryStore::mark_refresh_used", "src/firestore_store.rs: FirestoreStore::mark_refresh_used"],
+    "tests": ["store::tests::mark_refresh_used_is_single_use", "grants::tests::refresh_rotates_and_reuse_rejected"]
+  },
+  {
+    "id": "P-RFAMILY",
+    "model": "refresh.spthy",
+    "premise": "使用済みの RT が出されたら系列を丸ごと失効させ、以後その系列のどの RT も受け付けない",
+    "guard": ["src/grants.rs: RefreshTokenGrant::handle", "src/store.rs: MemoryStore::revoke_refresh_family", "src/firestore_store.rs: FirestoreStore::revoke_refresh_family"],
+    "tests": ["grants::tests::refresh_reuse_detected_revokes_family", "grants::tests::refresh_reuse_revokes_family_any_length", "store::tests::revoke_family_deletes_entire_chain"],
+    "kani": ["refresh_family_walk_terminates"]
   }
 ]
