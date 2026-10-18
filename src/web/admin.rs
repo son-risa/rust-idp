@@ -966,7 +966,8 @@ pub(super) async fn iat_show_once(
         Err(r) => return r,
     };
 
-    let fields = match fs.get_doc("adminIatFlash", &flash_id).await {
+    // 一度だけ表示する。updateTime の CAS 削除に勝った 1 つの要求だけが生トークンを受け取る（多重タブでも 1 回）。
+    let fields = match fs.take_doc("adminIatFlash", &flash_id).await {
         Ok(Some(f)) => f,
         Ok(None) => {
             return page(
@@ -979,10 +980,6 @@ pub(super) async fn iat_show_once(
         }
         Err(e) => return server_error("iat_show_once", &e),
     };
-    // ベストエフォートで削除する（一度だけ表示。多重タブでの低頻度な競合は許容する。
-    // registration.rs の consume_email_challenge と同じ read-then-delete の idiom）。
-    let _ = fs.delete_doc("adminIatFlash", &flash_id).await;
-
     let expires_at = crate::firestore::field_u64(&fields, "expires_at").unwrap_or(0);
     if expires_at < now() {
         return page(
@@ -1173,5 +1170,31 @@ mod tests {
         assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/admin/users");
         assert!(crate::registration::get_credential(&fs, "u@example.com").await.unwrap().is_none());
         assert!(crate::registration::find_email_by_account_id(&fs, "acc-u").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_raw_iat_is_shown_to_only_one_of_two_concurrent_views() {
+        let (p, fs) = provider_with_firestore().await;
+        crate::admin_store::grant_admin(&fs, "admin-1", "test").await.unwrap();
+        let jar = login_as(&p, "admin-1").await;
+        let expires = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 300;
+        fs.set_doc(
+            "adminIatFlash",
+            "F1",
+            serde_json::json!({ "raw_token": crate::firestore::s("RAW-IAT"), "expires_at": crate::firestore::int(expires) }),
+        )
+        .await
+        .unwrap();
+        let p = Arc::new(p);
+        let view = || iat_show_once(State(p.clone()), HeaderMap::new(), jar.clone(), Path("F1".to_string()));
+        let (a, b) = tokio::join!(view(), view());
+        let mut shown = 0;
+        for r in [a, b] {
+            let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+            if String::from_utf8_lossy(&body).contains("RAW-IAT") {
+                shown += 1;
+            }
+        }
+        assert_eq!(shown, 1);
     }
 }
