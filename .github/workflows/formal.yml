@@ -67,5 +67,5 @@ jobs:
         run: |
           cargo install --locked kani-verifier --version "$KANI_VERSION"
           cargo kani setup
-      - name: Kani（全ハーネス）
-        run: cargo kani
+      - name: Kani（kani-harnesses.txt と照合）
+        run: formal/check-kani.sh

@@ -24,11 +24,13 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
   [`expected.tsv`](./expected.tsv) と突き合わせる。本体のモデルは全 lemma が verified、NEG 版は下の各節に書いた lemma が
   falsified であることを期待する。結果が違う・表に無いモデルや lemma がある・表にあるのに走らなかった・wellformedness が
   通らない、のどれでも赤。モデルを足したり lemma を変えたら、`expected.tsv` も同じ PR で直す。
-- **Kani**: `cargo kani` で全ハーネスを回す（Kani 0.67.0）。
+- **Kani**: `formal/check-kani.sh` が `cargo kani` で全ハーネスを回し、SUCCESSFUL になったハーネスの名前を
+  [`kani-harnesses.txt`](./kani-harnesses.txt) と突き合わせる（Kani 0.67.0）。ハーネスが消えた・増えた・名前が変わった・
+  失敗した、のどれでも赤。ハーネスを足したり消したりしたら、一覧も同じ PR で直す。
 
 ```sh
 formal/check.sh      # 手元で Tamarin の期待表を照合
-cargo kani           # 手元で Kani の全ハーネス
+formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 ```
 
 下の各節の「表に出た前提 → rust-op の担保」の P-* は、[`premises.json`](./premises.json) に機械が読む形で写してある
