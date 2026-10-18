@@ -500,4 +500,14 @@ mod tests {
             assert!(s.get_interaction("U1").await.is_some(), "{method} の 503 で interaction が消えた");
         }
     }
+
+    /// 読んだ後の CAS 削除が 404（並行する削除に先を越された）なら、消費は通らない。
+    #[tokio::test]
+    async fn consuming_an_interaction_that_another_request_deleted_first_fails() {
+        let (s, fake) = store_and_fake().await;
+        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+        s.save_interaction(i).await;
+        fake.fail_once_with("DELETE", "interactions", Some("U1"), axum::http::StatusCode::NOT_FOUND);
+        assert!(!s.consume_interaction("U1").await, "削除の 404 で消費が通ってしまった");
+    }
 }
