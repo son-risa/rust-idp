@@ -22,10 +22,8 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-/// 系列の失効で、ストアの誤りで消せなかった RT を消し直す回数。
+/// 系列の失効で、消せなかった RT（ストアの誤り・CAS の負け）を読み直して消し直す周の数。
 const REVOKE_RETRIES: usize = 3;
-/// 系列の失効で、1 本の RT の CAS 削除に負けたときに読み直す回数。
-const REVOKE_REREADS: usize = 3;
 
 fn doc_expired(fields: &Value) -> bool {
     fs_h::field_ts_secs(fields, "expiresAt").unwrap_or(0) < now()
@@ -57,27 +55,19 @@ impl FirestoreStore {
         Self { fs }
     }
 
-    /// RT を 1 本、読んだ updateTime の CAS で消す。消せた（または既に無い）なら gone=true、ストアの誤りで
-    /// 消せなかったら gone=false。どちらでも読めた replacedBy を返す。
-    /// CAS に負けた（読んでから消すまでの間に、その RT のローテーションが replacedBy を書いた）ときは
-    /// 読み直して、新しい replacedBy を拾ってから消す。条件なしで消すと、その間に渡った新しい RT が
-    /// 系列から外れて残る。読み直しは REVOKE_REREADS 回まで（負け続けたら誤りと同じ扱い）。
+    /// RT を 1 本、読んだ updateTime の CAS で消す。消せた（または既に無い）なら gone=true、消せなかったら
+    /// gone=false で、どちらでも読めた replacedBy を返す。CAS に負けた（読んでから消すまでの間に、その RT の
+    /// ローテーションが replacedBy を書いた）ときもストアの誤りと同じく gone=false にし、消し直しの周で
+    /// 読み直して新しい replacedBy の先まで辿る。条件なしで消すと、その間に渡った新しい RT が系列から外れて残る。
     async fn revoke_one_refresh(&self, token: &str) -> (bool, Option<String>) {
-        let mut next = None;
-        for _ in 0..REVOKE_REREADS {
-            let (f, update_time) = match self.fs.get_doc_with_update_time("refreshTokens", token).await {
-                Ok(Some(x)) => x,
-                Ok(None) => return (true, next),
-                Err(_) => return (false, next),
-            };
-            next = fs_h::field_str(&f, "replacedBy").map(str::to_string);
-            match self.fs.delete_doc_if_unchanged("refreshTokens", token, &update_time).await {
-                Ok(true) => return (true, next),
-                Ok(false) => continue,
-                Err(_) => return (false, next),
-            }
-        }
-        (false, next)
+        let (f, update_time) = match self.fs.get_doc_with_update_time("refreshTokens", token).await {
+            Ok(Some(x)) => x,
+            Ok(None) => return (true, None),
+            Err(_) => return (false, None),
+        };
+        let next = fs_h::field_str(&f, "replacedBy").map(str::to_string);
+        let gone = matches!(self.fs.delete_doc_if_unchanged("refreshTokens", token, &update_time).await, Ok(true));
+        (gone, next)
     }
 
     /// updateTime CAS で単回削除する。削除に成功（=この呼び出しが初回）したら削除直前の
@@ -374,8 +364,8 @@ impl Store for FirestoreStore {
         // familyId で引く形にしないのは、familyId を書く前（2026-06-11 より前）に始まった鎖を
         // ローテーションし続けた RT が、familyId を空のまま引き継いでいるため（空の familyId で引くと
         // 無関係な系列まで消す）。
-        // ストアの誤りで消せなかった RT は控えて、走査の後に回数の上限つきで消し直す（seen から外して
-        // 辿り直すと、失敗し続ける循環で終わらない）。
+        // 消せなかった RT（ストアの誤り・CAS の負け）は控えて、走査の後に周の数の上限つきで読み直して
+        // 消し直す（seen から外して辿り直すと、失敗し続ける循環で終わらない）。
         let mut seen = std::collections::HashSet::from([start_token.to_string()]);
         let mut queue = vec![start_token.to_string()];
         let mut failed = Vec::new();
