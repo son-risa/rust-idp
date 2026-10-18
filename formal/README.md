@@ -415,6 +415,14 @@ AS の登録は 2 段に分けてある。先に「E がまだ登録済みでな
 
 → 導出された運用要件: **招待の token は、確認とは別に、消費そのものを原子的に行え**（確認だけでは並行した要求を止められない）。
 
+**直す前の版とのずれ（このモデルが見つけたもの）**: このモデルを書いた時点（main d924873）の `consume_email_challenge` と
+`consume_webauthn_challenge` は、`get_doc` で読んだあとに `delete_doc(..).ok()` で消すだけで、原子的でなく、削除の失敗も
+無視していた。P-ISINGLE は成り立っておらず、NEG 版の攻撃の跡（確認を通った 2 つの要求が両方とも登録する）がコードでも
+起きた。fake Firestore で同じ token の消費を 2 つ並べると、5 回とも 2 つが通った。updateTime の CAS 削除
+（`Firestore::take_doc`）に直した PR が P-ISINGLE と P-CHAL の担保で、試験
+`registration::tests::two_concurrent_consumes_of_one_invite_let_only_one_through` と
+`two_concurrent_consumes_of_one_webauthn_challenge_let_only_one_through` が、直しを戻すと赤になる。
+
 ### 限界
 - 有効期限（7 日）は記号モデルの外。
 - 1 つの E に複数の招待が残る場合（`leftover_invite_cannot_replace_a_registered_passkey`）は、確認の段が守る。本モデルは
