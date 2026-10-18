@@ -19,6 +19,13 @@ for model in *.spthy; do
     status=1
     continue
   fi
+  # heuristic（oracle）・#include・configuration: は、判定の途中で任意のプログラムを走らせたり、別の file を
+  # 読ませたりできる（oracle が expected.tsv を書き換えて緑にできた）。Tamarin にかける前に断る。
+  if grep -niE 'heuristic|#include|configuration[[:space:]]*:' "$model" >&2; then
+    echo "$model: heuristic・#include・configuration: は使えない" >&2
+    status=1
+    continue
+  fi
   models+=("$model")
 done
 
