@@ -404,6 +404,9 @@ DPoP 束縛・クライアント認証・期限は外してある（DPoP 束縛�
 系列の失効が無いと、盗んだ側が先にローテーションしていた場合、正規の側が古い RT を出して再利用が見つかっても、
 盗んだ側は新しい RT で使い続けられる。
 → `refresh_NEG_no_family_revoke.spthy` では `no_rotation_after_revoke` は空虚に verified になる（失効の action が無いため）。
+→ 筋書き（盗んだ側が先にローテーションし、正規の側が古い RT を出す）を lemma で表すと、`reuse_stops_the_family` の前件の式
+そのものになる。その表し方が正しいことは、`refresh_NEG_no_family_revoke` の反例の跡（Issue → 先に持った側の Rotate → 古い RT の
+Present → 新しい RT での Rotate の続き）が示している。
 
 ### 表に出た前提 → rust-op の担保
 | ID | 前提（抽象） | rust-op の担保 |
