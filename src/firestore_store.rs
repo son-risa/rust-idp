@@ -387,3 +387,81 @@ impl Store for FirestoreStore {
         Account { sub: sub.to_string(), claims }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::firestore::fake_firestore;
+
+    async fn store() -> FirestoreStore {
+        let (host, _state) = fake_firestore::spawn().await;
+        FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)))
+    }
+
+    fn rt(token: &str, family: &str, replaced_by: Option<&str>) -> RefreshToken {
+        RefreshToken {
+            token: token.into(),
+            client_id: "rp".into(),
+            account_id: "acct".into(),
+            scope: "openid offline_access".into(),
+            resource: None,
+            jkt: None,
+            acr: None,
+            auth_time: None,
+            family_id: family.into(),
+            used: replaced_by.is_some(),
+            replaced_by: replaced_by.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_token_is_rotated_once() {
+        let s = store().await;
+        s.save_refresh_token(rt("R1", "F", None)).await;
+        assert!(s.mark_refresh_used("R1", Some("R2")).await);
+        assert!(!s.mark_refresh_used("R1", Some("R3")).await, "使用済みの RT は 2 度目のローテーションに使えない");
+        assert_eq!(s.get_refresh_token("R1").await.unwrap().replaced_by.as_deref(), Some("R2"));
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_rotations_of_one_refresh_token_let_only_one_through() {
+        let s = store().await;
+        s.save_refresh_token(rt("R1", "F", None)).await;
+        let (a, b) = tokio::join!(s.mark_refresh_used("R1", Some("Ra")), s.mark_refresh_used("R1", Some("Rb")));
+        assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn revoking_a_family_deletes_the_whole_chain_and_nothing_else() {
+        let s = store().await;
+        s.save_refresh_token(rt("R1", "F", Some("R2"))).await;
+        s.save_refresh_token(rt("R2", "F", Some("R3"))).await;
+        s.save_refresh_token(rt("R3", "F", None)).await;
+        s.save_refresh_token(rt("X1", "G", None)).await;
+        s.revoke_refresh_family("R1").await;
+        for t in ["R1", "R2", "R3"] {
+            assert!(s.get_refresh_token(t).await.is_none(), "{t} が残っている");
+        }
+        assert!(s.get_refresh_token("X1").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn revoking_a_cyclic_family_terminates() {
+        let s = store().await;
+        s.save_refresh_token(rt("C1", "F", Some("C2"))).await;
+        s.save_refresh_token(rt("C2", "F", Some("C1"))).await;
+        s.revoke_refresh_family("C1").await;
+        assert!(s.get_refresh_token("C1").await.is_none());
+        assert!(s.get_refresh_token("C2").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_interaction_is_consumed_once_even_when_two_resumes_race() {
+        let s = store().await;
+        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+        s.save_interaction(i).await;
+        let (a, b) = tokio::join!(s.consume_interaction("U1"), s.consume_interaction("U1"));
+        assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
+        assert!(!s.consume_interaction("U1").await);
+    }
+}

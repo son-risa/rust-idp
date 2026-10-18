@@ -971,6 +971,66 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_request_uri_cannot_be_used_by_another_client() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(Provider::new("https://op.example").with_firestore(fs.clone()));
+        let ru = crate::par::create(&fs, "dcr-y", "client_id=dcr-y&response_type=code&scope=openid").await.unwrap();
+        let authorize_as = |client: &str| {
+            let q = serde_urlencoded::to_string([("client_id", client), ("request_uri", ru.0.as_str())]).unwrap();
+            authorize(State(p.clone()), CookieJar::default(), RawQuery(Some(q)))
+        };
+        async fn text(r: Response) -> String {
+            String::from_utf8(axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+        }
+
+        let stolen = authorize_as("dcr-x").await;
+        assert_eq!(stolen.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(text(stolen).await, "request_uri was issued to a different client");
+        let own = text(authorize_as("dcr-y").await).await;
+        assert_ne!(own, "request_uri was issued to a different client");
+    }
+
+    #[tokio::test]
+    async fn end_session_redirects_only_to_the_clients_own_registered_uri() {
+        let other = crate::model::Client {
+            client_id: "dcr-y".into(),
+            post_logout_redirect_uris: vec!["https://other.example/bye".into()],
+            ..client_with_post_logout(&[])
+        };
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_client(client_with_post_logout(&["https://rp.example.com/bye"]))
+                .with_client(other),
+        );
+        let end = |client_id: Option<&str>, uri: &str| {
+            let q = EndSessionQuery {
+                id_token_hint: None,
+                post_logout_redirect_uri: Some(uri.to_string()),
+                state: Some("s1".into()),
+                client_id: client_id.map(str::to_string),
+            };
+            end_session(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(q))
+        };
+
+        let ok = end(Some("dcr-x"), "https://rp.example.com/bye").await;
+        assert!(ok.status().is_redirection());
+        assert_eq!(ok.headers().get(header::LOCATION).unwrap(), "https://rp.example.com/bye?state=s1");
+
+        for (client, uri) in [
+            (Some("dcr-x"), "https://other.example/bye"),
+            (Some("dcr-x"), "https://rp.example.com/bye/../evil"),
+            (Some("dcr-x"), "https://rp.example.com/bye?x=1"),
+            (Some("unknown"), "https://rp.example.com/bye"),
+            (None, "https://rp.example.com/bye"),
+        ] {
+            let resp = end(client, uri).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{client:?} {uri}");
+            assert!(resp.headers().get(header::LOCATION).is_none());
+        }
+    }
+
     /// 登録要求の配線。ここで読み落とすと、検証側に試験が在っても黙って空で登録される
     /// （post_logout_redirect_uris で実際に起きた事故の形）。
     #[test]

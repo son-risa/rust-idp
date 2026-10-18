@@ -32,7 +32,7 @@ mod oidc;
 mod pages;
 mod register;
 #[cfg(test)]
-mod emulator_tests;
+mod flow_tests;
 
 const SID_COOKIE: &str = "sid";
 

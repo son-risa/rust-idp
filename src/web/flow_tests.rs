@@ -1,11 +1,6 @@
-//! 登録→ログイン→CIBA承認を実 Firestore エミュレータに対して流し、account_id(UUID)が
+//! 登録→ログイン→CIBA承認を fake Firestore（`firestore::fake_firestore`）に対して流し、account_id(UUID)が
 //! 一貫して使われ、email が sub/user.id/CIBA account に漏れないことを検証する。
-//!
-//! 実行手順:
-//!   firebase emulators:start --only firestore   (別ターミナルで常駐させる)
-//!   FIRESTORE_EMULATOR_HOST=127.0.0.1:8180 cargo test -- --ignored web::emulator_tests
-//!
-//! 通常の `cargo test` では走らない（エミュレータ常駐を前提にしないため）。
+//! 以前は実 Firestore エミュレータを前提に `#[ignore]` で、CI では走っていなかった。
 
 use super::*;
 use crate::ciba::CibaStatus;
@@ -18,20 +13,13 @@ use p256::ecdsa::{Signature, SigningKey};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-fn test_provider() -> Arc<Provider> {
-    let fs = Arc::new(crate::firestore::Firestore::new("test-emu-probe"));
+async fn test_provider() -> Arc<Provider> {
+    let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+    let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
     // with_firestore は registration:: の直叩き用、with_store は Store トレイト
     // (interaction/session/find_account 等)用で別物。本番(Cloud Run)は両方 Firestore を指すので
     // テストでもここを MemoryStore の既定のままにしない（find_account が PoC ダミー生成に
     // フォールバックしてしまい、firestore_store.rs の実装を検証できなくなる）。
-    // ciba は意図的に既定の MemoryCibaStore のまま（FirestoreCibaStore にしない）。
-    // 理由: Firestore エミュレータは `currentDocument.updateTime` による楽観ロックCASを
-    // 正しく実装していない（updateTime 文字列を数値バージョンとして解釈し、常に
-    // FAILED_PRECONDITION になる。exists=false による CAS は正常動作することを curl で確認済み）。
-    // ciba_approve のハンドラ側ロジック(email/account_id の解決)は CibaStore の実装に依らず
-    // 同一なので、MemoryCibaStore でも本テストの目的(識別子の一貫性)は検証できる。
-    // FirestoreCibaStore 自体の updateTime CAS 検証は、この制約のため別の方法が必要
-    // （実 Firestore に対する統合テスト等）。
     let p = Provider::new("http://localhost:8099".to_string())
         .with_firestore(fs.clone())
         .with_store(Arc::new(crate::firestore_store::FirestoreStore::new(fs)))
@@ -147,6 +135,18 @@ async fn register_test_account(p: &Arc<Provider>, email: &str) -> (SigningKey, V
 
 /// ログイン成功後の Interaction.account_id（= 最終的に発行される sub）を返す。
 async fn login_with_email(p: &Arc<Provider>, email: &str, key: &SigningKey, sign_count: u32) -> String {
+    let (uid, verify) = email_login_response(p, email, key, sign_count).await;
+    let status = verify.status();
+    let body = body_json(verify).await;
+    assert_eq!(status, StatusCode::OK, "login (email) failed: {body:?}");
+
+    // finalize_login は Interaction を削除せず account_id を書いて保存し直す
+    // （/authorize/resume がこれを読んでコード発行に進むため）。
+    let interaction = p.store.get_interaction(&uid).await.expect("interaction should still exist after login");
+    interaction.account_id.expect("account_id should be set after successful login")
+}
+
+async fn email_login_response(p: &Arc<Provider>, email: &str, key: &SigningKey, sign_count: u32) -> (String, Response) {
     let uid = uuid::Uuid::new_v4().to_string();
     p.store
         .save_interaction(Interaction {
@@ -173,14 +173,7 @@ async fn login_with_email(p: &Arc<Provider>, email: &str, key: &SigningKey, sign
     let verify =
         login::login_passkey_verify(State(p.clone()), CookieJar::default(), Path(uid.clone()), Json(verify_req))
             .await;
-    let status = verify.status();
-    let body = body_json(verify).await;
-    assert_eq!(status, StatusCode::OK, "login (email) failed: {body:?}");
-
-    // finalize_login は Interaction を削除せず account_id を書いて保存し直す
-    // （/authorize/resume がこれを読んでコード発行に進むため）。
-    let interaction = p.store.get_interaction(&uid).await.expect("interaction should still exist after login");
-    interaction.account_id.expect("account_id should be set after successful login")
+    (uid, verify)
 }
 
 async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKey, sign_count: u32) {
@@ -230,9 +223,8 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
 /// dcr.rs の単体テストは validate_registration の戻り値を直接見るのみで、
 /// raw_client_secret が register() ハンドラ経由で実際に配線されているかは見ていなかった。
 #[tokio::test]
-#[ignore]
 async fn register_confidential_secret_returns_raw_secret_once() {
-    let p = test_provider();
+    let p = test_provider().await;
     let fs = p.firestore.as_ref().unwrap();
 
     let constraints = crate::dcr::IatConstraints {
@@ -273,9 +265,8 @@ async fn register_confidential_secret_returns_raw_secret_once() {
 /// account_admin::disable_account で凍結したアカウントが、実HTTPハンドラ(login_passkey_verify)
 /// 経由でログインを拒否されることを検証する。login.rs 側の disabled チェックの配線確認。
 #[tokio::test]
-#[ignore]
 async fn disabled_account_cannot_login() {
-    let p = test_provider();
+    let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key, _cred_id, _account_id) = register_test_account(&p, &email).await;
 
@@ -316,9 +307,8 @@ async fn disabled_account_cannot_login() {
 /// 経由で検証する。「一度きり表示」は read-then-delete の順序を間違えやすく、実装ミスに
 /// 気付きにくいため、web/admin.rs のユニットテストとは別にここで通しで確認する。
 #[tokio::test]
-#[ignore]
 async fn admin_mint_iat_flash_is_shown_once() {
-    let p = test_provider();
+    let p = test_provider().await;
     let email = format!("admin-{}@example.com", uuid::Uuid::new_v4());
     let (_key, _cred_id, account_id) = register_test_account(&p, &email).await;
     let fs = p.firestore.as_ref().unwrap();
@@ -352,9 +342,11 @@ async fn admin_mint_iat_flash_is_shown_once() {
         .to_string();
     let flash_id = location.rsplit('/').next().unwrap().to_string();
 
+    let mut ja = HeaderMap::new();
+    ja.insert(header::ACCEPT_LANGUAGE, "ja".parse().unwrap());
     let first = admin::iat_show_once(
         State(p.clone()),
-        HeaderMap::new(),
+        ja.clone(),
         jar.clone(),
         Path(flash_id.clone()),
     )
@@ -365,7 +357,7 @@ async fn admin_mint_iat_flash_is_shown_once() {
 
     let second = admin::iat_show_once(
         State(p.clone()),
-        HeaderMap::new(),
+        ja,
         jar.clone(),
         Path(flash_id),
     )
@@ -375,9 +367,8 @@ async fn admin_mint_iat_flash_is_shown_once() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn register_then_login_uses_account_id_not_email() {
-    let p = test_provider();
+    let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key, _cred_id, account_id) = register_test_account(&p, &email).await;
 
@@ -400,9 +391,8 @@ async fn register_then_login_uses_account_id_not_email() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn reregistration_reuses_existing_account_id() {
-    let p = test_provider();
+    let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_key1, _cred1, account_id1) = register_test_account(&p, &email).await;
 
@@ -421,9 +411,8 @@ async fn reregistration_reuses_existing_account_id() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sign_count_update_preserves_account_id() {
-    let p = test_provider();
+    let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key, _cred_id, account_id) = register_test_account(&p, &email).await;
 
@@ -438,9 +427,8 @@ async fn sign_count_update_preserves_account_id() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn ciba_flow_uses_account_id_consistently() {
-    let p = test_provider();
+    let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key, cred_id, account_id) = register_test_account(&p, &email).await;
 
@@ -480,4 +468,94 @@ async fn ciba_flow_uses_account_id_consistently() {
     let approved = p.ciba.get(&auth_req_id).await.unwrap().unwrap();
     assert_eq!(approved.status, CibaStatus::Approved);
     assert_eq!(approved.account, account_id);
+}
+
+/// 凍結したアカウントは、正しい passkey を持っていても CIBA を承認できない（ciba_approve の disabled 検査の配線）。
+#[tokio::test]
+async fn disabled_account_cannot_approve_ciba() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key, cred_id, _account_id) = register_test_account(&p, &email).await;
+
+    let mut form = HashMap::new();
+    form.insert("client_id".to_string(), "test-ciba-rp".to_string());
+    form.insert("login_hint".to_string(), email.clone());
+    form.insert("scope".to_string(), "openid".to_string());
+    let body = body_json(ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(form)).await).await;
+    let auth_req_id = body["auth_req_id"].as_str().unwrap().to_string();
+
+    let fs = p.firestore.as_ref().unwrap();
+    crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
+
+    let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone())).await).await;
+    let challenge = opts["challenge"].as_str().unwrap().to_string();
+    let (ad, sig, cdj) = make_auth_ceremony(&key, 1, &challenge, &p.origin(), &p.rp_id(), true);
+    let approve_req: AuthVerifyReq = serde_json::from_value(json!({
+        "id": crate::webauthn::b64e(&cred_id),
+        "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig, "userHandle": null },
+    }))
+    .unwrap();
+    let approve = ciba::ciba_approve(State(p.clone()), Path(auth_req_id.clone()), Json(approve_req)).await;
+    assert_eq!(approve.status(), StatusCode::FORBIDDEN);
+    assert_eq!(p.ciba.get(&auth_req_id).await.unwrap().unwrap().status, CibaStatus::Pending);
+}
+
+/// 管理画面の POST は SSO セッション cookie だけで認可される。別サイトからの POST に cookie が付かないよう、
+/// SameSite=Lax（と HttpOnly・Secure）で張られていることを押さえる（CSRF の守りはこの属性だけ）。
+#[tokio::test]
+async fn the_session_cookie_is_lax_httponly_and_secure() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key, _cred_id, _account_id) = register_test_account(&p, &email).await;
+    let (_uid, resp) = email_login_response(&p, &email, &key, 0).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+    for attr in ["SameSite=Lax", "HttpOnly", "Secure"] {
+        assert!(cookie.contains(attr), "{attr} が無い: {cookie}");
+    }
+}
+
+/// 他人の鍵ではログインできない。email 入力でも、discoverable（userHandle に他人の account_id を入れる）でも同じ。
+/// 凍結されたアカウントでも、署名が通らなければ 403 ではなく 401（凍結の有無を漏らさない）。
+#[tokio::test]
+async fn a_passkey_logs_in_only_its_own_account() {
+    let p = test_provider().await;
+    let victim = format!("victim-{}@example.com", uuid::Uuid::new_v4());
+    let (_victim_key, _cred, victim_id) = register_test_account(&p, &victim).await;
+    let attacker = SigningKey::random(&mut rand_core::OsRng);
+
+    let (_uid, by_email) = email_login_response(&p, &victim, &attacker, 0).await;
+    assert_eq!(by_email.status(), StatusCode::UNAUTHORIZED);
+
+    let uid = uuid::Uuid::new_v4().to_string();
+    p.store
+        .save_interaction(Interaction {
+            uid: uid.clone(),
+            raw_query: String::new(),
+            account_id: None,
+            auth_time: None,
+            request_uri: None,
+        })
+        .await;
+    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({})).unwrap();
+    let opts = body_json(login::login_passkey_options(State(p.clone()), Path(uid.clone()), Json(opts_req)).await).await;
+    let challenge = opts["challenge"].as_str().unwrap().to_string();
+    let (ad, sig, cdj) = make_auth_ceremony(&attacker, 0, &challenge, &p.origin(), &p.rp_id(), false);
+    let verify_req: AuthVerifyReq = serde_json::from_value(json!({
+        "id": crate::webauthn::b64e(b"probe-credential-id"),
+        "response": {
+            "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig,
+            "userHandle": crate::webauthn::b64e(victim_id.as_bytes()),
+        },
+    }))
+    .unwrap();
+    let by_handle =
+        login::login_passkey_verify(State(p.clone()), CookieJar::default(), Path(uid.clone()), Json(verify_req)).await;
+    assert_eq!(by_handle.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
+
+    let fs = p.firestore.as_ref().unwrap();
+    crate::account_admin::disable_account(fs, "test", &victim).await.unwrap();
+    let (_uid, frozen) = email_login_response(&p, &victim, &attacker, 0).await;
+    assert_eq!(frozen.status(), StatusCode::UNAUTHORIZED, "署名が通らないうちは凍結を明かさない");
 }
