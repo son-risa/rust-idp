@@ -107,11 +107,9 @@ pub async fn consume_email_challenge(fs: &Firestore, token: &str) -> Result<Opti
     if !token_ok(token) {
         return Ok(None);
     }
-    let fields = match fs.get_doc("emailChallenges", token).await? {
-        Some(f) => f,
-        None => return Ok(None),
+    let Some(fields) = fs.take_doc("emailChallenges", token).await? else {
+        return Ok(None);
     };
-    fs.delete_doc("emailChallenges", token).await.ok();
     if challenge_expired(&fields) {
         return Ok(None);
     }
@@ -182,11 +180,9 @@ pub async fn consume_webauthn_challenge(
     if !token_ok(challenge) {
         return Ok(None);
     }
-    let fields = match fs.get_doc("webauthnChallenges", challenge).await? {
-        Some(f) => f,
-        None => return Ok(None),
+    let Some(fields) = fs.take_doc("webauthnChallenges", challenge).await? else {
+        return Ok(None);
     };
-    fs.delete_doc("webauthnChallenges", challenge).await.ok();
     if challenge_expired(&fields) {
         return Ok(None);
     }
@@ -407,6 +403,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invite_token_is_consumed_once() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let t = create_invite_challenge(&fs, "a@example.com", "https://rp.example/").await.unwrap();
+        assert_eq!(consume_email_challenge(&fs, &t).await.unwrap().as_deref(), Some("a@example.com"));
+        assert_eq!(consume_email_challenge(&fs, &t).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_consumes_of_one_invite_let_only_one_through() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let t = create_invite_challenge(&fs, "a@example.com", "https://rp.example/").await.unwrap();
+        let (a, b) = tokio::join!(consume_email_challenge(&fs, &t), consume_email_challenge(&fs, &t));
+        let through = [a.unwrap(), b.unwrap()].into_iter().flatten().count();
+        assert_eq!(through, 1);
+    }
+
+    #[tokio::test]
     async fn webauthn_challenge_is_consumed_once() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
@@ -414,6 +429,16 @@ mod tests {
         let first = consume_webauthn_challenge(&fs, &c).await.unwrap();
         assert_eq!(first.map(|(e, k, _, _)| (e, k)), Some(("a@example.com".to_string(), ChallengeKind::Auth)));
         assert_eq!(consume_webauthn_challenge(&fs, &c).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_consumes_of_one_webauthn_challenge_let_only_one_through() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "").await.unwrap();
+        let (a, b) = tokio::join!(consume_webauthn_challenge(&fs, &c), consume_webauthn_challenge(&fs, &c));
+        let through = [a.unwrap(), b.unwrap()].into_iter().flatten().count();
+        assert_eq!(through, 1);
     }
 
     #[tokio::test]
