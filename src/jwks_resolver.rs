@@ -86,7 +86,7 @@ async fn request_for(jwks_uri: &str) -> Option<(reqwest::Client, reqwest::Url)> 
     }
     let url = reqwest::Url::parse(jwks_uri).ok()?;
     let addrs = public_addrs(&url).await?;
-    let client = pinned_client(url.host_str()?, &addrs).ok()?;
+    let client = pinned_client(&addrs).ok()?;
     Some((client, url))
 }
 
@@ -94,24 +94,34 @@ async fn request_for(jwks_uri: &str) -> Option<(reqwest::Client, reqwest::Url)> 
 fn is_internal(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(a) => {
-            let [o0, o1, ..] = a.octets();
+            let [o0, o1, o2, _] = a.octets();
             a.is_loopback()
                 || a.is_private()
                 || a.is_link_local()
                 || a.is_unspecified()
-                || a.is_broadcast()
                 || a.is_multicast()
                 || o0 == 0
+                || o0 >= 240
                 || (o0 == 100 && (o1 & 0xc0) == 64)
+                || (o0 == 192 && o1 == 0 && o2 == 0)
+                || (o0 == 198 && (o1 & 0xfe) == 18)
         }
         IpAddr::V6(a) => {
-            let s0 = a.segments()[0];
+            let s = a.segments();
+            let embedded = |hi: u16, lo: u16| is_internal(IpAddr::V4(std::net::Ipv4Addr::from(((hi as u32) << 16) | lo as u32)));
             a.is_loopback()
                 || a.is_unspecified()
                 || a.is_multicast()
-                || (s0 & 0xfe00) == 0xfc00
-                || (s0 & 0xffc0) == 0xfe80
-                || a.to_ipv4_mapped().is_some_and(|v4| is_internal(IpAddr::V4(v4)))
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
+                // IPv4 互換（::a.b.c.d）と IPv4 写像（::ffff:a.b.c.d）は中の IPv4 で判定する。
+                || a.to_ipv4().is_some_and(|v4| is_internal(IpAddr::V4(v4)))
+                // NAT64（64:ff9b::/96 と 64:ff9b:1::/48）と Teredo（2001::/32）は、先が IPv4 の内側へ届きうるので断る。
+                || (s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0])
+                || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1)
+                || (s[0] == 0x2001 && s[1] == 0)
+                // 6to4（2002::/16）は埋め込みの IPv4 で判定する。
+                || (s[0] == 0x2002 && embedded(s[1], s[2]))
         }
     }
 }
@@ -130,10 +140,21 @@ async fn public_addrs(url: &reqwest::Url) -> Option<Vec<SocketAddr>> {
     Some(addrs)
 }
 
+/// 名前を問わず、判定したアドレスだけを返す resolver。`resolve_to_addrs` の上書きは名前の鍵で引くので、
+/// 大文字や末尾の点で引き損ねると reqwest は黙って名前を解き直す。これを 1 つのクライアントの全ての名前に当てる。
+struct PinnedResolver(Vec<SocketAddr>);
+
+impl reqwest::dns::Resolve for PinnedResolver {
+    fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let addrs = self.0.clone();
+        Box::pin(async move { Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs) })
+    }
+}
+
 /// 判定したアドレスにだけ接続し（取得の間に名前を解き直させない）、redirect は追わない。
-fn pinned_client(host: &str, addrs: &[SocketAddr]) -> reqwest::Result<reqwest::Client> {
+fn pinned_client(addrs: &[SocketAddr]) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
-        .resolve_to_addrs(host, addrs)
+        .dns_resolver(std::sync::Arc::new(PinnedResolver(addrs.to_vec())))
         .redirect(reqwest::redirect::Policy::none())
         .build()
 }
@@ -182,11 +203,20 @@ mod tests {
             "https://[fd00:ec2::254]/jwks",
             "https://[fe80::1]/jwks",
             "https://[::ffff:169.254.169.254]/jwks",
+            "https://[::7f00:1]/jwks",
+            "https://[64:ff9b::a9fe:a9fe]/jwks",
+            "https://[64:ff9b:1::1]/jwks",
+            "https://[2002:a9fe:a9fe::1]/jwks",
+            "https://[2001::1]/jwks",
+            "https://192.0.0.1/jwks",
+            "https://198.18.0.1/jwks",
+            "https://240.0.0.1/jwks",
         ] {
             assert!(!allowed(bad).await, "{bad} を通してはならない");
         }
         assert!(allowed("https://93.184.215.14/jwks").await);
         assert!(allowed("https://[2606:2800:21f:cb07:6820:80da:af6b:8b2c]/jwks").await);
+        assert!(allowed("https://[2002:5db8:d70e::1]/jwks").await, "6to4 は埋め込みの IPv4 が公開なら通す");
     }
 
     #[tokio::test]
@@ -200,8 +230,24 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let client = pinned_client("jwks.example", &[addr]).unwrap();
+        let client = pinned_client(&[addr]).unwrap();
         let resp = client.get(format!("http://jwks.example:{}/jwks", addr.port())).send().await.unwrap();
         assert!(resp.status().is_redirection(), "redirect の先へ行ってはならない");
+    }
+
+    #[tokio::test]
+    async fn the_pinned_client_never_resolves_names_on_its_own() {
+        let app = axum::Router::new().route("/jwks", axum::routing::get(|| async { "pinned" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = pinned_client(&[addr]).unwrap();
+        // .invalid は DNS で決して解けない（RFC 6761）。大文字・末尾の点でも、留めた先にだけ届く。
+        for host in ["jwks.invalid", "JWKS.INVALID", "jwks.invalid."] {
+            let resp = client.get(format!("http://{host}:{}/jwks", addr.port())).send().await;
+            let body = resp.unwrap_or_else(|e| panic!("{host}: {e}")).text().await.unwrap();
+            assert_eq!(body, "pinned", "{host}");
+        }
     }
 }
