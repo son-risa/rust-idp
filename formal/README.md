@@ -412,11 +412,11 @@ Present → 新しい RT での Rotate の続き）が示している。
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-RSINGLE | RT の使用済み化は**原子的に単回**（`Fresh` が linear） | `mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS） |
-| P-RFAMILY | 使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない | `RefreshTokenGrant::handle` の `pre.used` 分岐 → `revoke_refresh_family`（replacedBy を長さの上限なしで辿って消し、循環は訪れた集合で止める。Kani `refresh_family_walk_terminates` が停止と取りこぼしの無さを見る。上限 64 で止めていた版では、64 回を超えるローテーションの後の再利用で最新の RT が残った） |
+| P-RFAMILY | 使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない | 系列の失効の札（#75）: `RefreshTokenGrant::handle` の `pre.used` 分岐で `revoke_refresh_family` が `refreshFamilyRevocations/{familyId}` に札を書き、ローテーションは読んだ時と書き込みの後に `refresh_family_revoked` で札を見て断る（札を引けなければ断る）。鎖を辿って消すのは後片付けで、消し漏れがあっても札が使わせない。モデルの `Family(F, 'revoked')` が札に当たる。familyId を持たない古い RT はローテーションさせない。札が入る前の版は鎖を辿って消すだけで、上限 64・周の打ち切り・読みの誤り・書き込みの間の失効で使える RT が残った |
 
 ### 限界
-- 系列の失効は、コードでは再利用された RT から replacedBy を前向きに辿って消す。モデルは系列の状態 1 つで表す。
-  1 本の鎖（ローテーションは単回なので枝分かれしない）では両者は同じになる。
+- 系列の失効は、コードでは系列の札（#75）で表し、モデルの系列の状態 1 つ（`Family(F, 'revoked')`）とそのまま対応する。
+  札の期限（RT の TTL ＋ 1 日）が過ぎた後の振る舞いは、モデルの外（その系列の RT はそれまでに全部切れている）。
 - 期限・DPoP 束縛・クライアントの束縛は別のモデルと試験が見る。
 
 ---
