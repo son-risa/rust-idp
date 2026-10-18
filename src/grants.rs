@@ -325,21 +325,12 @@ impl GrantHandler for RefreshTokenGrant {
             None => pre.scope.clone(),
         };
 
-        // ローテーション: 新 RT を先に採番（offline_access がある時）し、old を used=true に
-        // CAS。CAS 敗北（並行/競合）は invalid_grant。delete ではなく used マーク + replaced_by
-        // 連結なので、後で old が再提示されたら再利用検知できる。
+        // ローテーション: 新 RT を先に保存してから、old に used=true と replaced_by を CAS で書く。
+        // この順なら old が used になった時点で新 RT は必ず在り、その後の再利用検知の系列失効が
+        // 新 RT まで届く（逆順だと、2 つの書き込みの間に走った失効が、まだ無い新 RT で止まり、
+        // 後から保存された新 RT が系列から外れて生き残る）。CAS 敗北（並行/競合）は invalid_grant で、
+        // 先に保存した新 RT は誰にも渡していないので消す。
         let new_refresh = has_scope(&scope, "offline_access").then(opaque);
-        if !p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await {
-            return Err(OAuthError::InvalidGrant("refresh_token not found or already used".into()));
-        }
-
-        let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
-        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
-        let (access_token, id_token) =
-            issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None)
-                .await?;
-        // 新 RT を保存。aud(resource)/acr/auth_time/DPoP 束縛(jkt) と family_id を継承
-        // （系列は chain 全体で 1 つ。再利用検知時にまとめて失効する）。
         if let Some(new_token) = &new_refresh {
             p.store
                 .save_refresh_token(RefreshToken {
@@ -357,6 +348,18 @@ impl GrantHandler for RefreshTokenGrant {
                 })
                 .await;
         }
+        if !p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await {
+            if let Some(new_token) = &new_refresh {
+                p.store.revoke_refresh_token(new_token).await;
+            }
+            return Err(OAuthError::InvalidGrant("refresh_token not found or already used".into()));
+        }
+
+        let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
+        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
+        let (access_token, id_token) =
+            issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None)
+                .await?;
         let refresh_token = new_refresh;
 
         Ok(TokenResponse {
@@ -452,6 +455,7 @@ mod tests {
     use crate::jws::b64url;
     use crate::model::{AuthorizationCode, Client, RefreshToken};
     use crate::provider::Provider;
+    use crate::store::Store;
     use sha2::{Digest, Sha256};
 
     fn provider() -> Provider {
@@ -823,31 +827,112 @@ mod tests {
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
         reuse_after_many_rotations_revokes_the_whole_family(provider().with_store(store)).await;
-    /// RefreshTokenGrant のローテーションは mark_refresh_used（旧 RT に used と replaced_by を書く）と
-    /// save_refresh_token（新 RT を作る）の 2 つの書き込みで、間に issue_access_and_id の await を挟む。
-    /// その間に旧 RT の再利用が来て revoke_refresh_family が走ると、replaced_by の先（まだ無い新 RT）で
-    /// 辿りが止まり、その後に保存された新 RT が系列から外れて生き残る、という順を store の呼び出しで固定する。
-    async fn a_new_rt_saved_after_the_family_was_revoked_does_not_survive(p: Provider) {
-        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
-        assert!(p.store.mark_refresh_used("RT0", Some("RT1")).await);
-        p.store.revoke_refresh_family("RT0").await;
-        p.store
-            .save_refresh_token(RefreshToken { family_id: "fam-test".into(), ..rt("RT1", "rp", "openid offline_access") })
-            .await;
-        assert!(p.store.get_refresh_token("RT1").await.is_none(), "系列を失効した後に保存された新しい RT が生き残っている");
+    }
+
+    /// 並行する要求を、ローテーションの CAS（mark_refresh_used）の直後に差し込む store。
+    /// RevokeAfterMark: CAS が通った直後に、古い RT の再利用による系列の失効が走る。
+    /// LoseTheCas: CAS の直前に、別のローテーションが先に古い RT を使用済みにする。
+    #[derive(Clone, Copy)]
+    enum Interleave {
+        RevokeAfterMark,
+        LoseTheCas,
+    }
+
+    struct Interleaving {
+        inner: std::sync::Arc<dyn Store>,
+        mode: Interleave,
+        saved: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl Store for Interleaving {
+        async fn save_interaction(&self, i: crate::model::Interaction) { self.inner.save_interaction(i).await }
+        async fn get_interaction(&self, uid: &str) -> Option<crate::model::Interaction> { self.inner.get_interaction(uid).await }
+        async fn consume_interaction(&self, uid: &str) -> bool { self.inner.consume_interaction(uid).await }
+        async fn save_session(&self, s: crate::model::Session) { self.inner.save_session(s).await }
+        async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
+        async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
+        async fn save_code(&self, c: AuthorizationCode) { self.inner.save_code(c).await }
+        async fn take_code(&self, code: &str) -> Option<AuthorizationCode> { self.inner.take_code(code).await }
+        async fn link_issued_tokens(&self, code: &str, at: &str, rt: Option<&str>) { self.inner.link_issued_tokens(code, at, rt).await }
+        async fn save_access_token(&self, t: AccessToken) { self.inner.save_access_token(t).await }
+        async fn get_access_token(&self, token: &str) -> Option<AccessToken> { self.inner.get_access_token(token).await }
+        async fn revoke_access_token(&self, token: &str) { self.inner.revoke_access_token(token).await }
+        async fn consume_mandate_if_unused(&self, token: &str) -> Result<bool, String> { self.inner.consume_mandate_if_unused(token).await }
+        async fn save_refresh_token(&self, t: RefreshToken) {
+            self.saved.lock().unwrap().push(t.token.clone());
+            self.inner.save_refresh_token(t).await
+        }
+        async fn get_refresh_token(&self, token: &str) -> Option<RefreshToken> { self.inner.get_refresh_token(token).await }
+        async fn revoke_refresh_token(&self, token: &str) { self.inner.revoke_refresh_token(token).await }
+        async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool {
+            match self.mode {
+                Interleave::LoseTheCas => {
+                    assert!(self.inner.mark_refresh_used(token, Some("WINNER")).await);
+                    self.inner.mark_refresh_used(token, replaced_by).await
+                }
+                Interleave::RevokeAfterMark => {
+                    let won = self.inner.mark_refresh_used(token, replaced_by).await;
+                    self.inner.revoke_refresh_family(token).await;
+                    won
+                }
+            }
+        }
+        async fn revoke_refresh_family(&self, start_token: &str) { self.inner.revoke_refresh_family(start_token).await }
+        async fn find_account(&self, sub: &str) -> crate::model::Account { self.inner.find_account(sub).await }
+    }
+
+    async fn rotate_rt0_with(inner: std::sync::Arc<dyn Store>, mode: Interleave) -> (Provider, Result<TokenResponse, OAuthError>, Vec<String>) {
+        inner.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+        let store = std::sync::Arc::new(Interleaving { inner, mode, saved: std::sync::Mutex::new(vec![]) });
+        let p = provider().with_store(store.clone());
+        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        let saved = store.saved.lock().unwrap().clone();
+        (p, r, saved)
+    }
+
+    /// ローテーションの CAS の直後に古い RT の再利用で系列が失効しても、新しい RT は系列から外れて生き残らない。
+    async fn a_revoke_right_after_the_cas_reaches_the_new_rt(inner: std::sync::Arc<dyn Store>) {
+        let (p, r, _) = rotate_rt0_with(inner, Interleave::RevokeAfterMark).await;
+        let new_rt = r.unwrap().refresh_token.unwrap();
+        assert!(p.store.get_refresh_token(&new_rt).await.is_none(), "系列の失効の後に新しい RT {new_rt} が生き残っている");
+        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", new_rt.as_str())]), None).await;
+        assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
+    }
+
+    /// CAS に負けたローテーションは invalid_grant で、先に保存した新しい RT を残さない。
+    async fn a_rotation_that_loses_the_cas_leaves_no_new_rt(inner: std::sync::Arc<dyn Store>) {
+        let (p, r, saved) = rotate_rt0_with(inner, Interleave::LoseTheCas).await;
+        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
+        let new_rts: Vec<&String> = saved.iter().filter(|t| t.as_str() != "RT0").collect();
+        assert_eq!(new_rts.len(), 1, "新しい RT は先に 1 つ保存される");
+        assert!(p.store.get_refresh_token(new_rts[0]).await.is_none(), "負けたローテーションの新しい RT が残っている");
+    }
+
+    async fn fake_store() -> std::sync::Arc<dyn Store> {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs))
     }
 
     #[tokio::test]
     async fn rotation_racing_a_family_revoke_in_memory() {
-        a_new_rt_saved_after_the_family_was_revoked_does_not_survive(provider()).await;
+        a_revoke_right_after_the_cas_reaches_the_new_rt(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
     }
 
     #[tokio::test]
     async fn rotation_racing_a_family_revoke_in_firestore() {
-        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
-        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
-        let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
-        a_new_rt_saved_after_the_family_was_revoked_does_not_survive(provider().with_store(store)).await;
+        a_revoke_right_after_the_cas_reaches_the_new_rt(fake_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn rotation_losing_the_cas_leaves_no_new_rt_in_memory() {
+        a_rotation_that_loses_the_cas_leaves_no_new_rt(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
+    }
+
+    #[tokio::test]
+    async fn rotation_losing_the_cas_leaves_no_new_rt_in_firestore() {
+        a_rotation_that_loses_the_cas_leaves_no_new_rt(fake_store().await).await;
     }
 
     // B-4: ローテーション後の新 RT は同じ family_id を継承する。
