@@ -2,13 +2,18 @@ theory RefreshNoFamilyRevoke
 begin
 
 /*
+  ★ NEG 版（必要性の実験）: 本体 refresh.spthy から、系列の失効（P-RFAMILY）を外した変種。
+    使用済みの RT が出されたら、その要求は拒むが系列は 'alive' のまま残る（Revoke の action も起きない）。
+    期待: reuse_stops_the_family だけが falsified。no_rotation_after_revoke は Revoke が起きないので空虚に verified。
+    下の流れと性質の説明は本体のもの。
+
   refresh token（RT）のローテーションと、再利用の検出による系列の失効。
 
   流れ:
     1. AS は新しい系列 F と最初の RT を発行する
     2. RT を持つ者がそれを AS に出すと、AS はその RT を使用済みにして、同じ系列の新しい RT を返す（ローテーション）
-    3. 使用済みの RT がもう一度出されたら（盗難の兆し）、AS は系列 F を丸ごと失効させる
-       （失効した系列の RT は、どれを出しても受け付けない。受け付ける規則が無いことで表す）
+    3. 使用済みの RT がもう一度出されたら（盗難の兆し）、AS はその要求を拒む。
+       本体と違い、系列は失効させない（同じ系列の他の RT は使えるまま）
 
   検証する性質:
     - rt_single_use: 1 つの RT から 2 回ローテーションは起きない
@@ -20,7 +25,7 @@ begin
   抽象: DPoP 束縛・クライアント認証・期限は外す（別のモデルと試験が見る）。
         系列の状態は Family(F, 'alive' | 'revoked') の linear な事実 1 つで表す。
 
-  実行: tamarin-prover --prove --auto-sources formal/refresh.spthy
+  実行: tamarin-prover --prove --auto-sources formal/refresh_NEG_no_family_revoke.spthy
 */
 
 /* ---- 1. 新しい系列と最初の RT ---- */
@@ -35,7 +40,7 @@ rule AS_Rotate:
   --[ Present(F, r), Rotate(F, r, ~n) ]->
     [ !Used(r, F), Fresh(~n, F), Family(F, 'alive'), Out(~n) ]
 
-/* ---- 3. 使用済みの RT が出された。前提[P-RFAMILY]: 系列を丸ごと失効させる ---- */
+/* ---- 3. 使用済みの RT が出された。NEG: 要求を拒むだけで系列を失効させない（P-RFAMILY を外した） ---- */
 rule AS_Reuse:
     [ In(r), !Used(r, F), Family(F, 'alive') ]
   --[ Present(F, r) ]->

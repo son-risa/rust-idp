@@ -2,11 +2,16 @@ theory RefreshNoSingleUse
 begin
 
 /*
+  ★ NEG 版（必要性の実験）: 本体 refresh.spthy から、単回の使用済み化（P-RSINGLE）を外した変種。
+    Fresh を persistent（!Fresh）にしたので、同じ RT から何度でもローテーションできる。
+    期待: rt_single_use と reuse_stops_the_family が falsified。下の流れと性質の説明は本体のもの。
+
   refresh token（RT）のローテーションと、再利用の検出による系列の失効。
 
   流れ:
     1. AS は新しい系列 F と最初の RT を発行する
-    2. RT を持つ者がそれを AS に出すと、AS はその RT を使用済みにして、同じ系列の新しい RT を返す（ローテーション）
+    2. RT を持つ者がそれを AS に出すと、AS は同じ系列の新しい RT を返す（ローテーション）。
+       本体と違い、使用済みの印（!Used）は付けるが、元の RT は使えるまま残る（!Fresh）
     3. 使用済みの RT がもう一度出されたら（盗難の兆し）、AS は系列 F を丸ごと失効させる
        （失効した系列の RT は、どれを出しても受け付けない。受け付ける規則が無いことで表す）
 
@@ -20,7 +25,7 @@ begin
   抽象: DPoP 束縛・クライアント認証・期限は外す（別のモデルと試験が見る）。
         系列の状態は Family(F, 'alive' | 'revoked') の linear な事実 1 つで表す。
 
-  実行: tamarin-prover --prove --auto-sources formal/refresh.spthy
+  実行: tamarin-prover --prove --auto-sources formal/refresh_NEG_no_singleuse.spthy
 */
 
 /* ---- 1. 新しい系列と最初の RT ---- */
@@ -29,7 +34,7 @@ rule AS_Issue:
   --[ Issue(~F, ~r) ]->
     [ Family(~F, 'alive'), !Fresh(~r, ~F), Out(~r) ]
 
-/* ---- 2. ローテーション。前提[P-RSINGLE]: Fresh は linear = 原子的な単回の使用済み化 ---- */
+/* ---- 2. ローテーション。NEG: Fresh を persistent にして P-RSINGLE（原子的な単回の使用済み化）を外した ---- */
 rule AS_Rotate:
     [ In(r), !Fresh(r, F), Family(F, 'alive'), Fr(~n) ]
   --[ Present(F, r), Rotate(F, r, ~n) ]->
