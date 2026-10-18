@@ -147,6 +147,17 @@ async fn login_with_email(p: &Arc<Provider>, email: &str, key: &SigningKey, sign
 }
 
 async fn email_login_response(p: &Arc<Provider>, email: &str, key: &SigningKey, sign_count: u32) -> (String, Response) {
+    email_login_response_with(p, email, key, sign_count, |sig| sig).await
+}
+
+/// 署名（b64url）を書き換えてから送る email ログイン。
+async fn email_login_response_with(
+    p: &Arc<Provider>,
+    email: &str,
+    key: &SigningKey,
+    sign_count: u32,
+    tamper: impl Fn(String) -> String,
+) -> (String, Response) {
     let uid = uuid::Uuid::new_v4().to_string();
     p.store
         .save_interaction(Interaction {
@@ -167,7 +178,7 @@ async fn email_login_response(p: &Arc<Provider>, email: &str, key: &SigningKey, 
     let (ad, sig, cdj) = make_auth_ceremony(key, sign_count, &challenge, &p.origin(), &p.rp_id(), false);
     let verify_req: AuthVerifyReq = serde_json::from_value(json!({
         "id": crate::webauthn::b64e(b"probe-credential-id"),
-        "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig, "userHandle": null },
+        "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": tamper(sig), "userHandle": null },
     }))
     .unwrap();
     let verify =
@@ -558,4 +569,20 @@ async fn a_passkey_logs_in_only_its_own_account() {
     crate::account_admin::disable_account(fs, "test", &victim).await.unwrap();
     let (_uid, frozen) = email_login_response(&p, &victim, &attacker, 0).await;
     assert_eq!(frozen.status(), StatusCode::UNAUTHORIZED, "署名が通らないうちは凍結を明かさない");
+}
+
+/// WebAuthn の ES256 の署名は DER。同じ署名を DER でない形（r||s の 64 バイト）にすると、正しい鍵でも 401。
+#[tokio::test]
+async fn a_passkey_signature_that_is_not_der_is_refused() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key, _cred_id, _account_id) = register_test_account(&p, &email).await;
+    let to_raw = |der_b64: String| {
+        let der = crate::es256::b64url_decode(&der_b64).unwrap();
+        let sig = Signature::from_der(&der).unwrap();
+        crate::webauthn::b64e(&sig.to_bytes())
+    };
+    let (uid, resp) = email_login_response_with(&p, &email, &key, 0, to_raw).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
 }

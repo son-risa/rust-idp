@@ -394,8 +394,12 @@ mod tests {
     use crate::firestore::fake_firestore;
 
     async fn store() -> FirestoreStore {
-        let (host, _state) = fake_firestore::spawn().await;
-        FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)))
+        store_and_fake().await.0
+    }
+
+    async fn store_and_fake() -> (FirestoreStore, Arc<fake_firestore::FakeState>) {
+        let (host, state) = fake_firestore::spawn().await;
+        (FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))), state)
     }
 
     fn rt(token: &str, family: &str, replaced_by: Option<&str>) -> RefreshToken {
@@ -466,5 +470,34 @@ mod tests {
         let (a, b) = tokio::join!(s.consume_interaction("U1"), s.consume_interaction("U1"));
         assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
         assert!(!s.consume_interaction("U1").await);
+    }
+
+    #[tokio::test]
+    async fn rotation_of_an_unknown_refresh_token_fails() {
+        let s = store().await;
+        assert!(!s.mark_refresh_used("NOPE", Some("R2")).await);
+    }
+
+    #[tokio::test]
+    async fn rotation_fails_closed_when_the_store_errs() {
+        for method in ["GET", "PATCH"] {
+            let (s, fake) = store_and_fake().await;
+            s.save_refresh_token(rt("R1", "F", None)).await;
+            fake.fail_once(method, "refreshTokens", Some("R1"));
+            assert!(!s.mark_refresh_used("R1", Some("R2")).await, "{method} の 503 で通ってしまった");
+            assert!(!s.get_refresh_token("R1").await.unwrap().used, "{method} の 503 で使用済みになった");
+        }
+    }
+
+    #[tokio::test]
+    async fn consuming_an_interaction_fails_closed_when_the_store_errs() {
+        for method in ["GET", "DELETE"] {
+            let (s, fake) = store_and_fake().await;
+            let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+            s.save_interaction(i).await;
+            fake.fail_once(method, "interactions", Some("U1"));
+            assert!(!s.consume_interaction("U1").await, "{method} の 503 で消費が通ってしまった");
+            assert!(s.get_interaction("U1").await.is_some(), "{method} の 503 で interaction が消えた");
+        }
     }
 }

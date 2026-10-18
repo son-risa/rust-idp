@@ -985,9 +985,11 @@ mod tests {
             String::from_utf8(axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
         }
 
-        let stolen = authorize_as("dcr-x").await;
-        assert_eq!(stolen.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(text(stolen).await, "request_uri was issued to a different client");
+        for other in ["dcr-x", "dcr-yy", "dcr-", "DCR-Y", "dcr-y "] {
+            let stolen = authorize_as(other).await;
+            assert_eq!(stolen.status(), StatusCode::BAD_REQUEST, "{other:?}");
+            assert_eq!(text(stolen).await, "request_uri was issued to a different client", "{other:?}");
+        }
         let own = text(authorize_as("dcr-y").await).await;
         assert_ne!(own, "request_uri was issued to a different client");
     }
@@ -1022,6 +1024,10 @@ mod tests {
             (Some("dcr-x"), "https://other.example/bye"),
             (Some("dcr-x"), "https://rp.example.com/bye/../evil"),
             (Some("dcr-x"), "https://rp.example.com/bye?x=1"),
+            (Some("dcr-x"), "https://evil.example/#https://rp.example.com/bye"),
+            (Some("dcr-x"), "https://rp.example.co"),
+            (Some("dcr-x"), "https://rp.example.com/BYE"),
+            (Some("dcr-x"), "https://rp.example.com/bye/"),
             (Some("unknown"), "https://rp.example.com/bye"),
             (None, "https://rp.example.com/bye"),
         ] {
