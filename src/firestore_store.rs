@@ -445,8 +445,11 @@ mod tests {
         assert!(s.get_refresh_token("X1").await.is_some());
     }
 
+    /// 循環した鎖でも止まる。ただし止めているのは 64 回の上限ではなく、消した RT を次に読むと無いこと
+    /// （C1 を消した後に C2 から C1 を辿っても None になる）。上限を外してもこの試験は緑のまま。
+    /// 上限そのものが walk を止めることは、Kani の refresh_family_walk_terminates が Memory の walk について見ている。
     #[tokio::test]
-    async fn revoking_a_cyclic_family_terminates() {
+    async fn revoking_a_cyclic_family_stops_because_deleted_links_are_gone() {
         let s = store().await;
         s.save_refresh_token(rt("C1", "F", Some("C2"))).await;
         s.save_refresh_token(rt("C2", "F", Some("C1"))).await;
