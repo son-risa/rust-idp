@@ -574,25 +574,6 @@ pub(super) struct RegVerifyReq {
     name: Option<String>,
 }
 
-const NAME_MAX_CHARS: usize = 80;
-
-/// 表示の向きを変える書式文字（Unicode の Bidi_Control）。RP の画面で氏名の見た目を偽れるので断る。
-fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-
-/// 氏名を前後の空白を除いて受け取る。空なら None、長すぎる・制御文字や向きを変える文字を含むなら Err。
-fn normalize_name(raw: Option<&str>) -> Result<Option<String>, &'static str> {
-    let name = raw.map(str::trim).unwrap_or("");
-    if name.is_empty() {
-        return Ok(None);
-    }
-    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(|c| c.is_control() || is_bidi_control(c)) {
-        return Err("invalid name");
-    }
-    Ok(Some(name.to_string()))
-}
-
 pub(super) async fn register_passkey_verify(
     State(p): State<Arc<Provider>>,
     Json(req): Json<RegVerifyReq>,
@@ -604,9 +585,9 @@ pub(super) async fn register_passkey_verify(
     if let Some(r) = refuse_invite_for_registered(fs, &req.token).await {
         return r;
     }
-    let name = match normalize_name(req.name.as_deref()) {
+    let name = match crate::registration::normalize_profile_value(req.name.as_deref().unwrap_or("")) {
         Ok(n) => n,
-        Err(e) => return plain_error(e),
+        Err(()) => return plain_error("invalid name"),
     };
     if name.is_none() {
         match crate::registration::peek_invite(fs, &req.token).await {

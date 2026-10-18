@@ -3,6 +3,7 @@
 
 use crate::model::JwkPub;
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +20,6 @@ struct Cached {
 }
 
 pub struct JwksResolver {
-    http: reqwest::Client,
     cache: Mutex<HashMap<String, Cached>>,
 }
 
@@ -32,7 +32,6 @@ impl Default for JwksResolver {
 impl JwksResolver {
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -59,14 +58,9 @@ impl JwksResolver {
     }
 
     async fn fetch(&self, jwks_uri: &str) -> Option<Vec<JwkPub>> {
-        // SSRF 緩和: https のみ。jwks_uri は DCR(IAT 必須)で登録された半信頼値だが二重に絞る。
-        // 内部 https へのアクセス遮断（private IP 拒否）は本実装の範囲外（運用/ネットワークで担保）。
-        if !jwks_uri.starts_with("https://") {
-            return None;
-        }
-        let resp = self
-            .http
-            .get(jwks_uri)
+        let (client, url) = request_for(jwks_uri).await?;
+        let resp = client
+            .get(url)
             .timeout(Duration::from_secs(5))
             .send()
             .await
@@ -82,6 +76,66 @@ impl JwksResolver {
             Some(keys)
         }
     }
+}
+
+/// jwks_uri を取りに行ってよいなら、判定したアドレスに留めたクライアントと URL を返す。
+/// jwks_uri は DCR(IAT 必須)で登録された半信頼値なので、https に限り、内向きのアドレスを断る（SSRF 緩和）。
+async fn request_for(jwks_uri: &str) -> Option<(reqwest::Client, reqwest::Url)> {
+    if !jwks_uri.starts_with("https://") {
+        return None;
+    }
+    let url = reqwest::Url::parse(jwks_uri).ok()?;
+    let addrs = public_addrs(&url).await?;
+    let client = pinned_client(url.host_str()?, &addrs).ok()?;
+    Some((client, url))
+}
+
+/// 内向き（loopback・private・link-local・メタデータ・ULA など）のアドレス。
+fn is_internal(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(a) => {
+            let [o0, o1, ..] = a.octets();
+            a.is_loopback()
+                || a.is_private()
+                || a.is_link_local()
+                || a.is_unspecified()
+                || a.is_broadcast()
+                || a.is_multicast()
+                || o0 == 0
+                || (o0 == 100 && (o1 & 0xc0) == 64)
+        }
+        IpAddr::V6(a) => {
+            let s0 = a.segments()[0];
+            a.is_loopback()
+                || a.is_unspecified()
+                || a.is_multicast()
+                || (s0 & 0xfe00) == 0xfc00
+                || (s0 & 0xffc0) == 0xfe80
+                || a.to_ipv4_mapped().is_some_and(|v4| is_internal(IpAddr::V4(v4)))
+        }
+    }
+}
+
+/// 名前を解いた後のアドレスで判定する。1 つでも内向きなら全体を断る（DNS の応答に混ぜる手を塞ぐ）。
+async fn public_addrs(url: &reqwest::Url) -> Option<Vec<SocketAddr>> {
+    let port = url.port_or_known_default()?;
+    let host = url.host_str()?;
+    let addrs: Vec<SocketAddr> = match host.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+        Ok(ip) => vec![SocketAddr::new(ip, port)],
+        Err(_) => tokio::net::lookup_host((host, port)).await.ok()?.collect(),
+    };
+    if addrs.is_empty() || addrs.iter().any(|a| is_internal(a.ip())) {
+        return None;
+    }
+    Some(addrs)
+}
+
+/// 判定したアドレスにだけ接続し（取得の間に名前を解き直させない）、redirect は追わない。
+fn pinned_client(host: &str, addrs: &[SocketAddr]) -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .resolve_to_addrs(host, addrs)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
 }
 
 #[cfg(test)]
@@ -107,5 +161,47 @@ mod tests {
         ] {
             assert!(r.fetch(bad).await.is_none(), "{bad:?} を取得してはならない");
         }
+    }
+
+    async fn allowed(u: &str) -> bool {
+        request_for(u).await.is_some()
+    }
+
+    #[tokio::test]
+    async fn internal_addresses_are_refused_after_resolution() {
+        for bad in [
+            "https://127.0.0.1/jwks",
+            "https://localhost/jwks",
+            "https://10.1.2.3/jwks",
+            "https://172.16.0.1/jwks",
+            "https://192.168.1.1/jwks",
+            "https://169.254.169.254/computeMetadata/v1/",
+            "https://100.64.0.1/jwks",
+            "https://0.0.0.0/jwks",
+            "https://[::1]/jwks",
+            "https://[fd00:ec2::254]/jwks",
+            "https://[fe80::1]/jwks",
+            "https://[::ffff:169.254.169.254]/jwks",
+        ] {
+            assert!(!allowed(bad).await, "{bad} を通してはならない");
+        }
+        assert!(allowed("https://93.184.215.14/jwks").await);
+        assert!(allowed("https://[2606:2800:21f:cb07:6820:80da:af6b:8b2c]/jwks").await);
+    }
+
+    #[tokio::test]
+    async fn redirects_are_not_followed() {
+        use axum::response::Redirect;
+        use axum::routing::get;
+        let app = axum::Router::new()
+            .route("/jwks", get(|| async { Redirect::temporary("/inside") }))
+            .route("/inside", get(|| async { "inside" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = pinned_client("jwks.example", &[addr]).unwrap();
+        let resp = client.get(format!("http://jwks.example:{}/jwks", addr.port())).send().await.unwrap();
+        assert!(resp.status().is_redirection(), "redirect の先へ行ってはならない");
     }
 }

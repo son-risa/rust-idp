@@ -293,6 +293,20 @@ async fn issue_code(
             );
         }
     }
+    // 認可完了: PAR の request_uri をコードを作る前に単回消費する（RFC 9126）。
+    // 並行した完了のうち消費に勝った 1 つだけがコードを受け取る。
+    if let (Some(ru), Some(fs)) = (&req.request_uri, &p.firestore) {
+        match crate::par::consume(fs, ru).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return authorize_error(p, req, OAuthError::InvalidRequest("request_uri already used".into()))
+            }
+            Err(e) => {
+                tracing::error!("par consume: {e}");
+                return authorize_error(p, req, OAuthError::ServerError("request_uri consume failed".into()));
+            }
+        }
+    }
     let code = uuid::Uuid::new_v4().simple().to_string();
     p.store
         .save_code(AuthorizationCode {
@@ -317,11 +331,6 @@ async fn issue_code(
             expires_at: now() + 60,
         })
         .await;
-
-    // 認可完了: PAR の request_uri を削除して以後の再利用を不可にする（RFC 9126）。
-    if let (Some(ru), Some(fs)) = (&req.request_uri, &p.firestore) {
-        crate::par::delete(fs, ru).await;
-    }
 
     let mut out = vec![("code".to_string(), code)];
     if let Some(state) = &req.params.state {
@@ -741,8 +750,12 @@ pub(super) async fn profile_put(State(p): State<Arc<Provider>>, headers: HeaderM
         Ok(m) => m,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid body: {e}")).into_response(),
     };
-    if let Err(e) = crate::registration::save_profile(fs, &at.account_id, &updates).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("save: {e}")).into_response();
+    match crate::registration::save_profile(fs, &at.account_id, &updates).await {
+        Ok(()) => {}
+        Err(e @ crate::registration::ProfileError::Invalid(_)) => {
+            return (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("save: {e}")).into_response(),
     }
     let profile = crate::registration::get_profile(fs, &at.account_id)
         .await
@@ -1017,6 +1030,59 @@ mod tests {
         assert_eq!(v["profile"], "https://op.example/oidc/me/profile");
         assert_eq!(v["fcm_token"], "https://op.example/oidc/ciba/fcm-tokens");
         assert_eq!(v["mandate_consume"], "https://op.example/oidc/oauth/mandate/consume");
+    }
+
+    #[tokio::test]
+    async fn a_par_request_uri_yields_a_code_only_once() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Provider::new("https://op.example").with_firestore(fs.clone());
+        let ru = crate::par::create(&fs, "dcr-x", "response_type=code").await.unwrap();
+        let req = crate::context::AddressedRequest {
+            params: crate::model::AuthParams {
+                client_id: Some("dcr-x".into()),
+                redirect_uri: Some("https://rp.example.com/cb".into()),
+                response_type: Some("code".into()),
+                scope: Some("openid".into()),
+                state: None,
+                nonce: None,
+                prompt: None,
+                max_age: None,
+                acr_values: None,
+                response_mode: None,
+                code_challenge: None,
+                code_challenge_method: None,
+                dpop_jkt: None,
+                resource: None,
+            },
+            client: client_with_post_logout(&[]),
+            redirect_uri: "https://rp.example.com/cb".into(),
+            request_uri: Some(ru.0),
+        };
+        let location = |r: Response| r.headers().get(header::LOCATION).unwrap().to_str().unwrap().to_string();
+        let first = location(issue_code(&p, &req, "acct".into(), None).await);
+        let second = location(issue_code(&p, &req, "acct".into(), None).await);
+        assert!(first.contains("code="), "{first}");
+        assert!(!second.contains("code=") && second.contains("error=invalid_request"), "{second}");
+    }
+
+    #[tokio::test]
+    async fn profile_put_refuses_the_values_the_registration_page_refuses() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(Provider::new("https://op.example").with_firestore(fs.clone()));
+        p.store.save_access_token(at(None)).await;
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer AT".parse().unwrap());
+        let put = |body: serde_json::Value| profile_put(State(p.clone()), headers.clone(), body.to_string());
+
+        assert_eq!(put(serde_json::json!({ "name": "山田 太郎" })).await.status(), StatusCode::OK);
+        for bad in ["\u{202E}evil", "a\nb", &"x".repeat(81)] {
+            let resp = put(serde_json::json!({ "name": bad })).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad:?}");
+        }
+        let saved = crate::registration::get_profile(&fs, "user@example.com").await.unwrap();
+        assert_eq!(saved.get("name").map(String::as_str), Some("山田 太郎"));
     }
 
     fn at(jkt: Option<&str>) -> AccessToken {
