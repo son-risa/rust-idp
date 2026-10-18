@@ -2,6 +2,10 @@ theory InviteNoSingleUse
 begin
 
 /*
+  ★ NEG 版（必要性の実験）: 本体 invite.spthy から、招待の原子的な単回消費（P-ISINGLE）を外した変種。
+    Invite を persistent（!Invite）にしたので、確認の段を通った要求は同じ token で何度でも登録できる。
+    期待: invite_single_use だけが falsified（攻撃の跡は確認と消費の間の競合）。下の流れと性質の説明は本体のもの。
+
   招待の登録リンク（RP の管理者が発行を頼み、宛先のメールに届く token で passkey を登録する）。
 
   流れ:
@@ -9,7 +13,7 @@ begin
     2. AS は新鮮な token ~t を作って Invite(~t, E) に置き、TLS の応答で RP にだけ返す
     3. RP は ~t を含むリンクを E のメール箱へ送る
     4. 利用者は ~t と自分の passkey 公開鍵を AS に送る（TLS）
-    5. AS は「E がまだ登録済みでない」ことを確かめ、招待を消費して E の passkey を登録する
+    5. AS は「E がまだ登録済みでない」ことを確かめ、E の passkey を登録する（本体と違い、招待は消費しない）
 
   検証する性質:
     - invite_single_use: 1 つの token から登録は 1 回しか起きない
@@ -25,7 +29,7 @@ begin
       別の段で起きる。確認の時点で E の登録が無いことを restriction で表す。
       確認と消費の間に別の要求が割り込めるので、単回を担保するのは消費の側になる。
 
-  実行: tamarin-prover --prove --auto-sources formal/invite.spthy
+  実行: tamarin-prover --prove --auto-sources formal/invite_NEG_no_singleuse.spthy
 */
 
 builtins: signing, asymmetric-encryption, symmetric-encryption
@@ -55,7 +59,7 @@ rule RP_RequestInvite:
     ]
 
 /* ---- 2. AS: 招待を作る。前提[P-ITOKEN]: token は推測不能（Fr）。
-   前提[P-ISINGLE]: Invite は linear = 原子的な単回消費。 ---- */
+   NEG: Invite を persistent にして P-ISINGLE（原子的な単回消費）を外した。 ---- */
 rule AS_CreateInvite:
     [ In(aenc(<'invite', C, E, kr, sig>, pk(~skAS)))
     , !AS_Sk(~skAS)
@@ -95,7 +99,7 @@ rule AS_CheckNotRegistered:
   --[ CheckNotRegistered(t) ]->
     [ St_AS(t, cpk) ]
 
-/* ---- 5b. AS: 招待を消費して登録する（consume_email_challenge → save_credential）---- */
+/* ---- 5b. AS: 招待を読んで登録する。NEG: 招待を消費しない（!Invite）---- */
 rule AS_ConsumeAndRegister:
     [ St_AS(t, cpk), !Invite(t, E) ]
   --[ Registered(E, t, cpk) ]->
