@@ -1,7 +1,8 @@
 //! `formal/premises.json`（Tamarin のモデルが表に出した前提 P-* → rust-op の担保）が
 //! 実在するものだけを指していることを検める門。
 //!
-//! - README に出る P-* の集合と台帳の ID の集合が一致する（README は表の形に依らず全体から拾う）
+//! - README の各モデルの節に出る (P-*, モデル) の組と、台帳の (id, model) の組が一致する
+//!   （README は表の形に依らず、節の全文から拾う。節とモデルの file の対応は MODEL_SECTIONS の一覧で引く）
 //! - 行が指すモデル（formal/*.spthy）と担保のコード（`fn`）が在る
 //! - 行が指す Kani ハーネスが formal/kani-harnesses.txt に在る（一覧と実際に走ったハーネスの照合は formal/check-kani.sh）
 //! - 各行は試験か Kani ハーネスを 1 つ以上持つか、持てない理由（outside）を書く
@@ -41,15 +42,49 @@ fn ledger() -> Vec<Premise> {
     serde_json::from_str(&read("formal/premises.json")).expect("formal/premises.json が読めない")
 }
 
-/// README 全体から P-[A-Z][A-Z0-9]* を拾う（表の形・列の位置・見出しに依らない。1 つのセルや行に
-/// 複数の ID があれば全部拾う）。ASCII でないハイフンで書いた ID（P‐CKEY など）は、拾われずに
-/// 台帳との照合をすり抜けるので誤りとして返す。
-fn readme_ids() -> Result<BTreeSet<String>, Vec<String>> {
+/// README のモデルの節の見出し（行全体）と、その節が扱うモデルの file の一覧。節は見出しの行から次の `---` の行まで。
+/// 見出しの番号から file を推さず、この一覧で引く。
+const MODEL_SECTIONS: &[(&str, &str)] = &[
+    ("## モデル #1: 認可コード + PKCE + クライアント認証 → トークン", "oauth_code_pkce.spthy"),
+    ("## モデル #2: DPoP 送り主束縛（RFC 9449）", "dpop_binding.spthy"),
+    ("## モデル #3: CIBA（切り離し承認）+ RAR マンデート", "ciba_rar.spthy"),
+    ("## モデル #4: WebAuthn / FIDO2 ユーザ認証（passkey）", "webauthn.spthy"),
+    ("## モデル #5: OIDC ID token（フェデレーションの原子）", "id_token.spthy"),
+    ("## モデル #6: 合成（#1 認可コード+PKCE+クライアント認証 × #2 DPoP × #4 ユーザ同意）", "composition_code_dpop.spthy"),
+    ("## モデル #7: 合成（#3 CIBA 切り離し承認 × #3 RAR マンデート × #2 DPoP 送り主束縛）", "composition_ciba_dpop_rar.spthy"),
+    ("## モデル #8: 合成（public client 認可コード × redirect_uri 完全一致 × PKCE × #2 DPoP × ユーザ同意）", "composition_public_pkce_dpop.spthy"),
+];
+
+/// README の各モデルの節の全文（表・本文を問わない）から P-[A-Z][A-Z0-9]* を拾い、(ID, モデルの file) の組にする。
+/// 次は誤りとして返す: 一覧に無い「## モデル」の見出し、一覧の見出しが README に無い・2 度ある、
+/// モデルの節の外にある P-*、ASCII でないハイフンで書いた ID（P‐CKEY など。拾われずに照合をすり抜ける）。
+fn readme_pairs() -> Result<BTreeSet<(String, String)>, Vec<String>> {
     const LOOKALIKE_DASHES: &[char] = &['‐', '‑', '‒', '–', '—', '―', '−', '－', 'ー'];
     let text = read("formal/README.md");
-    let mut ids = BTreeSet::new();
+    let mut pairs = BTreeSet::new();
     let mut errors = Vec::new();
+    let mut seen_headings = BTreeSet::new();
+    let mut model: Option<&str> = None;
     for (n, line) in text.lines().enumerate() {
+        if line.starts_with("## モデル") {
+            match MODEL_SECTIONS.iter().find(|(h, _)| *h == line) {
+                Some((h, m)) => {
+                    if !seen_headings.insert(*h) {
+                        errors.push(format!("README {} 行目: 同じモデルの見出しが 2 度ある: {line}", n + 1));
+                    }
+                    model = Some(m);
+                }
+                None => {
+                    errors.push(format!("README {} 行目: MODEL_SECTIONS に無いモデルの見出し: {line}", n + 1));
+                    model = None;
+                }
+            }
+            continue;
+        }
+        if line.trim() == "---" {
+            model = None;
+            continue;
+        }
         let chars: Vec<char> = line.chars().collect();
         for (k, w) in chars.windows(3).enumerate() {
             if w[0] != 'P' || (k > 0 && chars[k - 1].is_ascii_alphanumeric()) || !w[2].is_ascii_uppercase() {
@@ -58,14 +93,27 @@ fn readme_ids() -> Result<BTreeSet<String>, Vec<String>> {
             if w[1] == '-' {
                 let tail: String =
                     chars[k + 2..].iter().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).collect();
-                ids.insert(format!("P-{tail}"));
+                match model {
+                    Some(m) => {
+                        pairs.insert((format!("P-{tail}"), m.to_string()));
+                    }
+                    None => errors.push(format!("README {} 行目: モデルの節の外の P-{tail}: {line}", n + 1)),
+                }
             } else if LOOKALIKE_DASHES.contains(&w[1]) {
                 errors.push(format!("README {} 行目: ASCII でないハイフンの ID: {line}", n + 1));
             }
         }
     }
+    for (h, m) in MODEL_SECTIONS {
+        if !seen_headings.contains(h) {
+            errors.push(format!("MODEL_SECTIONS の見出しが README に無い: {h}"));
+        }
+        if !root().join("formal").join(m).is_file() {
+            errors.push(format!("MODEL_SECTIONS の formal/{m} が無い"));
+        }
+    }
     if errors.is_empty() {
-        Ok(ids)
+        Ok(pairs)
     } else {
         Err(errors)
     }
@@ -92,9 +140,9 @@ fn guard_exists(guard: &str) -> Result<(), String> {
 
 #[test]
 fn ledger_rows_match_the_readme_premise_tables() {
-    let in_ledger: BTreeSet<String> = ledger().into_iter().map(|p| p.id).collect();
-    let in_readme = readme_ids().unwrap_or_else(|e| panic!("{}", e.join("\n")));
-    assert_eq!(in_ledger, in_readme, "formal/README.md の P-* と formal/premises.json の行が合わない");
+    let in_ledger: BTreeSet<(String, String)> = ledger().into_iter().map(|p| (p.id, p.model)).collect();
+    let in_readme = readme_pairs().unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    assert_eq!(in_ledger, in_readme, "formal/README.md の (P-*, モデル) と formal/premises.json の (id, model) が合わない");
 }
 
 #[test]
