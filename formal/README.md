@@ -23,7 +23,8 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 - **Tamarin**: `formal/check.sh` が `formal/*.spthy` を全部 `--prove --auto-sources` にかけ、lemma ごとの結果を
   [`expected.tsv`](./expected.tsv) と突き合わせる。本体のモデルは全 lemma が verified、NEG 版は下の各節に書いた lemma が
   falsified であることを期待する。結果が違う・表に無いモデルや lemma がある・表にあるのに走らなかった・wellformedness が
-  通らない、のどれでも赤。モデルを足したり lemma を変えたら、`expected.tsv` も同じ PR で直す。
+  通らない、のどれでも赤。モデルを足したり lemma を変えたら、`expected.tsv` も同じ PR で直す（`--auto-sources` が
+  足す `AUTO_typing` も表に入れる）。
 - **Kani**: `formal/check-kani.sh` が `cargo kani` で全ハーネスを回し、SUCCESSFUL になったハーネスの名前を
   [`kani-harnesses.txt`](./kani-harnesses.txt) と突き合わせる（Kani 0.67.0）。ハーネスが消えた・増えた・名前が変わった・
   失敗した、のどれでも赤。ハーネスを足したり消したりしたら、一覧も同じ PR で直す。
@@ -375,6 +376,49 @@ load-bearing」と気づいた所を、#8 が記号モデルで明示し、Kani 
 - フィッシング/同意すり替え（ユーザが偽 client に同意）はスコープ外（client は1つに固定）。redirect 束縛は
   「code の**配送先**が攻撃者に渡らない」ことだけを表現。
 - ID token(#5) の合成は別。
+
+---
+
+## モデル #9: 招待の登録リンク（token の単回）
+
+`invite.spthy` — 招待を許した RP が、クライアント認証つきで AS に「E を招待」と頼む。AS は token を作り、TLS の応答で
+RP にだけ返す。RP はリンクを E のメール箱へ送り、利用者はその token と自分の passkey 公開鍵を AS に送って登録する。
+攻撃者は AS の登録口へ自分で要求を送れ、使い終わったリンクが後から漏れること（転送・メール箱の侵害）も起こせる。
+
+AS の登録は 2 段に分けてある。先に「E がまだ登録済みでない」ことを確かめ（`refuse_invite_for_registered`）、
+そのあとで招待を消費して passkey を保存する。2 つの段の間には別の要求が割り込める。
+
+### 検証する性質（lemma）
+| lemma | 主張 |
+|---|---|
+| `executable` | 正直な実行（依頼 → メール → 登録）が完了しうる |
+| `invite_single_use` | 1 つの token から登録は 1 回しか起きない |
+| `invite_binding` | token で E に登録された鍵は E のメール箱の持ち主の鍵である（リンクの漏れか、招待を頼んだ RP の鍵の漏れを除く） |
+
+### 検証結果（Tamarin 1.12.0 / maude 3.5.1, 2026-10-18 実測）
+| モデル | 結果 |
+|---|---|
+| `invite.spthy` | `executable` / `invite_single_use` / `invite_binding` **verified** |
+| `invite_NEG_no_singleuse.spthy`（`Invite` を persistent にして単回消費を外す）| `invite_single_use` **falsified**、`invite_binding` は verified のまま |
+
+→ **単回消費が必要**。「登録済みなら断る」確認だけでは足りない。確認と消費の間に割り込んだ 2 つ目の要求
+（同じ要求の再送や、漏れたリンクを持つ攻撃者の要求）も、確認を通ってしまう。NEG の攻撃の跡はこの競合になっている。
+→ 単回の役割は「1 token 1 登録」に限られる。鍵の持ち主の束縛（`invite_binding`）は、単回が無くても崩れない。
+
+### 表に出た前提 → rust-op の担保
+| ID | 前提（抽象） | rust-op の担保 |
+|---|---|---|
+| P-ICLIENT | 招待を頼めるのは、招待を許した confidential client だけ（クライアント認証） | `authorize_invite_client`（`web/register.rs`、許可リストと public client の拒否） |
+| P-ITOKEN | token は推測不能（Fr） | `random_token`（OsRng の 32 バイト） |
+| P-ISINGLE | 招待は**原子的に単回消費**される（`Invite` が linear） | `consume_email_challenge`（`registration.rs`）。updateTime の CAS 削除で、勝った 1 つの要求だけが通る |
+| P-IMAIL | リンクは E のメール箱の持ち主にだけ届く | RP とメールの配送の基盤（モデルの外。漏れは `Leak_Link` で表す） |
+
+→ 導出された運用要件: **招待の token は、確認とは別に、消費そのものを原子的に行え**（確認だけでは並行した要求を止められない）。
+
+### 限界
+- 有効期限（7 日）は記号モデルの外。
+- 1 つの E に複数の招待が残る場合（`leftover_invite_cannot_replace_a_registered_passkey`）は、確認の段が守る。本モデルは
+  1 token の単回に焦点を当てている。
 
 ---
 

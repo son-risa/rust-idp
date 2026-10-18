@@ -118,8 +118,8 @@
     "id": "P-CHAL",
     "model": "webauthn.spthy",
     "premise": "challenge は新鮮で単回",
-    "guard": ["src/registration.rs: create_webauthn_challenge", "src/registration.rs: consume_webauthn_challenge"],
-    "tests": ["registration::tests::webauthn_challenge_is_consumed_once"]
+    "guard": ["src/registration.rs: create_webauthn_challenge", "src/registration.rs: consume_webauthn_challenge", "src/firestore.rs: Firestore::take_doc"],
+    "tests": ["registration::tests::webauthn_challenge_is_consumed_once", "registration::tests::two_concurrent_consumes_of_one_webauthn_challenge_let_only_one_through"]
   },
   {
     "id": "P-SIG",
@@ -161,5 +161,32 @@
     "premise": "iss（発行者）を確認する（IdP mix-up 防止）",
     "guard": ["src/grants.rs: issue_access_and_id"],
     "tests": ["grants::tests::id_token_names_the_issuer_the_client_and_the_request_nonce"]
+  },
+  {
+    "id": "P-ICLIENT",
+    "model": "invite.spthy",
+    "premise": "招待を頼めるのは、招待を許した confidential client だけ（クライアント認証）",
+    "guard": ["src/web/register.rs: authorize_invite_client"],
+    "tests": ["web::register::invite_tests::clients_outside_the_allow_list_are_refused"]
+  },
+  {
+    "id": "P-ITOKEN",
+    "model": "invite.spthy",
+    "premise": "token は推測不能（Fr）",
+    "guard": ["src/registration.rs: random_token"],
+    "outside": "乱数源（OsRng の 32 バイト）の性質で、試験で示せる形をしていない"
+  },
+  {
+    "id": "P-ISINGLE",
+    "model": "invite.spthy",
+    "premise": "招待は原子的に単回消費される（Invite が linear）",
+    "guard": ["src/registration.rs: consume_email_challenge", "src/firestore.rs: Firestore::take_doc"],
+    "tests": ["registration::tests::invite_token_is_consumed_once", "registration::tests::two_concurrent_consumes_of_one_invite_let_only_one_through", "web::register::invite_tests::allowed_client_gets_link_that_registers_and_returns_to_rp"]
+  },
+  {
+    "id": "P-IMAIL",
+    "model": "invite.spthy",
+    "premise": "リンクは E のメール箱の持ち主にだけ届く",
+    "outside": "メールの配送は RP とメールの基盤が担う。漏れはモデルの Leak_Link で表す"
   }
 ]
