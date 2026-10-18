@@ -24,6 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Test
         run: cargo test --locked
+      - name: 前提の台帳の試験が実在するか（cargo test の一覧と照合）
+        run: formal/check-ledger-tests.sh
 
   # サプライチェーン監査: 既知 CVE / ライセンス / 重複 / 出所（deny.toml）。シークレット不使用。
   audit:

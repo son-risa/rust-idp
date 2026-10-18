@@ -2,10 +2,12 @@
 //! 実在するものだけを指していることを検める門。
 //!
 //! - README の前提の表に出る P-* と台帳の行が過不足なく対応する（同じ ID が複数モデルに出るときは数も合わせる）
-//! - 行が指すモデル（formal/*.spthy）・担保のコード（`fn`）・試験・Kani ハーネスが実在する
+//! - 行が指すモデル（formal/*.spthy）と担保のコード（`fn`）が在る
+//! - 行が指す Kani ハーネスが formal/kani-harnesses.txt に在る（一覧と実際に走ったハーネスの照合は formal/check-kani.sh）
 //! - 各行は試験か Kani ハーネスを 1 つ以上持つか、持てない理由（outside）を書く
 //!
-//! 名前を変えたり消したりして台帳が古くなると、ここが赤になる。
+//! 台帳の試験の名前が cargo test に実際に登録された試験と一致するかは、ここでなく
+//! formal/check-ledger-tests.sh が `cargo test -- --list` と照らして見る（文字列の照合ではコメントや cfg で外した試験を見分けられない）。
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -39,62 +41,47 @@ fn ledger() -> Vec<Premise> {
     serde_json::from_str(&read("formal/premises.json")).expect("formal/premises.json が読めない")
 }
 
-fn readme_ids() -> BTreeMap<String, usize> {
-    let mut ids = BTreeMap::new();
-    for line in read("formal/README.md").lines() {
-        let Some(rest) = line.strip_prefix("| P-") else { continue };
-        let id = format!("P-{}", rest.split('|').next().unwrap().trim());
-        *ids.entry(id).or_insert(0) += 1;
-    }
-    ids
+fn premise_id_in(cell: &str) -> Option<String> {
+    let at = cell.find("P-")?;
+    let tail: String = cell[at + 2..].chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).collect();
+    (!tail.is_empty()).then(|| format!("P-{tail}"))
 }
 
-/// `a::b::tests::name` を src/a/b.rs（または src/a/b/mod.rs、src/a.rs の中の `mod b`）に解決し、
-/// 残りの段が `mod` として、最後の段が試験の `fn` として在るかを見る。
-fn test_exists(path: &str) -> Result<(), String> {
-    let segs: Vec<&str> = path.split("::").collect();
-    let (name, mods) = segs.split_last().ok_or("空の名前")?;
-    let src = root().join("src");
-    let mut file = None;
-    for k in (1..=mods.len()).rev() {
-        let dir: PathBuf = mods[..k].iter().collect();
-        for cand in [src.join(&dir).with_extension("rs"), src.join(&dir).join("mod.rs")] {
-            if cand.is_file() {
-                file = Some((cand, &mods[k..]));
-                break;
-            }
-        }
-        if file.is_some() {
-            break;
-        }
-    }
-    let (file, inner) = file.ok_or_else(|| format!("{path}: モジュールの file が無い"))?;
-    let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
-    for m in inner {
-        if !text.contains(&format!("mod {m} {{")) {
-            return Err(format!("{path}: {} に mod {m} が無い", file.display()));
-        }
-    }
-    let lines: Vec<&str> = text.lines().collect();
-    let sig = [format!("fn {name}("), format!("fn {name}<")];
-    for (i, l) in lines.iter().enumerate() {
-        if !sig.iter().any(|s| l.contains(s.as_str())) {
+/// README の表の行の最初のセルから P-* を数える。見出しの最初のセルが ID の表（前提の表）の行で
+/// ID を取れないものは誤りとして返す（「（攻撃者モデル）」のように全角の括弧で囲んだ注記の行は除く）。
+/// 本文の中の P-* の言及（表の行でないもの）は数えない。
+fn readme_ids() -> Result<BTreeMap<String, usize>, Vec<String>> {
+    let mut ids = BTreeMap::new();
+    let mut errors = Vec::new();
+    let mut in_id_table = false;
+    for (n, line) in read("formal/README.md").lines().enumerate() {
+        let t = line.trim();
+        if !t.starts_with('|') {
+            in_id_table = false;
             continue;
         }
-        let attrs = &lines[i.saturating_sub(4)..i];
-        if attrs.iter().any(|a| a.trim_start().starts_with("#[test]") || a.contains("#[tokio::test")) {
-            return Ok(());
+        let first = t.trim_start_matches('|').split('|').next().unwrap_or("");
+        let bare = first.trim_matches(|c: char| c == '*' || c == '`' || c.is_whitespace());
+        if bare == "ID" {
+            in_id_table = true;
+            continue;
+        }
+        if !bare.is_empty() && bare.chars().all(|c| c == '-' || c == ':') {
+            continue;
+        }
+        match premise_id_in(first) {
+            Some(id) => *ids.entry(id).or_insert(0) += 1,
+            None if in_id_table && !(bare.starts_with('（') && bare.ends_with('）')) => {
+                errors.push(format!("README {} 行目: 前提の表の行なのに ID が取れない: {t}", n + 1))
+            }
+            None => {}
         }
     }
-    Err(format!("{path}: {} に試験の fn {name} が無い", file.display()))
-}
-
-fn kani_exists(name: &str, harness: &str) -> bool {
-    let lines: Vec<&str> = harness.lines().collect();
-    lines.iter().enumerate().any(|(i, l)| {
-        l.trim_start().starts_with(&format!("fn {name}("))
-            && lines[i.saturating_sub(3)..i].iter().any(|a| a.contains("#[kani::proof]"))
-    })
+    if errors.is_empty() {
+        Ok(ids)
+    } else {
+        Err(errors)
+    }
 }
 
 /// `src/x.rs: Type::method` か `src/x.rs: function`。Type を書いたときは impl も在ることを見る。
@@ -122,12 +109,14 @@ fn ledger_rows_match_the_readme_premise_tables() {
     for p in ledger() {
         *in_ledger.entry(p.id).or_insert(0usize) += 1;
     }
-    assert_eq!(in_ledger, readme_ids(), "formal/README.md の P-* と formal/premises.json の行が合わない");
+    let in_readme = readme_ids().unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    assert_eq!(in_ledger, in_readme, "formal/README.md の P-* と formal/premises.json の行が合わない");
 }
 
 #[test]
 fn every_ledger_row_points_at_things_that_exist() {
-    let harness = read("src/kani_harness.rs");
+    let harnesses: Vec<String> =
+        read("formal/kani-harnesses.txt").lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
     let mut errors = Vec::new();
     for p in ledger() {
         let row = format!("{} ({})", p.id, p.model);
@@ -149,14 +138,9 @@ fn every_ledger_row_points_at_things_that_exist() {
                 errors.push(format!("{row}: {e}"));
             }
         }
-        for t in &p.tests {
-            if let Err(e) = test_exists(t) {
-                errors.push(format!("{row}: {e}"));
-            }
-        }
         for k in &p.kani {
-            if !kani_exists(k, &harness) {
-                errors.push(format!("{row}: Kani ハーネス {k} が src/kani_harness.rs に無い"));
+            if !harnesses.contains(k) {
+                errors.push(format!("{row}: Kani ハーネス {k} が formal/kani-harnesses.txt に無い"));
             }
         }
     }
