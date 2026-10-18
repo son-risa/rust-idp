@@ -425,8 +425,9 @@ AS の登録は 2 段に分けてある。先に「E がまだ登録済みでな
 
 ### 限界
 - 有効期限（7 日）は記号モデルの外。
-- 1 つの E に複数の招待が残る場合（`leftover_invite_cannot_replace_a_registered_passkey`）は、確認の段が守る。本モデルは
-  1 token の単回に焦点を当てている。
+- 「登録済みなら断る」確認の段（restriction `NotRegisteredAtCheck`）は、モデルでは効いていない。外しても、どの lemma の結果も
+  変わらない（2026-10-18 実測）。1 つの E に複数の招待が残る場合を守るのはコードの側で、担保は試験
+  `leftover_invite_cannot_replace_a_registered_passkey`。本モデルは 1 token の単回に焦点を当てている。
 
 ---
 

@@ -19,11 +19,13 @@ begin
   攻撃者: Dolev-Yao。AS の登録口へ自分で要求を送れる。使い終わったリンクが後から漏れること
           （転送・メール箱の侵害）も起こせる。
   抽象:
-    - TLS は「AS の公開鍵への暗号化」と「要求に入れた使い捨ての鍵での応答」で表す。
+    - TLS は「AS の公開鍵への暗号化」と「要求に入れた使い捨ての鍵での応答」で表す（#1 の前提 P-TLS と同じ抽象）。
     - メールは E の持ち主にだけ届く（Mail が linear）。漏れは Leak_Link で表す。
     - 「E がまだ登録済みでない」の確認（refuse_invite_for_registered）と、招待の消費・保存は
       別の段で起きる。確認の時点で E の登録が無いことを restriction で表す。
       確認と消費の間に別の要求が割り込めるので、単回を担保するのは消費の側になる。
+      この restriction は外してもどの lemma の結果も変わらない（モデルでは効いていない）。
+      確認の段の担保は、コードの試験 leftover_invite_cannot_replace_a_registered_passkey にある。
 
   実行: tamarin-prover --prove --auto-sources formal/invite.spthy
 */
@@ -35,7 +37,7 @@ rule Setup_AS:
   --[ OnlyOnce('AS') ]->
     [ !AS_Sk(~skAS), !AS_Pk(pk(~skAS)), Out(pk(~skAS)) ]
 
-/* 招待を許した RP（confidential client）。前提[P-IREG]: AS は招待を許す client とその鍵を知る。 */
+/* 招待を許した RP（confidential client）。前提[P-ICLIENT]: AS は招待を許す client とその鍵を知る。 */
 rule Register_RP:
     [ Fr(~ltkC) ]
   --[ ]->
@@ -107,7 +109,8 @@ restriction Equality:
 restriction OnlyOnce:
     "All x #i #j. OnlyOnce(x) @ #i & OnlyOnce(x) @ #j ==> #i = #j"
 
-/* 5a で確かめた時点で、その token の宛先 E はまだ登録されていない。 */
+/* 5a で確かめた時点で、その token の宛先 E はまだ登録されていない。
+   外してもどの lemma の結果も変わらない（確認の段の担保はコードの試験 leftover_invite_cannot_replace_a_registered_passkey）。 */
 restriction NotRegisteredAtCheck:
     "All t E cpk #c #r. CheckNotRegistered(t) @ #c & Registered(E, t, cpk) @ #r
       ==> not (Ex t2 cpk2 #p. Registered(E, t2, cpk2) @ #p & #p < #c)"
