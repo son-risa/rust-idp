@@ -22,8 +22,12 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-/// 系列の失効で、消せなかった RT（ストアの誤り・CAS の負け）を読み直して消し直す周の数。
+/// 系列の失効の札（refreshFamilyRevocations/{familyId}）。
+const FAMILY_REVOCATIONS: &str = "refreshFamilyRevocations";
+/// 札の書き込みと、後片付けで消せなかった RT（ストアの誤り・CAS の負け）を読み直して消し直す回数。
 const REVOKE_RETRIES: usize = 3;
+/// 1 回の失効の後片付けで扱う RT の数の上限。
+pub(crate) const REVOKE_MAX_RTS: usize = 1000;
 
 fn doc_expired(fields: &Value) -> bool {
     fs_h::field_ts_secs(fields, "expiresAt").unwrap_or(0) < now()
@@ -359,18 +363,44 @@ impl Store for FirestoreStore {
             .unwrap_or(false)
     }
 
-    async fn revoke_refresh_family(&self, start_token: &str) {
-        // MemoryStore と同じ意味論: 長さに上限を置かず replacedBy を辿り、循環は訪れた集合で止める。
-        // familyId で引く形にしないのは、familyId を書く前（2026-06-11 より前）に始まった鎖を
-        // ローテーションし続けた RT が、familyId を空のまま引き継いでいるため（空の familyId で引くと
-        // 無関係な系列まで消す）。
-        // 消せなかった RT（ストアの誤り・CAS の負け）は控えて、走査の後に周の数の上限つきで読み直して
-        // 消し直す（seen から外して辿り直すと、失敗し続ける循環で終わらない）。
+    async fn refresh_family_revoked(&self, family_id: &str) -> bool {
+        match self.fs.get_doc(FAMILY_REVOCATIONS, family_id).await {
+            Ok(Some(f)) => !doc_expired(&f),
+            Ok(None) => false,
+            Err(e) => {
+                tracing::error!("refresh family revocation lookup failed ({e}); fail-closed");
+                true
+            }
+        }
+    }
+
+    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
+        // 札の期限は RT の TTL。札を書いた後はその系列に新しい RT を作らせないので、既存の RT が全部
+        // 切れるまで札が残れば足りる。
+        let tomb = json!({ "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + REFRESH_TTL)) });
+        let mut written = false;
+        for _ in 0..=REVOKE_RETRIES {
+            if self.fs.set_doc(FAMILY_REVOCATIONS, family_id, tomb.clone()).await.is_ok() {
+                written = true;
+                break;
+            }
+        }
+        if !written {
+            tracing::error!(event = "refresh_family_tombstone_failed");
+        }
+        // 後片付け: start から replacedBy を辿って消す。札が使わせないので、消し漏れ・打ち切りは安全に関わらない。
+        // 1 回の失効で扱う RT の数に上限を置き、続くローテーションに追われても必ず終わる。
         let mut seen = std::collections::HashSet::from([start_token.to_string()]);
         let mut queue = vec![start_token.to_string()];
         let mut failed = Vec::new();
+        let mut handled = 0usize;
         for round in 0..=REVOKE_RETRIES {
             while let Some(t) = queue.pop() {
+                handled += 1;
+                if handled > REVOKE_MAX_RTS {
+                    tracing::warn!(event = "refresh_family_cleanup_truncated", limit = REVOKE_MAX_RTS);
+                    return;
+                }
                 let (gone, next) = self.revoke_one_refresh(&t).await;
                 if !gone {
                     failed.push(t);
@@ -385,7 +415,7 @@ impl Store for FirestoreStore {
             queue = std::mem::take(&mut failed);
         }
         if !failed.is_empty() {
-            tracing::error!(event = "refresh_family_revoke_incomplete", left = failed.len());
+            tracing::warn!(event = "refresh_family_cleanup_incomplete", left = failed.len());
         }
     }
 
@@ -445,7 +475,7 @@ mod revoke_family_tests {
             s.save_refresh_token(rt(t, *next)).await;
         }
         state.fail_once("DELETE", "refreshTokens", Some(fail));
-        s.revoke_refresh_family(start).await;
+        s.revoke_refresh_family("F", start).await;
         let mut left = Vec::new();
         for (t, _) in chain {
             if s.get_refresh_token(t).await.is_some() {
@@ -471,8 +501,8 @@ mod revoke_family_tests {
         assert_eq!(left_after_revoke(&chain, "R2", "R1").await, Vec::<String>::new());
     }
 
-    /// 失効が RT1 を読んでから消すまでの間に、RT1 のローテーション（本物の RefreshTokenGrant）が CAS に勝つ。
-    /// 失効は CAS 削除に負けて RT1 を読み直し、新しい replacedBy（渡った RT2）まで辿って消す。
+    /// 失効が RT1 を読んでから消すまでの間に、RT1 のローテーション（本物の RefreshTokenGrant）が来る。
+    /// 失効は先に系列の札を書くので、そのローテーションは断られ、新しい RT は渡らない。
     #[tokio::test]
     async fn a_rotation_between_the_read_and_the_delete_does_not_let_the_new_rt_survive() {
         use crate::grants::{GrantHandler, RefreshTokenGrant};
@@ -500,15 +530,16 @@ mod revoke_family_tests {
         let (reached, release) = state.gate_delete("refreshTokens", &rt1);
         let revoking = tokio::spawn({
             let store = store.clone();
-            async move { store.revoke_refresh_family("RT0").await }
+            async move { store.revoke_refresh_family("F", "RT0").await }
         });
         reached.notified().await;
-        let rt2 = RefreshTokenGrant.handle(&p, &client, &form(&rt1), None).await.unwrap().refresh_token.unwrap();
+        let during = RefreshTokenGrant.handle(&p, &client, &form(&rt1), None).await;
         release.notify_one();
         revoking.await.unwrap();
 
-        for t in ["RT0", rt1.as_str(), rt2.as_str()] {
-            assert!(store.get_refresh_token(t).await.is_none(), "失効の後に {t} が残っている（RT2 は {rt2}）");
+        assert!(during.is_err(), "札を書いた後のローテーションが通った: {:?}", during.map(|r| r.refresh_token));
+        for t in ["RT0", rt1.as_str()] {
+            assert!(store.get_refresh_token(t).await.is_none(), "失効の後に {t} が残っている");
         }
     }
 }

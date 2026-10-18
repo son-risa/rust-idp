@@ -296,6 +296,15 @@ impl GrantHandler for RefreshTokenGrant {
             (None, _) => {}
         }
 
+        // 系列の失効の札を見る。familyId を持たない RT（familyId を書く前、2026-06-11 より前に始まった鎖）は
+        // 札を置く系列が無いので、ローテーションさせずにログインし直させる。
+        if pre.family_id.is_empty() {
+            return Err(OAuthError::InvalidGrant("refresh token has no family; sign in again".into()));
+        }
+        if p.store.refresh_family_revoked(&pre.family_id).await {
+            return Err(OAuthError::InvalidGrant("refresh token family revoked".into()));
+        }
+
         // B-4 再利用検知（OAuth Security BCP）: 消費済み(used)の RT が再提示されたら盗難
         // （系列の分岐）とみなし、系列全体を失効してアラートする。delete でなく used マークで
         // 残しているからこそ検知できる（盗難者・正規ユーザ双方が再認証を強いられる）。
@@ -306,7 +315,7 @@ impl GrantHandler for RefreshTokenGrant {
                 family = %pre.family_id,
                 sub = %crate::web::pseudonymize_sub(&pre.account_id)
             );
-            p.store.revoke_refresh_family(rt_val).await;
+            p.store.revoke_refresh_family(&pre.family_id, rt_val).await;
             return Err(OAuthError::InvalidGrant(
                 "refresh token reuse detected; token family revoked".into(),
             ));
@@ -325,11 +334,10 @@ impl GrantHandler for RefreshTokenGrant {
             None => pre.scope.clone(),
         };
 
-        // ローテーション: 新 RT を先に保存してから、old に used=true と replaced_by を CAS で書く。
-        // この順なら old が used になった時点で新 RT は必ず在り、その後の再利用検知の系列失効が
-        // 新 RT まで届く（逆順だと、2 つの書き込みの間に走った失効が、まだ無い新 RT で止まり、
-        // 後から保存された新 RT が系列から外れて生き残る）。CAS 敗北（並行/競合）は invalid_grant で、
-        // 先に保存した新 RT は誰にも渡していないので消す。
+        // ローテーション: 新 RT を先に保存してから、old に used=true と replaced_by を CAS で書き、
+        // 書き込みの後にもう一度系列の札を見る。失効がこの 2 つの書き込みのどこに割り込んでも、札が書き込みより
+        // 先ならここで断り、後なら新 RT は札のある系列に属するので次に出されたときに断る。CAS 敗北（並行/競合）と
+        // 札は invalid_grant で、先に保存した新 RT は誰にも渡していないので消す。
         let new_refresh = has_scope(&scope, "offline_access").then(opaque);
         if let Some(new_token) = &new_refresh {
             p.store
@@ -348,11 +356,16 @@ impl GrantHandler for RefreshTokenGrant {
                 })
                 .await;
         }
-        if !p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await {
+        let marked = p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await;
+        if !marked || p.store.refresh_family_revoked(&pre.family_id).await {
             if let Some(new_token) = &new_refresh {
                 p.store.revoke_refresh_token(new_token).await;
             }
-            return Err(OAuthError::InvalidGrant("refresh_token not found or already used".into()));
+            return Err(OAuthError::InvalidGrant(if marked {
+                "refresh token family revoked".into()
+            } else {
+                "refresh_token not found or already used".into()
+            }));
         }
 
         let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
@@ -835,6 +848,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Interleave {
         RevokeAfterMark,
+        RevokeBeforeMark,
         LoseTheCas,
     }
 
@@ -871,14 +885,23 @@ mod tests {
                     assert!(self.inner.mark_refresh_used(token, Some("WINNER")).await);
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
+                Interleave::RevokeBeforeMark => {
+                    let family = self.inner.get_refresh_token(token).await.map(|t| t.family_id).unwrap_or_default();
+                    self.inner.revoke_refresh_family(&family, token).await;
+                    self.inner.mark_refresh_used(token, replaced_by).await
+                }
                 Interleave::RevokeAfterMark => {
                     let won = self.inner.mark_refresh_used(token, replaced_by).await;
-                    self.inner.revoke_refresh_family(token).await;
+                    let family = self.inner.get_refresh_token(token).await.map(|t| t.family_id).unwrap_or_default();
+                    self.inner.revoke_refresh_family(&family, token).await;
                     won
                 }
             }
         }
-        async fn revoke_refresh_family(&self, start_token: &str) { self.inner.revoke_refresh_family(start_token).await }
+        async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
+            self.inner.revoke_refresh_family(family_id, start_token).await
+        }
+        async fn refresh_family_revoked(&self, family_id: &str) -> bool { self.inner.refresh_family_revoked(family_id).await }
         async fn find_account(&self, sub: &str) -> crate::model::Account { self.inner.find_account(sub).await }
     }
 
@@ -893,11 +916,13 @@ mod tests {
 
     /// ローテーションの CAS の直後に古い RT の再利用で系列が失効しても、新しい RT は系列から外れて生き残らない。
     async fn a_revoke_right_after_the_cas_reaches_the_new_rt(inner: std::sync::Arc<dyn Store>) {
-        let (p, r, _) = rotate_rt0_with(inner, Interleave::RevokeAfterMark).await;
-        let new_rt = r.unwrap().refresh_token.unwrap();
-        assert!(p.store.get_refresh_token(&new_rt).await.is_none(), "系列の失効の後に新しい RT {new_rt} が生き残っている");
-        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", new_rt.as_str())]), None).await;
-        assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
+        let (p, r, saved) = rotate_rt0_with(inner, Interleave::RevokeAfterMark).await;
+        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))), "書き込みの後の札の確かめで断る");
+        for t in saved.iter().filter(|t| t.as_str() != "RT0") {
+            assert!(p.store.get_refresh_token(t).await.is_none(), "系列の失効の後に新しい RT {t} が生き残っている");
+            let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", t.as_str())]), None).await;
+            assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
+        }
     }
 
     /// CAS に負けたローテーションは invalid_grant で、先に保存した新しい RT を残さない。
@@ -910,9 +935,99 @@ mod tests {
     }
 
     async fn fake_store() -> std::sync::Arc<dyn Store> {
-        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        fake_store_and_state().await.0
+    }
+
+    async fn fake_store_and_state() -> (std::sync::Arc<dyn Store>, std::sync::Arc<crate::firestore::fake_firestore::FakeState>) {
+        let (host, state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
-        std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs))
+        (std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs)), state)
+    }
+
+    /// 新しい RT を保存した後、古い RT の CAS の前に失効が走っても（main の順では F3 の窓）、
+    /// 書き込みの後の札の確かめで断り、新しい RT は残らない。
+    async fn a_revoke_between_the_save_and_the_cas_is_caught(inner: std::sync::Arc<dyn Store>) {
+        let (p, r, saved) = rotate_rt0_with(inner, Interleave::RevokeBeforeMark).await;
+        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
+        let new_rts: Vec<&String> = saved.iter().filter(|t| t.as_str() != "RT0").collect();
+        assert_eq!(new_rts.len(), 1);
+        assert!(p.store.get_refresh_token(new_rts[0]).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_revoke_between_the_save_and_the_cas_is_caught_in_memory() {
+        a_revoke_between_the_save_and_the_cas_is_caught(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
+    }
+
+    #[tokio::test]
+    async fn a_revoke_between_the_save_and_the_cas_is_caught_in_firestore() {
+        a_revoke_between_the_save_and_the_cas_is_caught(fake_store().await).await;
+    }
+
+    /// 後片付けで消せなかった RT（削除の誤りが続く F4、先頭の読みの誤りが続く F5）も、札があるので使えない。
+    #[tokio::test]
+    async fn an_rt_the_cleanup_could_not_delete_is_still_refused() {
+        for (method, target) in [("DELETE", "RT1"), ("GET", "RT0")] {
+            let (store, fake) = fake_store_and_state().await;
+            let p = provider().with_store(store);
+            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+            let r1 = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+            let rt1 = r1.unwrap().refresh_token.unwrap();
+            let target = if target == "RT1" { rt1.clone() } else { target.to_string() };
+            for _ in 0..8 {
+                fake.fail_once(method, "refreshTokens", Some(&target));
+            }
+            // 失効そのもの（札＋後片付け）を store で走らせる。grants を通すと、grants の読みが先に誤りを受け取る。
+            p.store.revoke_refresh_family("fam-test", "RT0").await;
+            assert!(p.store.get_refresh_token(&rt1).await.is_some(), "{method} の誤りで後片付けが {rt1} を消せていない前提");
+            let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", rt1.as_str())]), None).await;
+            assert!(matches!(again, Err(OAuthError::InvalidGrant(_))), "{method}: 消し残った {rt1} でローテーションできた");
+        }
+    }
+
+    /// 札を引けない（ストアの誤り）ときは断り、RT を使用済みにしない（閉じる側に倒す）。
+    #[tokio::test]
+    async fn a_failed_tombstone_lookup_refuses_the_rotation() {
+        let (store, fake) = fake_store_and_state().await;
+        let p = provider().with_store(store);
+        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+        fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
+        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
+        assert!(!p.store.get_refresh_token("RT0").await.unwrap().used);
+    }
+
+    /// familyId を持たない RT（2026-06-11 より前に始まった鎖）はローテーションせず、ログインし直させる。
+    #[tokio::test]
+    async fn an_rt_without_a_family_is_not_rotated() {
+        for store in [std::sync::Arc::new(crate::store::MemoryStore::default()) as std::sync::Arc<dyn Store>, fake_store().await] {
+            let p = provider().with_store(store);
+            p.store.save_refresh_token(RefreshToken { family_id: String::new(), ..rt("LEGACY", "rp", "openid offline_access") }).await;
+            let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "LEGACY")]), None).await;
+            assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
+            assert!(!p.store.get_refresh_token("LEGACY").await.unwrap().used);
+        }
+    }
+
+    /// 後片付けは 1 回の失効で扱う RT の数に上限があり（F6）、上限を超えた鎖でも必ず終わる。残った RT も札で使えない。
+    #[tokio::test]
+    async fn a_cleanup_longer_than_its_limit_stops_and_the_rest_is_still_refused() {
+        let store = fake_store().await;
+        let p = provider().with_store(store);
+        let n = crate::firestore_store::REVOKE_MAX_RTS + 5;
+        for k in 0..n {
+            let next = (k + 1 < n).then(|| format!("C{}", k + 1));
+            let mut t = rt(&format!("C{k}"), "rp", "openid offline_access");
+            t.used = next.is_some();
+            t.replaced_by = next;
+            p.store.save_refresh_token(t).await;
+        }
+        let reuse = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "C0")]), None).await;
+        assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
+        let last = format!("C{}", n - 1);
+        assert!(p.store.get_refresh_token(&last).await.is_some(), "上限を超えた所は後片付けで消えていない前提");
+        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", last.as_str())]), None).await;
+        assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
     }
 
     #[tokio::test]

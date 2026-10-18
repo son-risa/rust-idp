@@ -82,9 +82,12 @@ pub trait Store: Send + Sync {
     /// 成功）、既に used or 競合敗北 or 未存在なら false。delete でなく used マークで残すことで、
     /// 後の再提示を「再利用」として検知できる。
     async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool;
-    /// 再利用検知時に系列を失効する。start から `replaced_by` を辿り各 RT を削除する
-    /// （盗難者・正規ユーザ双方の RT を無効化＝再認証を強制）。
-    async fn revoke_refresh_family(&self, start_token: &str);
+    /// 再利用検知時に系列を失効する。系列に失効の札を書き（以後その系列の RT はどれも使えない）、
+    /// 後片付けとして start から `replaced_by` を辿って各 RT を削除する。札が使わせないので、
+    /// 後片付けの消し漏れは安全に関わらない（盗難者・正規ユーザ双方に再認証を強制）。
+    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str);
+    /// 系列に失効の札があれば true。ストアに問い合わせられないときも true（閉じる側に倒す）。
+    async fn refresh_family_revoked(&self, family_id: &str) -> bool;
 
     /// sub からアカウントを解決。未登録なら自動生成する（PoC 用）。
     async fn find_account(&self, sub: &str) -> Account;
@@ -110,6 +113,7 @@ pub struct MemoryStore {
     codes: Mutex<HashMap<String, Expiring<CodeRecord>>>,
     access_tokens: Mutex<HashMap<String, Expiring<AccessToken>>>,
     refresh_tokens: Mutex<HashMap<String, Expiring<RefreshToken>>>,
+    revoked_families: Mutex<HashMap<String, Expiring<()>>>,
 }
 
 
@@ -261,9 +265,16 @@ impl Store for MemoryStore {
             _ => false,
         }
     }
-    async fn revoke_refresh_family(&self, start_token: &str) {
-        // ローテーションは単回なので鎖は枝分かれせず、start から replaced_by を辿れば以後の RT を全部消せる。
-        // 長さに上限は置かない（上限で止めると最新の RT が残る）。壊れた replaced_by の循環は訪れた集合で止める。
+    async fn refresh_family_revoked(&self, family_id: &str) -> bool {
+        self.revoked_families.lock().unwrap().get(family_id).is_some_and(|e| e.alive())
+    }
+    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
+        self.revoked_families
+            .lock()
+            .unwrap()
+            .insert(family_id.to_string(), Expiring::new((), now_secs() + REFRESH_TTL_SECS));
+        // 後片付け: ローテーションは単回なので鎖は枝分かれせず、start から replaced_by を辿れば以後の RT を
+        // 全部消せる。壊れた replaced_by の循環は訪れた集合で止める。
         let mut map = self.refresh_tokens.lock().unwrap();
         let mut seen = std::collections::HashSet::new();
         let mut cur = Some(start_token.to_string());
@@ -283,6 +294,7 @@ impl Store for MemoryStore {
         retain_alive(&mut self.codes.lock().unwrap());
         retain_alive(&mut self.access_tokens.lock().unwrap());
         retain_alive(&mut self.refresh_tokens.lock().unwrap());
+        retain_alive(&mut self.revoked_families.lock().unwrap());
     }
 }
 
@@ -392,7 +404,7 @@ mod tests {
                 let rb = if i < n { Some(format!("RT{}", i + 1)) } else { None };
                 s.save_refresh_token(rtok(&format!("RT{i}"), rb.as_deref(), i < n)).await;
             }
-            s.revoke_refresh_family("RT1").await;
+            s.revoke_refresh_family("fam", "RT1").await;
             for i in 1..=n {
                 assert!(s.get_refresh_token(&format!("RT{i}")).await.is_none(), "n={n} RT{i} 残存");
             }
@@ -405,7 +417,7 @@ mod tests {
         let s = MemoryStore::default();
         s.save_refresh_token(rtok("RT1", Some("RT2"), true)).await;
         s.save_refresh_token(rtok("RT2", Some("RT1"), true)).await; // RT1<->RT2 循環
-        s.revoke_refresh_family("RT1").await; // 停止すること自体が検証点
+        s.revoke_refresh_family("fam", "RT1").await; // 停止すること自体が検証点
         assert!(s.get_refresh_token("RT1").await.is_none());
         assert!(s.get_refresh_token("RT2").await.is_none());
     }
