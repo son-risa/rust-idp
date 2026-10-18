@@ -793,6 +793,38 @@ mod tests {
         }
     }
 
+    async fn reuse_after_many_rotations_revokes_the_whole_family(p: Provider) {
+        let c = client("mobile-rp");
+        p.store.save_refresh_token(rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A")).await;
+        let mut chain = vec!["RT0".to_string()];
+        for _ in 0..100 {
+            let r = RefreshTokenGrant
+                .handle(&p, &c, &form(&[("refresh_token", chain.last().unwrap().as_str())]), Some("KEY-A".into()))
+                .await
+                .unwrap();
+            chain.push(r.refresh_token.unwrap());
+        }
+        let reuse = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT0")]), Some("KEY-A".into())).await;
+        assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
+        for t in &chain {
+            assert!(p.store.get_refresh_token(t).await.is_none(), "{t} が残っている（最新は {}）", chain.last().unwrap());
+        }
+    }
+
+    // B-4: 系列の長さに上限を置かない。64 回で止めていた頃は、最新の RT が残った。
+    #[tokio::test]
+    async fn reuse_after_100_rotations_revokes_the_whole_family_in_memory() {
+        reuse_after_many_rotations_revokes_the_whole_family(provider()).await;
+    }
+
+    #[tokio::test]
+    async fn reuse_after_100_rotations_revokes_the_whole_family_in_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
+        reuse_after_many_rotations_revokes_the_whole_family(provider().with_store(store)).await;
+    }
+
     // B-4: ローテーション後の新 RT は同じ family_id を継承する。
     #[tokio::test]
     async fn refresh_rotation_inherits_family() {

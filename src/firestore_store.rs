@@ -342,13 +342,13 @@ impl Store for FirestoreStore {
     }
 
     async fn revoke_refresh_family(&self, start_token: &str) {
+        // MemoryStore と同じ意味論: 長さに上限を置かず replacedBy を辿り、循環は訪れた集合で止める。
+        // familyId で引く形にしないのは、familyId を書く前（2026-06-11 より前）に始まった鎖を
+        // ローテーションし続けた RT が、familyId を空のまま引き継いでいるため（空の familyId で引くと
+        // 無関係な系列まで消す）。
+        let mut seen = std::collections::HashSet::new();
         let mut cur = Some(start_token.to_string());
-        let mut guard = 0;
-        while let Some(t) = cur {
-            guard += 1;
-            if guard > 64 {
-                break; // 系列長の安全上限
-            }
+        while let Some(t) = cur.filter(|t| seen.insert(t.clone())) {
             let next = self
                 .fs
                 .get_doc("refreshTokens", &t)

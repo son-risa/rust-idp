@@ -262,14 +262,12 @@ impl Store for MemoryStore {
         }
     }
     async fn revoke_refresh_family(&self, start_token: &str) {
+        // ローテーションは単回なので鎖は枝分かれせず、start から replaced_by を辿れば以後の RT を全部消せる。
+        // 長さに上限は置かない（上限で止めると最新の RT が残る）。壊れた replaced_by の循環は訪れた集合で止める。
         let mut map = self.refresh_tokens.lock().unwrap();
+        let mut seen = std::collections::HashSet::new();
         let mut cur = Some(start_token.to_string());
-        let mut guard = 0;
-        while let Some(t) = cur {
-            guard += 1;
-            if guard > 64 {
-                break; // 系列長の安全上限（壊れた replaced_by ループ対策）
-            }
+        while let Some(t) = cur.filter(|t| seen.insert(t.clone())) {
             cur = map.remove(&t).and_then(|e| e.value.replaced_by);
         }
     }
