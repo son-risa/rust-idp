@@ -22,6 +22,9 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
+/// 系列の失効で削除に失敗した RT を消し直す回数。
+const REVOKE_RETRIES: usize = 3;
+
 fn doc_expired(fields: &Value) -> bool {
     fs_h::field_ts_secs(fields, "expiresAt").unwrap_or(0) < now()
 }
@@ -346,7 +349,10 @@ impl Store for FirestoreStore {
         // familyId で引く形にしないのは、familyId を書く前（2026-06-11 より前）に始まった鎖を
         // ローテーションし続けた RT が、familyId を空のまま引き継いでいるため（空の familyId で引くと
         // 無関係な系列まで消す）。
+        // 削除に失敗した RT は控えて、走査の後に回数の上限つきで消し直す（seen から外して辿り直すと、
+        // 失敗し続ける循環で終わらない）。
         let mut seen = std::collections::HashSet::new();
+        let mut failed = Vec::new();
         let mut cur = Some(start_token.to_string());
         while let Some(t) = cur.filter(|t| seen.insert(t.clone())) {
             let next = self
@@ -356,8 +362,25 @@ impl Store for FirestoreStore {
                 .ok()
                 .flatten()
                 .and_then(|f| fs_h::field_str(&f, "replacedBy").map(str::to_string));
-            let _ = self.fs.delete_doc("refreshTokens", &t).await;
+            if self.fs.delete_doc("refreshTokens", &t).await.is_err() {
+                failed.push(t);
+            }
             cur = next;
+        }
+        for _ in 0..REVOKE_RETRIES {
+            if failed.is_empty() {
+                break;
+            }
+            let mut still = Vec::new();
+            for t in failed {
+                if self.fs.delete_doc("refreshTokens", &t).await.is_err() {
+                    still.push(t);
+                }
+            }
+            failed = still;
+        }
+        if !failed.is_empty() {
+            tracing::error!(event = "refresh_family_revoke_incomplete", left = failed.len());
         }
     }
 
@@ -385,5 +408,61 @@ impl Store for FirestoreStore {
             claims.insert(k, json!(v));
         }
         Account { sub: sub.to_string(), claims }
+    }
+}
+
+#[cfg(test)]
+mod revoke_family_tests {
+    use super::*;
+    use crate::firestore::fake_firestore;
+
+    fn rt(token: &str, replaced_by: Option<&str>) -> RefreshToken {
+        RefreshToken {
+            token: token.into(),
+            client_id: "rp".into(),
+            account_id: "acct".into(),
+            scope: "openid offline_access".into(),
+            resource: None,
+            jkt: None,
+            acr: None,
+            auth_time: None,
+            family_id: "F".into(),
+            used: replaced_by.is_some(),
+            replaced_by: replaced_by.map(str::to_string),
+        }
+    }
+
+    /// 鎖を保存し、fail の RT の削除を 1 回だけ 503 にして start から失効させ、残った RT を返す。
+    async fn left_after_revoke(chain: &[(&str, Option<&str>)], fail: &str, start: &str) -> Vec<String> {
+        let (host, state) = fake_firestore::spawn().await;
+        let s = FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)));
+        for (t, next) in chain {
+            s.save_refresh_token(rt(t, *next)).await;
+        }
+        state.fail_once("DELETE", "refreshTokens", Some(fail));
+        s.revoke_refresh_family(start).await;
+        let mut left = Vec::new();
+        for (t, _) in chain {
+            if s.get_refresh_token(t).await.is_some() {
+                left.push(t.to_string());
+            }
+        }
+        left
+    }
+
+    #[tokio::test]
+    async fn a_failed_delete_is_retried_in_a_self_pointing_chain() {
+        assert_eq!(left_after_revoke(&[("C1", Some("C1"))], "C1", "C1").await, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_failed_delete_is_retried_in_a_two_link_cycle() {
+        assert_eq!(left_after_revoke(&[("C1", Some("C2")), ("C2", Some("C1"))], "C1", "C1").await, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_failed_delete_in_the_middle_of_a_line_is_retried() {
+        let chain = [("R1", Some("R2")), ("R2", Some("R3")), ("R3", None)];
+        assert_eq!(left_after_revoke(&chain, "R2", "R1").await, Vec::<String>::new());
     }
 }
