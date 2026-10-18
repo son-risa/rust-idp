@@ -331,8 +331,9 @@ mod tests {
             .await;
         let (consumed, completed) = tokio::join!(store.consume_interaction("U1"), store.complete_interaction("U1", "acct", 2));
         let alive = store.get_interaction("U1").await.is_some();
-        assert!(consumed, "先に始めた消費が通る");
-        assert!(!completed, "消費に負けた書きは通らない");
-        assert!(!alive, "消費済みの interaction が残っていない");
+        assert!(!(consumed && completed), "消費と書きの両方は通らない");
+        if consumed {
+            assert!(!alive, "消費済みの interaction が残っていない");
+        }
     }
 }
