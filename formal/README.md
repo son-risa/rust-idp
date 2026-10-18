@@ -34,8 +34,8 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 ```
 
 下の各節の「表に出た前提 → rust-op の担保」の P-* は、[`premises.json`](./premises.json) に機械が読む形で写してある
-（担保のコード・試験・Kani ハーネス、または試験にできない理由）。`cargo test` の `formal_ledger_tests` が、README の前提の表
-（見出しの最初のセルが ID の表）の P-* と台帳の行が過不足なく対応すること、台帳が指すモデル・関数が在ること、Kani ハーネスが
+（担保のコード・試験・Kani ハーネス、または試験にできない理由）。`cargo test` の `formal_ledger_tests` が、README 全体に出る
+P-* の集合と台帳の ID の集合が一致すること、台帳が指すモデル・関数が在ること、Kani ハーネスが
 `kani-harnesses.txt` に在ることを検める。台帳の試験の名前は、CI の test の job で `formal/check-ledger-tests.sh` が
 `cargo test -- --list` の一覧と完全一致で照らし、`#[ignore]` の試験も断る。
 
