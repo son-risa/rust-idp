@@ -412,7 +412,7 @@ Present → 新しい RT での Rotate の続き）が示している。
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-RSINGLE | RT の使用済み化は**原子的に単回**（`Fresh` が linear） | `mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS） |
-| P-RFAMILY | 使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない | `RefreshTokenGrant::handle` の `pre.used` 分岐 → `revoke_refresh_family`（replacedBy を辿って消す。上限 64、Kani `refresh_family_walk_terminates`） |
+| P-RFAMILY | 使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない | `RefreshTokenGrant::handle` の `pre.used` 分岐 → `revoke_refresh_family`（replacedBy を長さの上限なしで辿って消し、循環は訪れた集合で止める。Kani `refresh_family_walk_terminates` が停止と取りこぼしの無さを見る。上限 64 で止めていた版では、64 回を超えるローテーションの後の再利用で最新の RT が残った） |
 
 ### 限界
 - 系列の失効は、コードでは再利用された RT から replacedBy を前向きに辿って消す。モデルは系列の状態 1 つで表す。
