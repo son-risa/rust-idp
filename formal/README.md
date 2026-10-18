@@ -35,7 +35,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 下の各節の「表に出た前提 → rust-op の担保」の表は、[`premises.json`](./premises.json)（担保のコード・試験・Kani ハーネス、
 または試験にできない理由を持つ台帳）から作る。`<!-- premises: {model} -->` と `<!-- /premises -->` の間は手で書かず、
-`UPDATE_PREMISE_TABLES=1 cargo test formal_ledger` で作り直す。`cargo test` の `formal_ledger_tests` が、その範囲が台帳から
+`UPDATE_PREMISE_TABLES=1 cargo test formal_ledger` で作り直す。前提の表は範囲の中だけに置き、範囲の外に前提の表を書かない（範囲の外の行は照合しない）。`cargo test` の `formal_ledger_tests` が、その範囲が台帳から
 作った表とバイト一致すること、台帳の ID の形と (id, model) の重なり、台帳が指すモデル・関数が在ること、Kani ハーネスが
 `kani-harnesses.txt` に在ることを検める。台帳の試験の名前は、CI の test の job で `formal/check-ledger-tests.sh` が
 `cargo test -- --list` の一覧と完全一致で照らし、`#[ignore]` の試験も断る。
