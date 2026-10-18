@@ -823,6 +823,31 @@ mod tests {
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
         reuse_after_many_rotations_revokes_the_whole_family(provider().with_store(store)).await;
+    /// RefreshTokenGrant のローテーションは mark_refresh_used（旧 RT に used と replaced_by を書く）と
+    /// save_refresh_token（新 RT を作る）の 2 つの書き込みで、間に issue_access_and_id の await を挟む。
+    /// その間に旧 RT の再利用が来て revoke_refresh_family が走ると、replaced_by の先（まだ無い新 RT）で
+    /// 辿りが止まり、その後に保存された新 RT が系列から外れて生き残る、という順を store の呼び出しで固定する。
+    async fn a_new_rt_saved_after_the_family_was_revoked_does_not_survive(p: Provider) {
+        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+        assert!(p.store.mark_refresh_used("RT0", Some("RT1")).await);
+        p.store.revoke_refresh_family("RT0").await;
+        p.store
+            .save_refresh_token(RefreshToken { family_id: "fam-test".into(), ..rt("RT1", "rp", "openid offline_access") })
+            .await;
+        assert!(p.store.get_refresh_token("RT1").await.is_none(), "系列を失効した後に保存された新しい RT が生き残っている");
+    }
+
+    #[tokio::test]
+    async fn rotation_racing_a_family_revoke_in_memory() {
+        a_new_rt_saved_after_the_family_was_revoked_does_not_survive(provider()).await;
+    }
+
+    #[tokio::test]
+    async fn rotation_racing_a_family_revoke_in_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
+        a_new_rt_saved_after_the_family_was_revoked_does_not_survive(provider().with_store(store)).await;
     }
 
     // B-4: ローテーション後の新 RT は同じ family_id を継承する。
