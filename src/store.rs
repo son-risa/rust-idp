@@ -23,8 +23,9 @@ pub const INTERACTION_TTL_SECS: u64 = 3600; // ログイン完了までの猶予
 pub const SESSION_TTL_SECS: u64 = 7 * 24 * 3600; // ブラウザセッション(7日)
 pub const ACCESS_TTL_SECS: u64 = 900; // access token(15分、grants の expires_in と一致)
 pub const REFRESH_TTL_SECS: u64 = 14 * 24 * 3600; // refresh token(14日)
-/// 系列の失効の札を RT の TTL より長く残す余裕（インスタンスの間の時計のずれの分）。
-pub const FAMILY_REVOCATION_MARGIN_SECS: u64 = 24 * 3600;
+/// 系列の失効の札を RT の TTL より長く残す余裕。インスタンスの間の時計のずれ（1 日まで）と、札の書き込みの
+/// 遅れ（HTTP の時間の上限と書き直しの回数で 1 日より十分短い）の分。
+pub const FAMILY_REVOCATION_MARGIN_SECS: u64 = 2 * 24 * 3600;
 
 /// 値に絶対失効時刻を添えるラッパー。expires_at(UNIX 秒)を過ぎたら失効とみなす。
 struct Expiring<T> {

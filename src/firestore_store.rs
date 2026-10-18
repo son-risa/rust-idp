@@ -376,11 +376,12 @@ impl Store for FirestoreStore {
 
     async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
         // 札の期限は RT の TTL に余裕を足したもの。札を書いた後はその系列に新しい RT を作らせないので、既存の
-        // RT が全部切れるまで札が残れば足りる。余裕はインスタンスの間の時計のずれの分。
-        let tomb = json!({ "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + REFRESH_TTL + crate::store::FAMILY_REVOCATION_MARGIN_SECS)) });
+        // RT が全部切れるまで札が残れば足りる。余裕はインスタンスの間の時計のずれと書き込みの遅れの分。
         let mut written = false;
         for _ in 0..=REVOKE_RETRIES {
-            if self.fs.set_doc(FAMILY_REVOCATIONS, family_id, tomb.clone()).await.is_ok() {
+            // 期限は書き込みを試すたびに、その時刻から計算する（前の試みが遅れても札が短くならない）。
+            let tomb = json!({ "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + REFRESH_TTL + crate::store::FAMILY_REVOCATION_MARGIN_SECS)) });
+            if self.fs.set_doc(FAMILY_REVOCATIONS, family_id, tomb).await.is_ok() {
                 written = true;
                 break;
             }
@@ -527,7 +528,7 @@ mod revoke_family_tests {
         store.save_refresh_token(rt("RT0", None)).await;
         let rt1 = RefreshTokenGrant.handle(&p, &client, &form("RT0"), None).await.unwrap().refresh_token.unwrap();
 
-        let (reached, release) = state.gate_delete("refreshTokens", &rt1);
+        let (reached, release) = state.gate("DELETE", "refreshTokens", &rt1);
         let revoking = tokio::spawn({
             let store = store.clone();
             async move { store.revoke_refresh_family("F", "RT0").await }
@@ -541,5 +542,28 @@ mod revoke_family_tests {
         for t in ["RT0", rt1.as_str()] {
             assert!(store.get_refresh_token(t).await.is_none(), "失効の後に {t} が残っている");
         }
+    }
+
+    /// 札の期限は、書き込みが通った時刻から RT の TTL ＋ 2 日。1 回目の書き込みが遅れて失敗しても、期限は
+    /// 最初に試した時刻で決まらない。
+    #[tokio::test]
+    async fn the_tombstone_expiry_counts_from_the_write_that_succeeded() {
+        let (host, state) = fake_firestore::spawn().await;
+        let fs = Arc::new(Firestore::new_for_test("proj", host));
+        let store = Arc::new(FirestoreStore::new(fs.clone()));
+        let (reached, release) = state.gate("PATCH", FAMILY_REVOCATIONS, "F");
+        state.fail_once("PATCH", FAMILY_REVOCATIONS, Some("F"));
+        let revoking = tokio::spawn({
+            let store = store.clone();
+            async move { store.revoke_refresh_family("F", "NONE").await }
+        });
+        reached.notified().await;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let released_at = now();
+        release.notify_one();
+        revoking.await.unwrap();
+        let tomb = fs.get_doc(FAMILY_REVOCATIONS, "F").await.unwrap().expect("札が無い");
+        let expires = fs_h::field_ts_secs(&tomb, "expiresAt").unwrap();
+        assert!(expires >= released_at + REFRESH_TTL + 2 * 24 * 3600, "札の期限が短い: {expires} < {}", released_at + REFRESH_TTL + 2 * 24 * 3600);
     }
 }
