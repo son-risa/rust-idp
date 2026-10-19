@@ -78,7 +78,7 @@ pub(super) async fn register_submit(
     let email = form.email.trim().to_lowercase();
     let fs = match &p.firestore {
         Some(fs) => fs,
-        None => return plain_error("registration not available (no Firestore)"),
+        None => return plain_error(&localize("[[Something went wrong. Please try again.]]", Lang::from_headers(&headers))),
     };
     let lang = Lang::from_headers(&headers);
     match issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang)).await {
@@ -96,7 +96,11 @@ pub(super) async fn register_submit(
             .into_response(),
         Err(e) => {
             tracing::error!("register_submit: {e}");
-            plain_error("internal error")
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response()
         }
     }
 }
@@ -236,7 +240,7 @@ async function reg(){
   if(!v.ok){msg.textContent=await errorText(v);return;}
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
   msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to log in]]</a>';
- }catch(e){msg.textContent=e.message;}
+ }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script></body></html>"##;
     Html(

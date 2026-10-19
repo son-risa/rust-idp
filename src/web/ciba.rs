@@ -323,7 +323,7 @@ async function approve(id){
   const v=await fetch(B+'/ciba/'+id+'/approve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   if(!v.ok){msg.textContent=await errorText(v);window.__busy=false;return;}
   location.reload();
- }catch(e){msg.textContent=e.message;window.__busy=false;}
+ }catch(e){msg.textContent=passkeyErrorText(e);window.__busy=false;}
 }
 async function reject(id){
  window.__busy=true;

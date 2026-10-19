@@ -247,12 +247,14 @@ function bufToB64(buf){const a=new Uint8Array(buf);let s='';for(let i=0;i<a.leng
 
 /// passkey の API が返す失敗の文言を画面の言語に置き換える JS。API の応答はアプリも読むので
 /// 英語の固定文のまま変えず、ページの側で訳す。表に無い文言はそのまま出す。
+/// `passkeyErrorText` は passkey のダイアログの例外（取り消し・時間切れはブラウザの言語の文になる）を訳す。
 /// 印を含むので `localize` を通す前のテンプレートに差し込む。
 const SERVER_ERROR_JS: &str = r##"
 const SERVER_ERRORS={
  'challenge invalid/expired':'[[This took too long. Please try again.]]',
  'cannot resolve user':'[[This passkey is not registered.]]',
  'credential not found':'[[This passkey is not registered.]]',
+ 'credential id mismatch':'[[This passkey is not registered.]]',
  'passkey verify failed':'[[The passkey could not be verified.]]',
  'account disabled':'[[This account is disabled.]]',
  'account needs re-registration':'[[This account needs to be registered again.]]',
@@ -264,9 +266,20 @@ const SERVER_ERRORS={
  'name required':'[[Enter your name]]',
  'request not found':'[[This request was not found or has expired.]]',
  'no passkey':'[[No passkey is registered for this account.]]',
- 'already handled':'[[This request has already been handled.]]'
+ 'already handled':'[[This request has already been handled.]]',
+ 'no challenge':'[[Something went wrong. Please try again.]]',
+ 'challenge context mismatch':'[[Something went wrong. Please try again.]]',
+ 'no firestore':'[[Something went wrong. Please try again.]]',
+ 'error':'[[Something went wrong. Please try again.]]',
+ 'access token required':'[[Your session has expired. Please sign in again.]]',
+ 'invalid token':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP scheme required':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP proof required':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP jkt mismatch':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP':'[[Your session has expired. Please sign in again.]]'
 };
 async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));return k?SERVER_ERRORS[k]:t;}
+function passkeyErrorText(e){return e&&e.name==='NotAllowedError'?'[[The passkey was canceled or timed out.]]':(e&&e.message)||String(e);}
 "##;
 
 #[derive(serde::Deserialize)]
