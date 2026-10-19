@@ -709,3 +709,108 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
     )
     .await;
 }
+
+/// 英語は sign in / sign out、日本語はログイン / ログアウト。
+#[tokio::test]
+async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
+    for (lang, expected) in [
+        (
+            Some("en"),
+            [
+                "<title>Sign in</title>",
+                "Sign in with a passkey",
+                "You have signed out",
+                ">Sign out</a>",
+            ],
+        ),
+        (
+            Some("ja"),
+            [
+                "<title>ログイン</title>",
+                "Passkey でログイン",
+                "ログアウトしました",
+                ">ログアウト</a>",
+            ],
+        ),
+    ] {
+        let login = login::login_form(State(plain()), accept(lang), Path("uid-1".into()))
+            .await
+            .0;
+        let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
+        let logged_out = body_of(
+            oidc::end_session(State(plain()), accept(lang), CookieJar::default(), Query(q)).await,
+        )
+        .await;
+        let (p, _fs) = admin_world().await;
+        let jar = login_as(&p, "acc-me").await;
+        let admin = body_of(admin::users_list(State(p), accept(lang), jar).await).await;
+        let all = format!("{login}{logged_out}{admin}");
+        for e in expected {
+            assert!(all.contains(e), "[{lang:?}] 「{e}」が無い");
+        }
+        let lower = all.to_lowercase();
+        for bad in [
+            "log in",
+            "log out",
+            "logged",
+            ">login",
+            ">logout",
+            "サインイン",
+            "サインアウト",
+        ] {
+            assert!(!lower.contains(bad), "[{lang:?}] 「{bad}」が出ている");
+        }
+    }
+}
+
+#[tokio::test]
+async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
+    let authorize = |query: &'static str| {
+        move |h| async move {
+            body_of(
+                oidc::authorize(
+                    State(plain()),
+                    h,
+                    CookieJar::default(),
+                    RawQuery(Some(query.to_string())),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    check_text(
+        "authorize with an unknown client",
+        "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: invalid_client）",
+        authorize("client_id=nope&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code"),
+    )
+    .await;
+    check_text(
+        "authorize without a client",
+        "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: invalid_request）",
+        authorize("response_type=code"),
+    )
+    .await;
+    check_text(
+        "sign-out to an unregistered address",
+        "ログアウト後の戻り先がこのアプリに登録されていません。",
+        |h| async move {
+            let q: oidc::EndSessionQuery = serde_urlencoded::from_str(
+                "client_id=nope&post_logout_redirect_uri=https%3A%2F%2Fevil.example.net%2F",
+            )
+            .unwrap();
+            body_of(oidc::end_session(State(plain()), h, CookieJar::default(), Query(q)).await)
+                .await
+        },
+    )
+    .await;
+    check_text("unknown page", "ページが見つかりません", |h| async move {
+        body_of(
+            log_unmatched(axum::http::Method::GET, "/nope".parse().unwrap(), h)
+                .await
+                .into_response(),
+        )
+        .await
+    })
+    .await;
+}

@@ -191,7 +191,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Create a passkey and sign up", "passkey を作成して登録"),
     ("Enter your name", "氏名を入力してください"),
     ("Working…", "処理中…"),
-    ("Registration complete. Taking you to sign in…", "登録が完了しました。ログインの画面へ移ります…"),
+    ("Registration complete. Taking you to sign in…", "登録が完了しました。ログイン画面へ移ります…"),
     ("Registration complete.", "登録が完了しました。"),
     // mod.rs（passkey の API の失敗）
     ("This took too long. Please try again.", "時間が経ちすぎました。もう一度お試しください。"),
@@ -199,7 +199,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("The passkey could not be verified.", "passkey を確認できませんでした。"),
     ("This account is disabled.", "このアカウントは凍結されています。"),
     ("This account needs to be registered again.", "このアカウントは登録し直す必要があります。"),
-    ("This sign-in has expired. Please start again.", "このログインは期限が切れました。最初からやり直してください。"),
+    ("This sign-in has expired. Please start again.", "ログインの有効期限が切れました。最初からやり直してください。"),
     ("This link has expired or has already been used.", "このリンクは期限が切れたか、既に使われています。"),
     (
         "This email address is already registered. Please sign in.",
@@ -269,7 +269,28 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "A return address must be on the host of a redirect_uri of this client: {host}",
         "戻り先は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
     ),
-    ("Sign-in was canceled.", "ログインを取り消しました。"),
+    (
+        "This app is not registered. Please contact the app provider. (error: {code})",
+        "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
+    ),
+    (
+        "The request from the app has expired. Please start again from the app. (error: {code})",
+        "アプリからの要求の有効期限が切れました。アプリからやり直してください。（エラーコード: {code}）",
+    ),
+    (
+        "Something went wrong. Please try again. (error: {code})",
+        "問題が起きました。もう一度お試しください。（エラーコード: {code}）",
+    ),
+    (
+        "The request from the app is invalid. Please contact the app provider. (error: {code})",
+        "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
+    ),
+    (
+        "The return address after sign-out is not registered for this app. Please contact the app provider.",
+        "ログアウト後の戻り先がこのアプリに登録されていません。アプリの提供元にお問い合わせください。",
+    ),
+    ("Page not found", "ページが見つかりません"),
+    ("Sign-in was canceled.", "ログインをキャンセルしました。"),
     ("Failed to save. Please try again.", "保存に失敗しました。もう一度お試しください。"),
     ("IATs", "IAT"),
     ("Hash", "ハッシュ"),
@@ -430,10 +451,9 @@ mod tests {
     #[test]
     fn sign_in_wording_is_consistent() {
         for (en, ja) in CATALOG {
-            let lower = en.to_lowercase();
-            for bad in ["log in", "login", "log out", "logout", "logged"] {
-                // post_logout_redirect_uris は仕様の項目名なので語としては数えない。
-                let text = lower.replace("post_logout_redirect_uri", "");
+            // post_logout_redirect_uris は仕様の項目名なので語としては数えない。
+            let text = en.to_lowercase().replace("post_logout_redirect_uri", "");
+            for bad in ["log in", "log-in", "login", "log out", "log-out", "logout", "logged", "logon"] {
                 assert!(!text.contains(bad), "英語に「{bad}」: {en}");
             }
             for bad in ["サインイン", "サインアウト"] {

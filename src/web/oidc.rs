@@ -68,11 +68,26 @@ pub(super) async fn jwks(State(p): State<Arc<Provider>>) -> Json<serde_json::Val
 }
 /* ===== authorize ===== */
 
+/// redirect_uri を信用できない段階の失敗を、ブラウザの言語で表示する。英語の詳細は
+/// RP の開発者が運営に問い合わせたときに引けるようにログへ残し、画面には OAuth のエラーコードだけ添える。
+fn app_error(lang: Lang, code: &str, detail: &str) -> Response {
+    tracing::warn!("authorize: {code}: {detail}");
+    let msg = match code {
+        "invalid_client" => "[[This app is not registered. Please contact the app provider. (error: {code})]]",
+        "invalid_request_uri" => "[[The request from the app has expired. Please start again from the app. (error: {code})]]",
+        "server_error" => "[[Something went wrong. Please try again. (error: {code})]]",
+        _ => "[[The request from the app is invalid. Please contact the app provider. (error: {code})]]",
+    };
+    plain_error(&localize(msg, lang).replace("{code}", code))
+}
+
 pub(super) async fn authorize(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     jar: CookieJar,
     RawQuery(raw): RawQuery,
 ) -> Response {
+    let lang = Lang::from_headers(&headers);
     let raw = raw.unwrap_or_default();
     // 非 PAR の素の request_uri は run_checks 後に拒否する（SSRF 回避、PAR-only 維持）。
     let q0: HashMap<String, String> = serde_urlencoded::from_str(&raw).unwrap_or_default();
@@ -89,18 +104,18 @@ pub(super) async fn authorize(
         let cid = q0.get("client_id").map(|s| s.as_str()).unwrap_or("");
         let client = match p.resolve_client(cid).await {
             Some(c) => c,
-            None => return plain_error("unknown client for request object"),
+            None => return app_error(lang, "invalid_client", "unknown client for request object"),
         };
         match crate::request_object::verify(&client, req, &p.issuer, &p.jar_jti).await {
             Ok(params) => serde_urlencoded::to_string(&params).unwrap_or_default(),
-            Err(e) => return plain_error(&format!("invalid request object: {}", e.description())),
+            Err(e) => return app_error(lang, "invalid_request_object", &e.description()),
         }
     } else {
         match q0.get("request_uri") {
             Some(request_uri) if request_uri.starts_with(crate::par::URN_PREFIX) => {
                 let fs = match &p.firestore {
                     Some(fs) => fs,
-                    None => return plain_error("PAR unavailable (no Firestore)"),
+                    None => return app_error(lang, "server_error", "PAR unavailable (no Firestore)"),
                 };
                 // peek: 削除しない。認可完了前は再利用可。コード発行時に delete で単回化する。
                 match crate::par::peek(fs, request_uri).await {
@@ -110,7 +125,7 @@ pub(super) async fn authorize(
                         par_request_uri = Some(request_uri.clone());
                         params
                     }
-                    _ => return plain_error("invalid or expired request_uri"),
+                    _ => return app_error(lang, "invalid_request_uri", "invalid or expired request_uri"),
                 }
             }
             _ => raw,
@@ -120,12 +135,12 @@ pub(super) async fn authorize(
     // PAR 作成クライアントと異なる場合は拒否する（別クライアントによる request_uri 流用防止）。
     if let (Some(creator), Some(req_cid)) = (&par_creator, q0.get("client_id")) {
         if req_cid != creator {
-            return plain_error("request_uri was issued to a different client");
+            return app_error(lang, "invalid_request_uri", "request_uri was issued to a different client");
         }
     }
     let params: AuthParams = match serde_urlencoded::from_str(&raw) {
         Ok(p) => p,
-        Err(e) => return plain_error(&format!("invalid query: {e}")),
+        Err(e) => return app_error(lang, "invalid_request", &format!("invalid query: {e}")),
     };
     // Phase 0→1: client 解決 + redirect_uri 検証。ここで失敗した場合は redirect_uri を
     // 一切信用できないため plain 表示のみ（authorize_error は型的に呼べない）。
@@ -136,7 +151,7 @@ pub(super) async fn authorize(
     .await
     {
         Ok(r) => r,
-        Err(e) => return plain_error(&format!("{}: {}", e.code(), e.description())),
+        Err(e) => return app_error(lang, e.code(), &e.description()),
     };
     // Phase 1: 可換なポリシーチェック群。以降のエラーは検証済み redirect へ返せる。
     if let Err(e) = run_checks(&p, &req).await {
@@ -192,15 +207,11 @@ pub(super) async fn authorize_resume(
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let expired = || {
-        plain_error(&localize(
-            "[[This sign-in has expired. Please start again.]]",
-            Lang::from_headers(&headers),
-        ))
-    };
+    let lang = Lang::from_headers(&headers);
+    let expired = || plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang));
     let uid = match q.get("uid") {
         Some(u) => u,
-        None => return plain_error("uid required"),
+        None => return expired(),
     };
     let interaction = match p.store.get_interaction(uid).await {
         Some(i) => i,
@@ -213,7 +224,7 @@ pub(super) async fn authorize_resume(
 
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
         Ok(p) => p,
-        Err(e) => return plain_error(&format!("invalid stored query: {e}")),
+        Err(e) => return app_error(lang, "server_error", &format!("invalid stored query: {e}")),
     };
     let req = match resolve_addressee(
         &p,
@@ -222,7 +233,7 @@ pub(super) async fn authorize_resume(
     .await
     {
         Ok(r) => r,
-        Err(e) => return plain_error(&format!("{}: {}", e.code(), e.description())),
+        Err(e) => return app_error(lang, e.code(), &e.description()),
     };
     if let Err(e) = run_checks(&p, &req).await {
         return authorize_error(&p, &req, e);
@@ -242,18 +253,14 @@ pub(super) async fn authorize_cancel(
     headers: HeaderMap,
     Path(uid): Path<String>,
 ) -> Response {
+    let lang = Lang::from_headers(&headers);
     let interaction = match p.store.get_interaction(&uid).await {
         Some(i) => i,
-        None => {
-            return plain_error(&localize(
-                "[[This sign-in has expired. Please start again.]]",
-                Lang::from_headers(&headers),
-            ))
-        }
+        None => return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang)),
     };
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
         Ok(p) => p,
-        Err(e) => return plain_error(&format!("invalid stored query: {e}")),
+        Err(e) => return app_error(lang, "server_error", &format!("invalid stored query: {e}")),
     };
     // redirect_uri を検証してから error redirect する（未登録 URI には返さない）。
     // AddressedRequest を得られない限り authorize_error は呼べない = 規律が型で強制される。
@@ -264,7 +271,7 @@ pub(super) async fn authorize_cancel(
     .await
     {
         Ok(r) => r,
-        Err(e) => return plain_error(&format!("{}: {}", e.code(), e.description())),
+        Err(e) => return app_error(lang, e.code(), &e.description()),
     };
     if let Err(e) = run_checks(&p, &req).await {
         return authorize_error(&p, &req, e);
@@ -604,7 +611,12 @@ pub(super) async fn end_session(
             None => false,
         };
         if !registered {
-            return (jar, plain_error("post_logout_redirect_uri not registered")).into_response();
+            tracing::warn!("end_session: post_logout_redirect_uri not registered: {uri}");
+            let msg = localize(
+                "[[The return address after sign-out is not registered for this app. Please contact the app provider.]]",
+                Lang::from_headers(&headers),
+            );
+            return (jar, plain_error(&msg)).into_response();
         }
         let mut target = uri.clone();
         if let Some(state) = &q.state {
