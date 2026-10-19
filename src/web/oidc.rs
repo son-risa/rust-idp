@@ -71,14 +71,15 @@ pub(super) async fn jwks(State(p): State<Arc<Provider>>) -> Json<serde_json::Val
 /// redirect_uri を信用できない段階の失敗を、ブラウザの言語で表示する。英語の詳細は
 /// RP の開発者が運営に問い合わせたときに引けるようにログへ残し、画面には OAuth のエラーコードだけ添える。
 fn app_error(lang: Lang, code: &str, detail: &str) -> Response {
-    tracing::warn!("authorize: {code}: {detail}");
+    tracing::warn!(event = "authorize_rejected", code, detail);
     let msg = match code {
-        "invalid_client" => "[[This app is not registered. Please contact the app provider. (error: {code})]]",
-        "invalid_request_uri" => "[[The request from the app has expired. Please start again from the app. (error: {code})]]",
-        "server_error" => "[[Something went wrong. Please try again. (error: {code})]]",
-        _ => "[[The request from the app is invalid. Please contact the app provider. (error: {code})]]",
+        "invalid_client" => "[[This app is not registered. Please contact the app provider. (error code: {code})]]",
+        "invalid_request_uri" => "[[The request from the app could not be verified. Please start again from the app. (error code: {code})]]",
+        "server_error" => "[[Something went wrong. Please try again. (error code: {code})]]",
+        _ => "[[The request from the app is invalid. Please contact the app provider. (error code: {code})]]",
     };
-    plain_error(&localize(msg, lang).replace("{code}", code))
+    let status = if code == "server_error" { StatusCode::INTERNAL_SERVER_ERROR } else { StatusCode::BAD_REQUEST };
+    (status, localize(msg, lang).replace("{code}", code)).into_response()
 }
 
 pub(super) async fn authorize(
@@ -125,7 +126,8 @@ pub(super) async fn authorize(
                         par_request_uri = Some(request_uri.clone());
                         params
                     }
-                    _ => return app_error(lang, "invalid_request_uri", "invalid or expired request_uri"),
+                    Ok(None) => return app_error(lang, "invalid_request_uri", "invalid or expired request_uri"),
+                    Err(e) => return app_error(lang, "server_error", &format!("PAR lookup failed: {e}")),
                 }
             }
             _ => raw,

@@ -792,6 +792,30 @@ async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
     )
     .await;
     check_text(
+        "authorize with a pushed request when PAR is unavailable",
+        "問題が起きました。もう一度お試しください。（エラーコード: server_error）",
+        authorize("client_id=nope&request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz"),
+    )
+    .await;
+    check_text(
+        "authorize with an unknown pushed request",
+        "アプリからの要求を確認できませんでした。アプリからやり直してください。（エラーコード: invalid_request_uri）",
+        |h| async move {
+            let (p, _fs) = with_firestore().await;
+            body_of(
+                oidc::authorize(
+                    State(p),
+                    h,
+                    CookieJar::default(),
+                    RawQuery(Some("client_id=nope&request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz".to_string())),
+                )
+                .await,
+            )
+            .await
+        },
+    )
+    .await;
+    check_text(
         "sign-out to an unregistered address",
         "ログアウト後の戻り先がこのアプリに登録されていません。",
         |h| async move {
@@ -813,4 +837,43 @@ async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
         .await
     })
     .await;
+}
+
+// 障害は 500、要求の不備は 400 で返し、en でも文そのものを固定する。
+#[tokio::test]
+async fn protocol_errors_keep_their_status_and_english_text() {
+    let call = |p: Arc<Provider>, query: &str| {
+        let mut h = HeaderMap::new();
+        h.insert(header::ACCEPT_LANGUAGE, "en".parse().unwrap());
+        oidc::authorize(
+            State(p),
+            h,
+            CookieJar::default(),
+            RawQuery(Some(query.to_string())),
+        )
+    };
+    let urn = "request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz";
+    let resp = call(plain(), urn).await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        body_of(resp).await,
+        "Something went wrong. Please try again. (error code: server_error)"
+    );
+    let (p, _fs) = with_firestore().await;
+    let resp = call(p, urn).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_of(resp).await,
+        "The request from the app could not be verified. Please start again from the app. (error code: invalid_request_uri)"
+    );
+    let resp = call(
+        plain(),
+        "client_id=nope&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_of(resp).await,
+        "This app is not registered. Please contact the app provider. (error code: invalid_client)"
+    );
 }

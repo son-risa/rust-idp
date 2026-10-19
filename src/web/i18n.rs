@@ -270,19 +270,19 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "戻り先は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
     ),
     (
-        "This app is not registered. Please contact the app provider. (error: {code})",
+        "This app is not registered. Please contact the app provider. (error code: {code})",
         "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
     ),
     (
-        "The request from the app has expired. Please start again from the app. (error: {code})",
-        "アプリからの要求の有効期限が切れました。アプリからやり直してください。（エラーコード: {code}）",
+        "The request from the app could not be verified. Please start again from the app. (error code: {code})",
+        "アプリからの要求を確認できませんでした。アプリからやり直してください。（エラーコード: {code}）",
     ),
     (
-        "Something went wrong. Please try again. (error: {code})",
+        "Something went wrong. Please try again. (error code: {code})",
         "問題が起きました。もう一度お試しください。（エラーコード: {code}）",
     ),
     (
-        "The request from the app is invalid. Please contact the app provider. (error: {code})",
+        "The request from the app is invalid. Please contact the app provider. (error code: {code})",
         "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
     ),
     (
