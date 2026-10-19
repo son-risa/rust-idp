@@ -240,6 +240,7 @@ mod tests {
             client_secret: Some(crate::dcr::hash_token(secret)),
             grant_types: vec![],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![],
             jwks_uri: None,
@@ -317,6 +318,7 @@ mod tests {
             client_secret: None,
             grant_types: vec![],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![JwkPub {
                 kid: kid.into(),

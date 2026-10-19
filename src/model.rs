@@ -23,6 +23,10 @@ pub struct Client {
     pub grant_types: Vec<String>,
     /// RP-Initiated Logout の許可リダイレクト先（オープンリダイレクト防止）。
     pub post_logout_redirect_uris: Vec<String>,
+    /// ログインの入口（OIDC Core §4 Third-Party Initiated Login の `initiate_login_uri`）。
+    /// 期限切れのログイン画面からここへ送り直す。None なら送り直さず期限切れを伝える。
+    #[serde(default)]
+    pub initiate_login_uri: Option<String>,
     /// true なら token endpoint で DPoP proof を要求し access token を jkt に束縛する。
     pub dpop_bound: bool,
     /// private_key_jwt 用の公開鍵集合（インライン）。

@@ -716,6 +716,7 @@ mod invite_tests {
             client_id: id.into(),
             redirect_uris: vec![format!("{RP_ORIGIN}/auth/callback")],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             token_endpoint_auth_method: auth.into(),
             client_secret: secret.map(crate::dcr::hash_token),
             grant_types: vec!["authorization_code".into()],
