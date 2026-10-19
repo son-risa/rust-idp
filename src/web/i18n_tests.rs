@@ -151,6 +151,22 @@ fn plain() -> Arc<Provider> {
     Arc::new(Provider::new("https://idp.example/oidc".to_string()))
 }
 
+/// 生きている interaction "uid-1" のログイン画面。
+async fn login_page(h: HeaderMap) -> String {
+    let p = plain();
+    p.store
+        .save_interaction(crate::model::Interaction {
+            uid: "uid-1".into(),
+            raw_query: String::new(),
+            account_id: None,
+            auth_time: None,
+            request_uri: None,
+        })
+        .await;
+    let q: login::LoginQuery = serde_urlencoded::from_str("").unwrap();
+    body_of(login::login_form(State(p), h, Path("uid-1".into()), Query(q)).await).await
+}
+
 async fn with_firestore() -> (Arc<Provider>, Arc<Firestore>) {
     let (host, _state) = fake_firestore::spawn().await;
     let fs = Arc::new(Firestore::new_for_test("proj", host));
@@ -191,6 +207,7 @@ fn client(id: &str) -> crate::model::Client {
         client_id: id.into(),
         redirect_uris: vec!["https://rp.example.com/cb".into()],
         post_logout_redirect_uris: vec![],
+        initiate_login_uri: None,
         token_endpoint_auth_method: "none".into(),
         client_secret: None,
         grant_types: vec!["authorization_code".into()],
@@ -228,9 +245,7 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
 #[tokio::test]
 async fn sign_in_and_demo_pages_follow_the_browser_language() {
     check_page("login", "Passkey でログイン", |h| async move {
-        login::login_form(State(plain()), h, Path("uid-1".into()))
-            .await
-            .0
+        login_page(h).await
     })
     .await;
     check_page("demo_start", "Passkey でログイン", |h| async move {
@@ -649,9 +664,7 @@ async fn the_admin_navigation_and_badges_follow_the_browser_language() {
 #[tokio::test]
 async fn passkey_pages_translate_the_api_failures_they_show() {
     let login = |h| async move {
-        login::login_form(State(plain()), h, Path("uid-1".into()))
-            .await
-            .0
+        login_page(h).await
     };
     let en = login(accept(Some("en"))).await;
     assert!(en.contains("'account disabled':'This account is disabled.'"));
@@ -733,9 +746,7 @@ async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
             ],
         ),
     ] {
-        let login = login::login_form(State(plain()), accept(lang), Path("uid-1".into()))
-            .await
-            .0;
+        let login = login_page(accept(lang)).await;
         let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
         let logged_out = body_of(
             oidc::end_session(State(plain()), accept(lang), CookieJar::default(), Query(q)).await,
@@ -1046,4 +1057,85 @@ async fn own_errors_and_rp_facing_rejections_pass_through_unchanged() {
         .unwrap();
     assert_eq!(resp.status().as_u16(), 401);
     assert_eq!(resp.text().await.unwrap(), "ログインしてください。");
+}
+
+/// 期限切れのログイン画面: 入口のある client ならそこへ iss つきで送り直し、
+/// 入口の無い client・client_id の無い URL では期限切れを画面の言語で伝える。
+#[tokio::test]
+async fn expired_sign_in_is_sent_back_to_the_client_login_entry() {
+    let mut with_entry = client("rp-entry");
+    with_entry.initiate_login_uri = Some("https://rp.example.com/auth/login".into());
+    let p = Arc::new(
+        Provider::new("https://idp.example/oidc".to_string())
+            .with_client(with_entry)
+            .with_client(client("rp-plain")),
+    );
+    let open = |query: &'static str, lang: Option<&'static str>| {
+        let p = p.clone();
+        async move {
+            let q: login::LoginQuery = serde_urlencoded::from_str(query).unwrap();
+            login::login_form(State(p), accept(lang), Path("gone".into()), Query(q)).await
+        }
+    };
+
+    let r = open("client_id=rp-entry", Some("ja")).await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        r.headers()[header::LOCATION],
+        "https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc"
+    );
+
+    for (query, lang, want) in [
+        ("client_id=rp-plain", Some("ja"), "ログインの有効期限が切れました。最初からやり直してください。"),
+        ("client_id=unknown", Some("en"), "This sign-in has expired. Please start again."),
+        ("", Some("en"), "This sign-in has expired. Please start again."),
+    ] {
+        let r = open(query, lang).await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(body_of(r).await, want, "{query}");
+    }
+}
+
+/// authorize が案内するログイン画面の URL に client_id が載り、期限切れの後もそれで
+/// 入口へ送り直せる（interaction は掃除されて client を引けなくなるため）。
+#[tokio::test]
+async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
+    let mut c = client("rp-entry");
+    c.initiate_login_uri = Some("https://rp.example.com/auth/login".into());
+    let app = router(
+        Provider::new("https://idp.example/oidc".to_string())
+            .with_base_path("/oidc")
+            .with_client(c),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let resp = http
+        .get(format!(
+            "http://{addr}/oidc/authorize?response_type=code&client_id=rp-entry\
+             &redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&scope=openid&state=s&nonce=n\
+             &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let to = resp.headers()[reqwest::header::LOCATION].to_str().unwrap().to_string();
+    assert!(to.starts_with("/oidc/login/") && to.ends_with("?client_id=rp-entry"), "{to}");
+    let live = http.get(format!("http://{addr}{to}")).send().await.unwrap();
+    assert_eq!(live.status(), 200);
+
+    let expired = http
+        .get(format!("http://{addr}/oidc/login/gone?client_id=rp-entry"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        expired.headers()[reqwest::header::LOCATION],
+        "https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc"
+    );
 }

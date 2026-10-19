@@ -345,6 +345,19 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "post_logout_redirect_uris（1 行に 1 つ。空にすると戻り先なし）",
     ),
     ("Save return addresses", "戻り先を保存"),
+    (
+        "initiate_login_uri (where an expired sign-in is sent to start again; leave empty to show the expired message)",
+        "initiate_login_uri（期限切れのログインをここへ送り直す。空にすると期限切れの案内を出す）",
+    ),
+    ("Save sign-in start address", "ログインの入口を保存"),
+    (
+        "A sign-in start address must use https and must not contain a fragment or user info: {uri}",
+        "ログインの入口は https で、フラグメントやユーザー情報を含まないものにしてください: {uri}",
+    ),
+    (
+        "A sign-in start address must be on the host of a redirect_uri of this client: {host}",
+        "ログインの入口は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
+    ),
     ("Revoke this client? This cannot be undone.", "このクライアントを失効させますか？取り消せません。"),
     ("Revoke", "失効"),
     ("Set", "設定済み"),
@@ -466,8 +479,11 @@ mod tests {
     #[test]
     fn sign_in_wording_is_consistent() {
         for (en, ja) in CATALOG {
-            // post_logout_redirect_uris は仕様の項目名なので語としては数えない。
-            let text = en.to_lowercase().replace("post_logout_redirect_uri", "");
+            // post_logout_redirect_uris・initiate_login_uri は仕様の項目名なので語としては数えない。
+            let text = en
+                .to_lowercase()
+                .replace("post_logout_redirect_uri", "")
+                .replace("initiate_login_uri", "");
             for bad in ["log in", "log-in", "login", "log out", "log-out", "logout", "logged", "logon"] {
                 assert!(!text.contains(bad), "英語に「{bad}」: {en}");
             }

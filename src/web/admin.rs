@@ -601,6 +601,12 @@ pub(super) async fn client_detail(
 <textarea id="post_logout_redirect_uris" name="post_logout_redirect_uris" rows="3" cols="60">{post_logout_value}</textarea>
 <button class="btn" type="submit">[[Save return addresses]]</button>
 </form>
+<p>initiate_login_uri: {initiate_login}</p>
+<form method="post" action="{initiate_login_action}">
+<label for="initiate_login_uri">[[initiate_login_uri (where an expired sign-in is sent to start again; leave empty to show the expired message)]]</label>
+<input id="initiate_login_uri" name="initiate_login_uri" size="60" value="{initiate_login_value}">
+<button class="btn" type="submit">[[Save sign-in start address]]</button>
+</form>
 <p>jwks_uri: {jwks_uri}</p>
 <p>jwks kids:</p><ul>{jwks}</ul>
 <p>require_par: {par} / require_pkce: {pkce} / dpop_bound: {dpop}</p>
@@ -616,6 +622,13 @@ pub(super) async fn client_detail(
         grants = esc(&c.grant_types.join(", ")),
         post_logout_value = esc(&c.post_logout_redirect_uris.join("\n")),
         post_logout_action = esc(&p.path(&format!("/admin/clients/{}/post-logout", c.client_id))),
+        initiate_login = c
+            .initiate_login_uri
+            .as_deref()
+            .map(|u| format!("<code>{}</code>", esc(u)))
+            .unwrap_or_else(|| "[[None]]".into()),
+        initiate_login_value = esc(c.initiate_login_uri.as_deref().unwrap_or("")),
+        initiate_login_action = esc(&p.path(&format!("/admin/clients/{}/initiate-login", c.client_id))),
         jwks_uri = c
             .jwks_uri
             .as_deref()
@@ -704,6 +717,67 @@ pub(super) async fn client_set_post_logout(
             )
         }
         Err(e) => return server_error(Lang::from_headers(&headers), "client_set_post_logout", &e),
+    }
+    redirect(&p, &format!("/admin/clients/{client_id}"))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct InitiateLoginForm {
+    initiate_login_uri: String,
+}
+
+/// 既存クライアントのログインの入口（initiate_login_uri）を差し替える。空なら外す。
+/// 期限切れのログイン画面が利用者をここへ送るので、縛りは戻り先と同じ（https・
+/// その client 自身の redirect_uris のホスト内）。書き戻しは CAS。
+pub(super) async fn client_set_initiate_login(
+    State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Path(client_id): Path<String>,
+    Form(form): Form<InitiateLoginForm>,
+) -> Response {
+    let lang = Lang::from_headers(&headers);
+    let (viewer, fs) = match require_admin_fs(&p, &jar, lang).await {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
+    let uri = Some(form.initiate_login_uri.trim().to_string()).filter(|u| !u.is_empty());
+
+    let (mut client, update_time) = match crate::dcr_store::load_client_with_version(fs, &client_id).await {
+        Ok(Some(x)) => x,
+        Ok(None) => return text(StatusCode::NOT_FOUND, lang, "[[Client not found]]"),
+        Err(e) => return server_error(lang, "client_set_initiate_login load", &e),
+    };
+    if let Some(u) = &uri {
+        if let Err(e) = crate::dcr::check_admin_post_logout_uris(std::slice::from_ref(u), &client.redirect_uris) {
+            let msg = match e {
+                crate::dcr::PostLogoutUriError::BadForm(uri) => localize(
+                    "[[A sign-in start address must use https and must not contain a fragment or user info: {uri}]]",
+                    lang,
+                )
+                .replace("{uri}", &uri),
+                crate::dcr::PostLogoutUriError::ForeignHost(host) => localize(
+                    "[[A sign-in start address must be on the host of a redirect_uri of this client: {host}]]",
+                    lang,
+                )
+                .replace("{host}", &host),
+            };
+            return (StatusCode::BAD_REQUEST, msg).into_response();
+        }
+    }
+    client.initiate_login_uri = uri.clone();
+    match crate::dcr_store::put_client_if_unchanged(fs, &client, &update_time).await {
+        Ok(true) => {
+            crate::audit_log::record(fs, &viewer, "set_initiate_login_uri", &client_id, uri.as_deref().unwrap_or("")).await;
+        }
+        Ok(false) => {
+            return text(
+                StatusCode::CONFLICT,
+                lang,
+                "[[This client was changed by another update. Reopen it and try again.]]",
+            )
+        }
+        Err(e) => return server_error(lang, "client_set_initiate_login", &e),
     }
     redirect(&p, &format!("/admin/clients/{client_id}"))
 }

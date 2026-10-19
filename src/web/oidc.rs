@@ -201,7 +201,10 @@ pub(super) async fn authorize(
             request_uri: par_request_uri,
         })
         .await;
-    Redirect::to(&p.path(&format!("/login/{uid}"))).into_response()
+    // client_id を URL に残す: 期限切れの後は interaction が掃除されて client を引けないが、
+    // ログイン画面はその client の入口（initiate_login_uri）へ送り直したい。
+    let q = serde_urlencoded::to_string([("client_id", &req.client.client_id)]).unwrap_or_default();
+    Redirect::to(&p.path(&format!("/login/{uid}?{q}"))).into_response()
 }
 
 pub(super) async fn authorize_resume(
@@ -937,6 +940,7 @@ fn registration_request_from_json(v: &serde_json::Value) -> crate::dcr::Registra
     crate::dcr::RegistrationRequest {
         redirect_uris: json_string_array(v, "redirect_uris"),
         post_logout_redirect_uris: json_string_array(v, "post_logout_redirect_uris"),
+        initiate_login_uri: v.get("initiate_login_uri").and_then(|x| x.as_str()).map(String::from),
         grant_types: json_string_array(v, "grant_types"),
         jwks: crate::dcr::jwks_from_jwk_set(v.get("jwks")),
         jwks_uri: v.get("jwks_uri").and_then(|x| x.as_str()).map(String::from),
@@ -964,6 +968,9 @@ fn register_response(c: &crate::model::Client, raw_client_secret: Option<&str>) 
         "post_logout_redirect_uris": c.post_logout_redirect_uris,
         "require_pushed_authorization_requests": c.require_par,
     });
+    if let Some(uri) = &c.initiate_login_uri {
+        resp["initiate_login_uri"] = serde_json::json!(uri);
+    }
     if let Some(uri) = &c.jwks_uri {
         resp["jwks_uri"] = serde_json::json!(uri);
     }
@@ -986,6 +993,7 @@ mod tests {
             client_id: "dcr-x".into(),
             redirect_uris: vec!["https://rp.example.com/cb".into()],
             post_logout_redirect_uris: uris.iter().map(|s| s.to_string()).collect(),
+            initiate_login_uri: None,
             token_endpoint_auth_method: "client_secret_basic".into(),
             client_secret: Some("hash".into()),
             grant_types: vec!["authorization_code".into()],
@@ -1032,6 +1040,19 @@ mod tests {
         assert_eq!(empty["post_logout_redirect_uris"], serde_json::json!([]));
     }
 
+    #[test]
+    fn initiate_login_uri_is_read_from_the_request_and_echoed() {
+        let req = registration_request_from_json(&serde_json::json!({
+            "redirect_uris": ["https://rp.example.com/cb"],
+            "initiate_login_uri": "https://rp.example.com/auth/login",
+        }));
+        assert_eq!(req.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
+        let mut c = client_with_post_logout(&[]);
+        assert!(register_response(&c, None).get("initiate_login_uri").is_none());
+        c.initiate_login_uri = req.initiate_login_uri;
+        assert_eq!(register_response(&c, None)["initiate_login_uri"], "https://rp.example.com/auth/login");
+    }
+
     /// discovery で発行する独自エンドポイント＝アプリ(fido2demo)が読むキー/パスの契約。
     /// route を改名したらここも一致させる（clean-cut 運用での divergence を検出する）。
     #[test]
@@ -1069,6 +1090,7 @@ mod tests {
             client_secret: None,
             grant_types: vec![],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![],
             jwks_uri: None,

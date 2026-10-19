@@ -156,6 +156,7 @@ mod tests {
             client_secret: None,
             grant_types: vec!["authorization_code".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: true,
             jwks: vec![JwkPub {
                 kid: "k1".into(),

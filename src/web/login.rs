@@ -4,11 +4,34 @@ use super::*;
 // 全候補を出して選ばせる。Conditional UI(autofill) は自動起動しない。
 // 理由: アプリ webview(ASWebAuthenticationSession)内では autofill が「最近使った1件」
 // だけを勝手に提示して紛らわしいため(TS 版も同方針)。userHandle でユーザー解決。
+#[derive(serde::Deserialize)]
+pub(super) struct LoginQuery {
+    client_id: Option<String>,
+}
+
+/// 期限切れなら、client に入口（initiate_login_uri）があればそこへ送り直し、
+/// 新しい state・nonce で RP にログインを始め直させる（OIDC Core §4）。古い authorize の
+/// 引数で作り直すと RP 側のセッションと state が合わず callback で弾かれる。
 pub(super) async fn login_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     Path(uid): Path<String>,
-) -> Html<String> {
+    Query(q): Query<LoginQuery>,
+) -> Response {
+    let lang = Lang::from_headers(&headers);
+    if p.store.get_interaction(&uid).await.is_none() {
+        let entry = match &q.client_id {
+            Some(id) => p.resolve_client(id).await.and_then(|c| c.initiate_login_uri),
+            None => None,
+        };
+        let Some(entry) = entry else {
+            return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang));
+        };
+        tracing::info!(event = "login_reinitiated", client_id = q.client_id.as_deref().unwrap_or(""));
+        let sep = if entry.contains('?') { '&' } else { '?' };
+        let iss = serde_urlencoded::to_string([("iss", &p.issuer)]).unwrap_or_default();
+        return Redirect::to(&format!("{entry}{sep}{iss}")).into_response();
+    }
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title>
 <style>
@@ -57,7 +80,7 @@ async function pkLogin(){
   cachedOpts=null;prefetch();
   const body={id:cred.id,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),authenticatorData:bufToB64(cred.response.authenticatorData),signature:bufToB64(cred.response.signature),userHandle:cred.response.userHandle?bufToB64(cred.response.userHandle):null}};
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){msgEl.textContent=await errorText(v);return;}
+  if(!v.ok){if(await v.clone().text()==='interaction not found'){location.reload();return;}msgEl.textContent=await errorText(v);return;}
   location.href=(await v.json()).redirect;
  }catch(e){
   if(e.name==='NotAllowedError'){
@@ -67,13 +90,14 @@ async function pkLogin(){
 }
 </script></body></html>"##;
     Html(
-        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), Lang::from_headers(&headers))
+        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), lang)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__OPT__", &p.path(&format!("/login/{uid}/passkey/options")))
             .replace("__VER__", &p.path(&format!("/login/{uid}/passkey/verify")))
             .replace("__CANCEL__", &p.path(&format!("/login/{uid}/cancel")))
             .replace("__REGISTER__", &p.path("/signup")),
     )
+    .into_response()
 }
 
 /// ログイン確定: interaction にアカウントを書き、SSO セッション cookie を張り、resume パスを返す。

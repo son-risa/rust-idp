@@ -239,6 +239,7 @@ mod tests {
             client_id: id.to_string(),
             redirect_uris: vec!["https://rp.example.com/cb".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             token_endpoint_auth_method: "private_key_jwt".into(),
             client_secret: None,
             grant_types: vec!["authorization_code".into()],
