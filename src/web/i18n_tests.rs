@@ -877,3 +877,23 @@ async fn protocol_errors_keep_their_status_and_english_text() {
         "This app is not registered. Please contact the app provider. (error code: invalid_client)"
     );
 }
+
+// 本番は /oidc の下に置くので、その構成でも未知のパスにブラウザの言語で応える。
+#[tokio::test]
+async fn unknown_path_under_the_base_path_is_answered_in_the_browser_language() {
+    let app = router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for (lang, expected) in [("en", "Page not found"), ("ja", "ページが見つかりません")]
+    {
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/oidc/nope"))
+            .header("accept-language", lang)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 404);
+        assert_eq!(resp.text().await.unwrap(), expected);
+    }
+}

@@ -175,6 +175,7 @@ pub fn router(provider: Provider) -> Router {
             .nest(&base_path, inner)
             .merge(fido)
             .merge(magic)
+            .fallback(log_unmatched)
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
     app.layer(axum::middleware::from_fn(request_trace))
