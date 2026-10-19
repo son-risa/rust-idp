@@ -338,7 +338,7 @@ async fn admin_mint_iat_flash_is_shown_once() {
     }))
     .unwrap();
     let mint_resp =
-        admin::iat_mint_submit(State(p.clone()), HeaderMap::new(), jar.clone(), Ok(Form(form))).await;
+        admin::iat_mint_submit(State(p.clone()), HeaderMap::new(), jar.clone(), Form(form)).await;
     assert!(
         mint_resp.status().is_redirection(),
         "mint成功後はリダイレクトすること: {}",

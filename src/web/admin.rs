@@ -33,8 +33,8 @@ async fn require_admin_fs<'p>(
 }
 
 /// 疎通確認用: 自分が管理者として認識されているかを返す。
-pub(super) async fn whoami(State(p): State<Arc<Provider>>, jar: CookieJar) -> Response {
-    match require_admin(&p, &jar, Lang::En).await {
+pub(super) async fn whoami(State(p): State<Arc<Provider>>, headers: HeaderMap, jar: CookieJar) -> Response {
+    match require_admin(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(account_id) => Json(serde_json::json!({ "account_id": account_id })).into_response(),
         Err(r) => r,
     }
@@ -657,12 +657,8 @@ pub(super) async fn client_set_post_logout(
     headers: HeaderMap,
     jar: CookieJar,
     Path(client_id): Path<String>,
-    form: Result<Form<PostLogoutForm>, FormRejection>,
+    Form(form): Form<PostLogoutForm>,
 ) -> Response {
-    let Form(form) = match form {
-        Ok(f) => f,
-        Err(e) => return bad_form(Lang::from_headers(&headers), e),
-    };
     let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
@@ -814,12 +810,8 @@ pub(super) async fn iat_revoke(
     headers: HeaderMap,
     jar: CookieJar,
     Path(hash): Path<String>,
-    form: Result<Form<IatRevokeForm>, FormRejection>,
+    Form(form): Form<IatRevokeForm>,
 ) -> Response {
-    let Form(form) = match form {
-        Ok(f) => f,
-        Err(e) => return bad_form(Lang::from_headers(&headers), e),
-    };
     let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
@@ -876,12 +868,8 @@ pub(super) async fn iat_mint_submit(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     jar: CookieJar,
-    form: Result<Form<IatMintForm>, FormRejection>,
+    Form(form): Form<IatMintForm>,
 ) -> Response {
-    let Form(form) = match form {
-        Ok(f) => f,
-        Err(e) => return bad_form(Lang::from_headers(&headers), e),
-    };
     let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,

@@ -6,7 +6,6 @@ use crate::context::{AddressedRequest, RawAuthRequest};
 use crate::error::OAuthError;
 use crate::model::{AuthParams, AuthorizationCode, Interaction, Session};
 use crate::provider::Provider;
-use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -179,7 +178,43 @@ pub fn router(provider: Provider) -> Router {
             .fallback(log_unmatched)
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
-    app.layer(axum::middleware::from_fn(request_trace))
+    app.layer(axum::middleware::from_fn(localize_rejections))
+        .layer(axum::middleware::from_fn(request_trace))
+}
+
+/// axum の Query・Path・Form の取り出しの失敗は英語の説明を text/plain の本文に入れて返すので、
+/// ブラウザの言語の文に差し替える。Content-Type 違いの 415 は RP の開発者向けなので英語のまま通す。
+async fn localize_rejections(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let lang = Lang::from_headers(req.headers());
+    let resp = next.run(req).await;
+    let is_plain = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/plain"));
+    if !resp.status().is_client_error() || !is_plain {
+        return resp;
+    }
+    let (parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(event = "rejection_body_unreadable", status = parts.status.as_u16(), "{e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
+    let detail = String::from_utf8_lossy(&bytes);
+    let msg = if detail.starts_with("Failed to deserialize form") {
+        "[[Some of the entered values are invalid. Please check them and try again.]]"
+    } else if detail.starts_with("Failed to deserialize query string") || detail.starts_with("Invalid URL") {
+        "[[The URL of this page is not valid. Please check the link and try again.]]"
+    } else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    // serde の説明は値を含みうるので、どの取り出しで落ちたかだけを残す。
+    let kind = detail.split(':').next().unwrap_or_default();
+    tracing::warn!(event = "request_rejected", status = parts.status.as_u16(), kind);
+    (parts.status, localize(msg, lang)).into_response()
 }
 
 /// リクエスト相関ミドルウェア（L4 Observability の Foundation 層）:
@@ -239,12 +274,6 @@ fn plain_error(msg: &str) -> Response {
     (StatusCode::BAD_REQUEST, msg.to_string()).into_response()
 }
 
-/// 画面のフォームの値が型に合わない（数値欄が空など）と axum は英語の説明を返すので、ブラウザの言語の文に差し替える。
-fn bad_form(lang: Lang, e: FormRejection) -> Response {
-    tracing::warn!(event = "form_rejected", "{e}");
-    plain_error(&localize("[[Some of the entered values are invalid. Please check them and try again.]]", lang))
-}
-
 /* ===== interaction (login) ===== */
 
 /// b64url <-> ArrayBuffer のブラウザ側ヘルパー（passkey ページ共通）。
@@ -273,9 +302,6 @@ const SERVER_ERRORS={
  'invalid name':'[[The name is too long or contains characters that cannot be used.]]',
  'name required':'[[Enter your name]]',
  'request not found':'[[This request was not found or has expired.]]',
- 'expired':'[[This request was not found or has expired.]]',
- 'invalid email':'[[Enter a valid email address.]]',
- 'rate limited':'[[Too many requests. Please try again later.]]',
  'no passkey':'[[No passkey is registered for this account.]]',
  'already handled':'[[This request has already been handled.]]',
  'no challenge':'[[Something went wrong. Please try again.]]',
