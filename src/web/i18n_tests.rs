@@ -575,6 +575,31 @@ async fn admin_messages_follow_the_browser_language() {
         },
     )
     .await;
+
+    let set_entry = |value: &'static str| {
+        let p = p.clone();
+        let jar = jar.clone();
+        move |h| async move {
+            let form = Form(serde_urlencoded::from_str(&format!("initiate_login_uri={value}")).unwrap());
+            admin::client_set_initiate_login(State(p), h, jar, Path("rp-1".into()), form).await
+        }
+    };
+    check_text("foreign sign-in start address", "同じホストにしてください: evil.example.net", |h| {
+        let f = set_entry("https%3A%2F%2Fevil.example.net%2Flogin");
+        async move {
+            let resp = f(h).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            body_of(resp).await
+        }
+    })
+    .await;
+    let resp = set_entry("+https%3A%2F%2Frp.example.com%2Fauth%2Flogin+")(accept(Some("ja"))).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let stored = crate::dcr_store::load_client(&fs, "rp-1").await.unwrap();
+    assert_eq!(stored.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
+    let resp = set_entry("")(accept(Some("ja"))).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(crate::dcr_store::load_client(&fs, "rp-1").await.unwrap().initiate_login_uri.is_none());
 }
 
 #[tokio::test]

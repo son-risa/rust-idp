@@ -347,7 +347,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Save return addresses", "戻り先を保存"),
     (
         "initiate_login_uri (where an expired sign-in is sent to start again; leave empty to show the expired message)",
-        "initiate_login_uri（期限切れのログインをここへ送り直す。空にすると期限切れの案内を出す）",
+        "initiate_login_uri（期限切れのログイン画面からここへ送り直す。空にすると期限切れの案内を出す）",
     ),
     ("Save sign-in start address", "ログインの入口を保存"),
     (

@@ -940,7 +940,7 @@ fn registration_request_from_json(v: &serde_json::Value) -> crate::dcr::Registra
     crate::dcr::RegistrationRequest {
         redirect_uris: json_string_array(v, "redirect_uris"),
         post_logout_redirect_uris: json_string_array(v, "post_logout_redirect_uris"),
-        initiate_login_uri: v.get("initiate_login_uri").and_then(|x| x.as_str()).map(String::from),
+        initiate_login_uri: v.get("initiate_login_uri").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(String::from),
         grant_types: json_string_array(v, "grant_types"),
         jwks: crate::dcr::jwks_from_jwk_set(v.get("jwks")),
         jwks_uri: v.get("jwks_uri").and_then(|x| x.as_str()).map(String::from),
@@ -1051,6 +1051,9 @@ mod tests {
         assert!(register_response(&c, None).get("initiate_login_uri").is_none());
         c.initiate_login_uri = req.initiate_login_uri;
         assert_eq!(register_response(&c, None)["initiate_login_uri"], "https://rp.example.com/auth/login");
+        // 空文字は省略と同じ（管理画面で空にすると外れるのと揃える）。
+        let empty = registration_request_from_json(&serde_json::json!({ "initiate_login_uri": "" }));
+        assert!(empty.initiate_login_uri.is_none());
     }
 
     /// discovery で発行する独自エンドポイント＝アプリ(fido2demo)が読むキー/パスの契約。
