@@ -61,7 +61,7 @@ fn esc(s: &str) -> String {
 
 fn nav(p: &Provider) -> String {
     format!(
-        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">[[IATs]]</a><a href="{audit}">[[Audit log]]</a><a href="{logout}">[[Log out]]</a></nav>"#,
+        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">[[IATs]]</a><a href="{audit}">[[Audit log]]</a><a href="{logout}">[[Sign out]]</a></nav>"#,
         home = p.path("/admin"),
         users = p.path("/admin/users"),
         clients = p.path("/admin/clients"),

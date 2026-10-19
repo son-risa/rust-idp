@@ -275,7 +275,7 @@ pub(super) async fn ciba_pending(
         None => {
             return Html(localize(
                 &format!(
-                    "<!doctype html><html lang=\"__LANG__\"><meta charset=\"utf-8\"><p>[[You need to log in to approve.]] <a href=\"{}\">[[Log in]]</a></p>",
+                    "<!doctype html><html lang=\"__LANG__\"><meta charset=\"utf-8\"><p>[[You need to sign in to approve.]] <a href=\"{}\">[[Sign in]]</a></p>",
                     p.path("/")
                 ),
                 lang,

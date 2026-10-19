@@ -111,9 +111,8 @@ fn translate(key: &str) -> Option<&'static str> {
 
 pub(crate) const CATALOG: &[(&str, &str)] = &[
     // login.rs / pages.rs
-    ("Log in", "ログイン"),
-    ("Sign in", "サインイン"),
-    ("Sign in with a passkey", "Passkey でサインイン"),
+    ("Sign in", "ログイン"),
+    ("Sign in with a passkey", "Passkey でログイン"),
     ("Email address (optional)", "メールアドレス（任意）"),
     ("Sign up with email", "メールアドレスで新規登録"),
     ("Cancel", "キャンセル"),
@@ -125,7 +124,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "Could not start the passkey. Open this page in the standard Safari or Chrome app (in-app browsers are not supported).",
         "passkey を起動できませんでした。標準の Safari / Chrome アプリで開いてください（アプリ内ブラウザでは使えません）。",
     ),
-    ("Signing in…", "サインイン処理中…"),
+    ("Signing in…", "ログイン処理中…"),
     ("Male", "男性"),
     ("Female", "女性"),
     ("Other", "その他"),
@@ -138,7 +137,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Time zone", "タイムゾーン"),
     ("Locale", "ロケール"),
     ("Edit", "編集"),
-    ("Log out", "ログアウト"),
+    ("Sign out", "ログアウト"),
     ("Token info (debug)", "トークン情報（デバッグ）"),
     ("Edit profile", "プロフィール編集"),
     ("Gender (male/female/other)", "性別（male/female/other）"),
@@ -149,7 +148,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Approve (passkey)", "承認（passkey）"),
     ("Reject", "拒否"),
     ("Error", "エラー"),
-    ("Your session has expired. Please sign in again.", "セッションが切れました。再度サインインしてください。"),
+    ("Your session has expired. Please sign in again.", "セッションが切れました。再度ログインしてください。"),
     // register.rs
     ("Sign up", "登録"),
     ("Create an account", "ユーザー登録"),
@@ -192,20 +191,19 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Create a passkey and sign up", "passkey を作成して登録"),
     ("Enter your name", "氏名を入力してください"),
     ("Working…", "処理中…"),
-    ("Registration complete. Taking you to sign in…", "登録が完了しました。サインインの画面へ移ります…"),
+    ("Registration complete. Taking you to sign in…", "登録が完了しました。ログイン画面へ移ります…"),
     ("Registration complete.", "登録が完了しました。"),
-    ("Go to log in", "ログインへ"),
     // mod.rs（passkey の API の失敗）
     ("This took too long. Please try again.", "時間が経ちすぎました。もう一度お試しください。"),
     ("This passkey is not registered.", "この passkey は登録されていません。"),
     ("The passkey could not be verified.", "passkey を確認できませんでした。"),
     ("This account is disabled.", "このアカウントは凍結されています。"),
     ("This account needs to be registered again.", "このアカウントは登録し直す必要があります。"),
-    ("This sign-in has expired. Please start again.", "このサインインは期限が切れました。最初からやり直してください。"),
+    ("This sign-in has expired. Please start again.", "ログインの有効期限が切れました。最初からやり直してください。"),
     ("This link has expired or has already been used.", "このリンクは期限が切れたか、既に使われています。"),
     (
         "This email address is already registered. Please sign in.",
-        "このメールアドレスは既に登録されています。サインインしてください。",
+        "このメールアドレスは既に登録されています。ログインしてください。",
     ),
     ("The passkey could not be created.", "passkey を作成できませんでした。"),
     (
@@ -218,10 +216,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Something went wrong. Please try again.", "問題が起きました。もう一度お試しください。"),
     ("The passkey was canceled or timed out.", "passkey の操作が取り消されたか、時間切れになりました。"),
     // oidc.rs
-    ("You have logged out", "ログアウトしました"),
-    ("Go to sign in", "サインインへ"),
+    ("You have signed out", "ログアウトしました"),
+    ("Go to sign in", "ログインへ"),
     // ciba.rs
-    ("You need to log in to approve.", "承認するにはログインが必要です。"),
+    ("You need to sign in to approve.", "承認するにはログインが必要です。"),
     ("CIBA approval", "CIBA 承認"),
     ("There are no pending requests.", "保留中の要求はありません。"),
     ("(no message)", "（メッセージなし）"),
@@ -271,7 +269,28 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "A return address must be on the host of a redirect_uri of this client: {host}",
         "戻り先は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
     ),
-    ("Sign-in was canceled.", "サインインを取り消しました。"),
+    (
+        "This app is not registered. Please contact the app provider. (error code: {code})",
+        "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
+    ),
+    (
+        "The request from the app could not be verified. Please start again from the app. (error code: {code})",
+        "アプリからの要求を確認できませんでした。アプリからやり直してください。（エラーコード: {code}）",
+    ),
+    (
+        "Something went wrong. Please try again. (error code: {code})",
+        "問題が起きました。もう一度お試しください。（エラーコード: {code}）",
+    ),
+    (
+        "The request from the app is invalid. Please contact the app provider. (error code: {code})",
+        "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
+    ),
+    (
+        "The return address after sign-out is not registered for this app. Please contact the app provider.",
+        "ログアウト後の戻り先がこのアプリに登録されていません。アプリの提供元にお問い合わせください。",
+    ),
+    ("Page not found", "ページが見つかりません"),
+    ("Sign-in was canceled.", "ログインをキャンセルしました。"),
     ("Failed to save. Please try again.", "保存に失敗しました。もう一度お試しください。"),
     ("IATs", "IAT"),
     ("Hash", "ハッシュ"),
@@ -280,7 +299,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("User not found", "ユーザーが見つかりません"),
     ("Client not found", "クライアントが見つかりません"),
     ("Choose a client profile", "プロファイルを選んでください"),
-    ("Please sign in.", "サインインしてください。"),
+    ("Please sign in.", "ログインしてください。"),
     ("Only admins can open this page.", "このページは管理者だけが開けます。"),
     ("The admin console is not available.", "管理コンソールは使えません。"),
     ("User", "ユーザー"),
@@ -304,7 +323,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("(none)", "（なし）"),
     (
         "(none — this client has no return address after sign-out)",
-        "（なし。このクライアントはサインアウト後の戻り先を持ちません）",
+        "（なし。このクライアントはログアウト後の戻り先を持ちません）",
     ),
     (
         "post_logout_redirect_uris (one per line; leave empty for no return address)",
@@ -365,7 +384,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("This email address", "このメールアドレス"),
     (
         "is already registered. Please sign in instead of signing up.",
-        "は既に登録されています。新規登録ではなくサインインをご利用ください。",
+        "は既に登録されています。新規登録ではなくログインをご利用ください。",
     ),
     // fcm.rs
     ("Sign-in approval", "ログインの承認"),
@@ -428,6 +447,21 @@ mod tests {
         assert_eq!(keys.len(), CATALOG.len(), "同じ鍵が二度ある");
     }
 
+    // 英語は sign in / sign out、日本語はログイン / ログアウトに揃える。
+    #[test]
+    fn sign_in_wording_is_consistent() {
+        for (en, ja) in CATALOG {
+            // post_logout_redirect_uris は仕様の項目名なので語としては数えない。
+            let text = en.to_lowercase().replace("post_logout_redirect_uri", "");
+            for bad in ["log in", "log-in", "login", "log out", "log-out", "logout", "logged", "logon"] {
+                assert!(!text.contains(bad), "英語に「{bad}」: {en}");
+            }
+            for bad in ["サインイン", "サインアウト"] {
+                assert!(!ja.contains(bad), "日本語に「{bad}」: {ja}");
+            }
+        }
+    }
+
     #[test]
     fn catalog_text_is_safe_everywhere() {
         for (en, ja) in CATALOG {
@@ -466,7 +500,7 @@ mod tests {
         );
         assert_eq!(
             localize(&t, Lang::Ja),
-            format!("<html lang=\"ja\">サインイン {OPEN}not a key{CLOSE} {OPEN}open")
+            format!("<html lang=\"ja\">ログイン {OPEN}not a key{CLOSE} {OPEN}open")
         );
         assert_eq!(
             bilingual(&format!("{OPEN}Sign-in approval{CLOSE}")),
@@ -479,7 +513,7 @@ mod tests {
         let t = format!("<td>{OPEN}</td><button>{OPEN}Sign in{CLOSE}</button>");
         assert_eq!(
             localize(&t, Lang::Ja),
-            format!("<td>{OPEN}</td><button>サインイン</button>")
+            format!("<td>{OPEN}</td><button>ログイン</button>")
         );
         assert_eq!(
             localize(&t, Lang::En),

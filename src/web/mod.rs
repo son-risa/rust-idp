@@ -228,9 +228,9 @@ pub(crate) fn pseudonymize_sub(sub: &str) -> String {
 }
 
 /// 未マッチのリクエストをログする（MDS3 等が叩く未実装パスの特定用）。
-async fn log_unmatched(method: axum::http::Method, uri: axum::http::Uri) -> impl IntoResponse {
+async fn log_unmatched(method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> impl IntoResponse {
     tracing::info!("UNMATCHED {} {}", method, uri);
-    (StatusCode::NOT_FOUND, "not found")
+    (StatusCode::NOT_FOUND, localize("[[Page not found]]", Lang::from_headers(&headers)))
 }
 
 fn plain_error(msg: &str) -> Response {

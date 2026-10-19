@@ -227,17 +227,17 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
 
 #[tokio::test]
 async fn sign_in_and_demo_pages_follow_the_browser_language() {
-    check_page("login", "Passkey でサインイン", |h| async move {
+    check_page("login", "Passkey でログイン", |h| async move {
         login::login_form(State(plain()), h, Path("uid-1".into()))
             .await
             .0
     })
     .await;
-    check_page("demo_start", "Passkey でサインイン", |h| async move {
+    check_page("demo_start", "Passkey でログイン", |h| async move {
         pages::demo_start(State(plain()), h).await.0
     })
     .await;
-    check_page("demo_callback", "サインイン処理中…", |h| async move {
+    check_page("demo_callback", "ログイン処理中…", |h| async move {
         pages::demo_callback(State(plain()), h).await.0
     })
     .await;
@@ -258,7 +258,7 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
         "{male:'男性'",
         "field('氏名',p.name)",
         "承認（passkey）",
-        "'セッションが切れました。再度サインインしてください。'",
+        "'セッションが切れました。再度ログインしてください。'",
     ] {
         assert!(html.contains(ja), "{ja}");
     }
@@ -408,7 +408,7 @@ async fn admin_pages_follow_the_browser_language() {
     for (id, ja) in [
         (
             "rp-1",
-            "（なし。このクライアントはサインアウト後の戻り先を持ちません）",
+            "（なし。このクライアントはログアウト後の戻り先を持ちません）",
         ),
         ("rp-2", "設定済み"),
     ] {
@@ -675,7 +675,7 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
 async fn sign_in_and_admin_refusals_follow_the_browser_language() {
     check_text(
         "admin without sign-in",
-        "サインインしてください。",
+        "ログインしてください。",
         |h| async move {
             body_of(admin::users_list(State(plain()), h, CookieJar::default()).await).await
         },
@@ -708,4 +708,172 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
         },
     )
     .await;
+}
+
+/// 英語は sign in / sign out、日本語はログイン / ログアウト。
+#[tokio::test]
+async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
+    for (lang, expected) in [
+        (
+            Some("en"),
+            [
+                "<title>Sign in</title>",
+                "Sign in with a passkey",
+                "You have signed out",
+                ">Sign out</a>",
+            ],
+        ),
+        (
+            Some("ja"),
+            [
+                "<title>ログイン</title>",
+                "Passkey でログイン",
+                "ログアウトしました",
+                ">ログアウト</a>",
+            ],
+        ),
+    ] {
+        let login = login::login_form(State(plain()), accept(lang), Path("uid-1".into()))
+            .await
+            .0;
+        let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
+        let logged_out = body_of(
+            oidc::end_session(State(plain()), accept(lang), CookieJar::default(), Query(q)).await,
+        )
+        .await;
+        let (p, _fs) = admin_world().await;
+        let jar = login_as(&p, "acc-me").await;
+        let admin = body_of(admin::users_list(State(p), accept(lang), jar).await).await;
+        let all = format!("{login}{logged_out}{admin}");
+        for e in expected {
+            assert!(all.contains(e), "[{lang:?}] 「{e}」が無い");
+        }
+        let lower = all.to_lowercase();
+        for bad in [
+            "log in",
+            "log out",
+            "logged",
+            ">login",
+            ">logout",
+            "サインイン",
+            "サインアウト",
+        ] {
+            assert!(!lower.contains(bad), "[{lang:?}] 「{bad}」が出ている");
+        }
+    }
+}
+
+#[tokio::test]
+async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
+    let authorize = |query: &'static str| {
+        move |h| async move {
+            body_of(
+                oidc::authorize(
+                    State(plain()),
+                    h,
+                    CookieJar::default(),
+                    RawQuery(Some(query.to_string())),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    check_text(
+        "authorize with an unknown client",
+        "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: invalid_client）",
+        authorize("client_id=nope&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code"),
+    )
+    .await;
+    check_text(
+        "authorize without a client",
+        "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: invalid_request）",
+        authorize("response_type=code"),
+    )
+    .await;
+    check_text(
+        "authorize with a pushed request when PAR is unavailable",
+        "問題が起きました。もう一度お試しください。（エラーコード: server_error）",
+        authorize("client_id=nope&request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz"),
+    )
+    .await;
+    check_text(
+        "authorize with an unknown pushed request",
+        "アプリからの要求を確認できませんでした。アプリからやり直してください。（エラーコード: invalid_request_uri）",
+        |h| async move {
+            let (p, _fs) = with_firestore().await;
+            body_of(
+                oidc::authorize(
+                    State(p),
+                    h,
+                    CookieJar::default(),
+                    RawQuery(Some("client_id=nope&request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz".to_string())),
+                )
+                .await,
+            )
+            .await
+        },
+    )
+    .await;
+    check_text(
+        "sign-out to an unregistered address",
+        "ログアウト後の戻り先がこのアプリに登録されていません。",
+        |h| async move {
+            let q: oidc::EndSessionQuery = serde_urlencoded::from_str(
+                "client_id=nope&post_logout_redirect_uri=https%3A%2F%2Fevil.example.net%2F",
+            )
+            .unwrap();
+            body_of(oidc::end_session(State(plain()), h, CookieJar::default(), Query(q)).await)
+                .await
+        },
+    )
+    .await;
+    check_text("unknown page", "ページが見つかりません", |h| async move {
+        body_of(
+            log_unmatched(axum::http::Method::GET, "/nope".parse().unwrap(), h)
+                .await
+                .into_response(),
+        )
+        .await
+    })
+    .await;
+}
+
+// 障害は 500、要求の不備は 400 で返し、en でも文そのものを固定する。
+#[tokio::test]
+async fn protocol_errors_keep_their_status_and_english_text() {
+    let call = |p: Arc<Provider>, query: &str| {
+        let mut h = HeaderMap::new();
+        h.insert(header::ACCEPT_LANGUAGE, "en".parse().unwrap());
+        oidc::authorize(
+            State(p),
+            h,
+            CookieJar::default(),
+            RawQuery(Some(query.to_string())),
+        )
+    };
+    let urn = "request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz";
+    let resp = call(plain(), urn).await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        body_of(resp).await,
+        "Something went wrong. Please try again. (error code: server_error)"
+    );
+    let (p, _fs) = with_firestore().await;
+    let resp = call(p, urn).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_of(resp).await,
+        "The request from the app could not be verified. Please start again from the app. (error code: invalid_request_uri)"
+    );
+    let resp = call(
+        plain(),
+        "client_id=nope&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_of(resp).await,
+        "This app is not registered. Please contact the app provider. (error code: invalid_client)"
+    );
 }

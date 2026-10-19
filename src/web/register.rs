@@ -239,7 +239,7 @@ async function reg(){
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   if(!v.ok){msg.textContent=await errorText(v);return;}
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
-  msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to log in]]</a>';
+  msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to sign in]]</a>';
  }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script></body></html>"##;
