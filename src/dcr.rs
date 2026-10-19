@@ -308,28 +308,28 @@ pub fn is_valid_post_logout_redirect_uri(uri: &str) -> bool {
 /// **その client 自身の redirect_uris のホスト集合**へ閉じる: 登録時に許可ホストの
 /// 検証を通った redirect のホストにしか戻せないので、admin 経由の口が DCR 経由より
 /// 広い戻り先を作れない（オープンリダイレクトの足場を増やさない）。
-/// Err はそのまま利用者へ見せる文言。
 pub fn check_admin_post_logout_uris(
     uris: &[String],
     client_redirect_uris: &[String],
-) -> Result<(), String> {
+) -> Result<(), PostLogoutUriError> {
     let allowed: Vec<&str> = client_redirect_uris.iter().filter_map(|u| https_host(u)).collect();
     for uri in uris {
         let host = match https_host(uri) {
             Some(h) => h,
-            None => {
-                return Err(format!(
-                    "post_logout_redirect_uri must use https and must not contain a fragment or userinfo: {uri}"
-                ))
-            }
+            None => return Err(PostLogoutUriError::BadForm(uri.clone())),
         };
         if !allowed.iter().any(|h| h.eq_ignore_ascii_case(host)) {
-            return Err(format!(
-                "post_logout_redirect_uri host must be the host of one of this client's redirect_uris: {host}"
-            ));
+            return Err(PostLogoutUriError::ForeignHost(host.to_string()));
         }
     }
     Ok(())
+}
+
+/// `check_admin_post_logout_uris` が拒んだ理由と、拒んだ URI またはホスト。
+#[derive(Debug, PartialEq)]
+pub enum PostLogoutUriError {
+    BadForm(String),
+    ForeignHost(String),
 }
 
 fn https_host(uri: &str) -> Option<&str> {
@@ -410,9 +410,10 @@ mod tests {
         )
         .is_ok());
         // 別ホストは不可（許可ホストの縛りが効かない穴を塞ぐ）。
-        let e = check_admin_post_logout_uris(&["https://evil.example.net/".to_string()], &redirects)
-            .unwrap_err();
-        assert!(e.contains("evil.example.net"), "{e}");
+        assert_eq!(
+            check_admin_post_logout_uris(&["https://evil.example.net/".to_string()], &redirects),
+            Err(PostLogoutUriError::ForeignHost("evil.example.net".into()))
+        );
         // 形の縛りは登録時と同じ。
         for bad in ["http://rp.example.com/", "https://rp.example.com/#x", "https://u@rp.example.com/"] {
             assert!(check_admin_post_logout_uris(&[bad.to_string()], &redirects).is_err(), "{bad}");

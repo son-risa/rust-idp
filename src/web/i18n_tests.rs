@@ -70,34 +70,15 @@ where
 
 /// 日本語の画面にそのまま出ても構わない英字の語。固有名と仕様の用語（値として出る none・openid・true・false と、
 /// 日本語化の前から使っている redirect host を含む）、
-/// client のプロファイル名（Public・Confidential Secret・Confidential Key）、
 /// それと管理画面のボタンに添えている操作名（「凍結（disable）」など、日本語化の前からの表記）。
 const JA_ALLOWED_WORDS: &[&str] = &[
-    "passkey",
-    "Passkey",
-    "IAT",
-    "client",
-    "CIBA",
-    "Web",
-    "iCloud",
-    "Keychain",
-    "scope",
-    "openid",
-    "none",
-    "Public",
-    "Confidential",
-    "Secret",
-    "Key",
-    "true",
-    "false",
-    "jwks",
-    "kids",
-    "redirect",
-    "host",
-    "delete",
-    "enable",
+    "passkey", "Passkey", "IAT", "ID", "client", "CIBA", "Web", "iCloud", "Keychain", "scope",
+    "openid", "none", "true", "false", "jwks", "kids", "redirect", "host", "delete", "enable",
     "disable",
 ];
+
+/// 句としてだけ許すもの（client のプロファイル名）。語に分ける前に取り除く。
+const JA_ALLOWED_PHRASES: &[&str] = &["Public（none）", "Confidential Secret", "Confidential Key"];
 
 /// 画面に見える文字（タグの外の文字と placeholder・title・aria-label）のうち、英字だけでできた語。
 /// メールアドレスや ID のように記号や数字を含む語はデータなので数えない。script と style の中は見ない。
@@ -125,6 +106,9 @@ fn english_words_shown(html: &str) -> Vec<String> {
         }
     }
     shown.push_str(rest);
+    for phrase in JA_ALLOWED_PHRASES {
+        shown = shown.replace(phrase, " ");
+    }
     shown
         .split(|c: char| c.is_whitespace() || !c.is_ascii())
         .map(|w| w.trim_matches(|c: char| ",.:;!?()（）\"'".contains(c)))
@@ -155,6 +139,11 @@ where
     assert!(
         text.contains(ja_text),
         "{name} [ja]: 「{ja_text}」が無い: {text}"
+    );
+    let english = english_words_shown(&text);
+    assert!(
+        english.is_empty(),
+        "{name} [ja] に訳されていない英語: {english:?}"
     );
 }
 
@@ -419,7 +408,7 @@ async fn admin_pages_follow_the_browser_language() {
     for (id, ja) in [
         (
             "rp-1",
-            "（なし。この client はサインアウト後の戻り先を持ちません）",
+            "（なし。このクライアントはサインアウト後の戻り先を持ちません）",
         ),
         ("rp-2", "設定済み"),
     ] {
@@ -549,28 +538,28 @@ async fn admin_messages_follow_the_browser_language() {
     crate::dcr_store::save_client(&fs, &client("rp-1"))
         .await
         .unwrap();
-    for lang in [None, Some("ja")] {
-        let form = Form(
-            serde_urlencoded::from_str(
-                "post_logout_redirect_uris=https%3A%2F%2Fevil.example.net%2F",
-            )
-            .unwrap(),
-        );
-        let resp = admin::client_set_post_logout(
-            State(p.clone()),
-            accept(lang),
-            jar.clone(),
-            Path("rp-1".into()),
-            form,
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let text = body_of(resp).await;
-        assert!(
-            !has_japanese(&text) && text.contains("evil.example.net"),
-            "OAuth の検証の文言は英語だけ: {text}"
-        );
-    }
+    check_text(
+        "foreign return address",
+        "同じホストにしてください: evil.example.net",
+        |h| {
+            let p = p.clone();
+            let jar = jar.clone();
+            async move {
+                let form = Form(
+                    serde_urlencoded::from_str(
+                        "post_logout_redirect_uris=https%3A%2F%2Fevil.example.net%2F",
+                    )
+                    .unwrap(),
+                );
+                let resp =
+                    admin::client_set_post_logout(State(p), h, jar, Path("rp-1".into()), form)
+                        .await;
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                body_of(resp).await
+            }
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -647,7 +636,7 @@ async fn the_admin_navigation_and_badges_follow_the_browser_language() {
         ">ユーザー</a>",
         ">監査ログ</a>",
         ">ログアウト</a>",
-        "<h1>ユーザー (4)</h1>",
+        "<h1>ユーザー（4）</h1>",
         "<th>メールアドレス</th>",
         ">凍結中</span>",
         ">有効</span>",

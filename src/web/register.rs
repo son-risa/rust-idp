@@ -454,7 +454,13 @@ pub(super) async fn invite_page(
     let lang = Lang::from_headers(&headers);
     let fs = match &p.firestore {
         Some(fs) => fs,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response()
+        }
     };
     let (email, return_to) = match crate::registration::peek_invite(fs, &q.t).await {
         Ok(Some(t)) => t,
@@ -471,7 +477,11 @@ pub(super) async fn invite_page(
         }
         Err(e) => {
             tracing::error!("peek_invite: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response();
         }
     };
     if matches!(crate::registration::account_exists(fs, &email).await, Ok(true)) {

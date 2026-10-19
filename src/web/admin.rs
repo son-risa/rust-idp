@@ -189,8 +189,8 @@ pub(super) async fn users_list(
         .collect();
 
     let body = format!(
-        "<h1>[[Users]] ({n})</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>sign_count</th><th>[[Registered]]</th></tr>{rows}</table>",
-        n = accounts.len(),
+        "<h1>{heading}</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>[[Signature counter]]</th><th>[[Registered]]</th></tr>{rows}</table>",
+        heading = localize("[[Users ({n})]]", Lang::from_headers(&headers)).replace("{n}", &accounts.len().to_string()),
     );
     page(&p, Lang::from_headers(&headers), "[[Users]]", &body).into_response()
 }
@@ -547,8 +547,8 @@ pub(super) async fn clients_list(
         })
         .collect();
     let body = format!(
-        "<h1>[[Clients]] ({n})</h1><table><tr><th>client_id</th><th>[[Auth method]]</th><th>grant_types</th></tr>{rows}</table>",
-        n = clients.len(),
+        "<h1>{heading}</h1><table><tr><th>[[Client ID]]</th><th>[[Auth method]]</th><th>[[Grant types]]</th></tr>{rows}</table>",
+        heading = localize("[[Clients ({n})]]", Lang::from_headers(&headers)).replace("{n}", &clients.len().to_string()),
     );
     page(&p, Lang::from_headers(&headers), "[[Clients]]", &body).into_response()
 }
@@ -675,7 +675,20 @@ pub(super) async fn client_set_post_logout(
         Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[Client not found]]"),
         Err(e) => return server_error(Lang::from_headers(&headers), "client_set_post_logout load", &e),
     };
-    if let Err(msg) = crate::dcr::check_admin_post_logout_uris(&uris, &client.redirect_uris) {
+    if let Err(e) = crate::dcr::check_admin_post_logout_uris(&uris, &client.redirect_uris) {
+        let lang = Lang::from_headers(&headers);
+        let msg = match e {
+            crate::dcr::PostLogoutUriError::BadForm(uri) => localize(
+                "[[A return address must use https and must not contain a fragment or user info: {uri}]]",
+                lang,
+            )
+            .replace("{uri}", &uri),
+            crate::dcr::PostLogoutUriError::ForeignHost(host) => localize(
+                "[[A return address must be on the host of a redirect_uri of this client: {host}]]",
+                lang,
+            )
+            .replace("{host}", &host),
+        };
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
     client.post_logout_redirect_uris = uris.clone();
@@ -748,7 +761,7 @@ pub(super) async fn iats_pending_list(
 <input type="hidden" name="update_time" value="{update_time}">
 <button class="btn btn-danger" type="submit">[[Discard]]</button></form></td></tr>"#,
                 hash = esc(&iat.hash[..iat.hash.len().min(16)]),
-                profile = profile_label(iat.constraints.profile),
+                profile = profile_display(iat.constraints.profile),
                 hosts = esc(&iat.constraints.allowed_redirect_hosts.join(", ")),
                 grants = esc(&iat.constraints.allowed_grant_types.join(", ")),
                 reusable = if iat.reusable { " <span class=\"badge\">[[Reusable]]</span>" } else { "" },
@@ -759,15 +772,24 @@ pub(super) async fn iats_pending_list(
         .collect();
 
     let body = format!(
-        r#"<h1>[[Unused IATs]] ({n})</h1><p><a class="btn" href="{mint_link}">+ [[New mint]]</a></p>
+        r#"<h1>{heading}</h1><p><a class="btn" href="{mint_link}">+ [[New mint]]</a></p>
 <table><tr><th>[[Hash]]</th><th>[[Client profile]]</th><th>[[Redirect hosts]]</th><th>[[Grant types]]</th><th>[[Status]]</th><th></th></tr>{rows}</table>"#,
-        n = iats.len(),
+        heading = localize("[[Unused IATs ({n})]]", Lang::from_headers(&headers)).replace("{n}", &iats.len().to_string()),
         mint_link = esc(&p.path("/admin/iats/new")),
     );
     page(&p, Lang::from_headers(&headers), "[[Unused IATs]]", &body).into_response()
 }
 
+/// 監査ログに残す識別子。画面に出すのは `profile_display`。
 fn profile_label(profile: crate::dcr::ClientProfile) -> &'static str {
+    match profile {
+        crate::dcr::ClientProfile::Public => "public",
+        crate::dcr::ClientProfile::ConfidentialSecret => "confidential-secret",
+        crate::dcr::ClientProfile::ConfidentialKey => "confidential-key",
+    }
+}
+
+fn profile_display(profile: crate::dcr::ClientProfile) -> &'static str {
     match profile {
         crate::dcr::ClientProfile::Public => "[[Public (none)]]",
         crate::dcr::ClientProfile::ConfidentialSecret => "[[Confidential Secret (client_secret_basic)]]",

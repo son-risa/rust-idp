@@ -115,7 +115,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Sign in", "サインイン"),
     ("Sign in with a passkey", "Passkey でサインイン"),
     ("Email address (optional)", "メールアドレス（任意）"),
-    ("Sign up with email", "新規登録 (メアドで)"),
+    ("Sign up with email", "メールアドレスで新規登録"),
     ("Cancel", "キャンセル"),
     (
         "This browser does not support passkeys. Open this page in the standard Safari or Chrome app.",
@@ -145,7 +145,6 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Birthday (YYYY-MM-DD)", "誕生日（YYYY-MM-DD）"),
     ("Save", "保存"),
     ("Your session has expired", "セッションが切れました"),
-    ("Failed to save", "保存に失敗しました"),
     ("Sign-in approval request", "ログイン承認の依頼"),
     ("Approve (passkey)", "承認（passkey）"),
     ("Reject", "拒否"),
@@ -259,6 +258,21 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Active", "有効"),
     ("Admin", "管理者"),
     ("Users", "ユーザー"),
+    ("Users ({n})", "ユーザー（{n}）"),
+    ("Clients ({n})", "クライアント（{n}）"),
+    ("Unused IATs ({n})", "未消費のIAT（{n}）"),
+    ("Signature counter", "署名カウンタ"),
+    ("Client ID", "クライアント ID"),
+    (
+        "A return address must use https and must not contain a fragment or user info: {uri}",
+        "戻り先は https で、フラグメントやユーザー情報を含まないものにしてください: {uri}",
+    ),
+    (
+        "A return address must be on the host of a redirect_uri of this client: {host}",
+        "戻り先は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
+    ),
+    ("Sign-in was canceled.", "サインインを取り消しました。"),
+    ("Failed to save. Please try again.", "保存に失敗しました。もう一度お試しください。"),
     ("IATs", "IAT"),
     ("Hash", "ハッシュ"),
     ("Redirect hosts", "redirect host"),
@@ -290,7 +304,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("(none)", "（なし）"),
     (
         "(none — this client has no return address after sign-out)",
-        "（なし。この client はサインアウト後の戻り先を持ちません）",
+        "（なし。このクライアントはサインアウト後の戻り先を持ちません）",
     ),
     (
         "post_logout_redirect_uris (one per line; leave empty for no return address)",
@@ -303,7 +317,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("None", "なし"),
     (
         "This client was changed by another update. Reopen it and try again.",
-        "この client は別の更新で変わりました。開き直してからやり直してください。",
+        "このクライアントは別の更新で変わりました。開き直してからやり直してください。",
     ),
     ("Unused IATs", "未消費のIAT"),
     ("New mint", "新規発行"),

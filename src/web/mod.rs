@@ -247,7 +247,7 @@ function bufToB64(buf){const a=new Uint8Array(buf);let s='';for(let i=0;i<a.leng
 
 /// passkey の API が返す失敗の文言を画面の言語に置き換える JS。API の応答はアプリも読むので
 /// 英語の固定文のまま変えず、ページの側で訳す。表に無い文言はそのまま出す。
-/// `passkeyErrorText` は passkey のダイアログの例外（取り消し・時間切れはブラウザの言語の文になる）を訳す。
+/// `passkeyErrorText` は passkey の操作中の例外を訳す（例外の文はブラウザの言語で出るので画面には出さない）。
 /// 印を含むので `localize` を通す前のテンプレートに差し込む。
 const SERVER_ERROR_JS: &str = r##"
 const SERVER_ERRORS={
@@ -279,7 +279,7 @@ const SERVER_ERRORS={
  'DPoP':'[[Your session has expired. Please sign in again.]]'
 };
 async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));return k?SERVER_ERRORS[k]:t;}
-function passkeyErrorText(e){return e&&e.name==='NotAllowedError'?'[[The passkey was canceled or timed out.]]':(e&&e.message)||String(e);}
+function passkeyErrorText(e){if(e&&e.name==='NotAllowedError')return '[[The passkey was canceled or timed out.]]';console.error(e);return '[[Something went wrong. Please try again.]]';}
 "##;
 
 #[derive(serde::Deserialize)]

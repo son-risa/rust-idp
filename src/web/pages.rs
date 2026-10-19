@@ -118,7 +118,7 @@ async function saveProfile(){
   const ath=await sha256u(t.access_token);
   const proof=await dpopProof('PUT',ISSUER+'/me/profile',ath);
   const r=await fetch(ISSUER+'/me/profile',{method:'PUT',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){fail('[[Failed to save]] ('+r.status+')');return;}
+  if(!r.ok){console.error('PUT /me/profile',r.status);fail('[[Failed to save. Please try again.]]');return;}
   const prof=await r.json();
   renderProfile(lastUi,prof,lastTok);
 }
@@ -226,6 +226,7 @@ async function doRefresh(){
 }
 (async()=>{
   const q=new URLSearchParams(location.search);
+  if(q.get('error')==='access_denied'){fail('[[Sign-in was canceled.]]');return;}
   if(q.get('error')){fail('[[Error]]: '+q.get('error')+' / '+(q.get('error_description')||''));return;}
   const code=q.get('code');
   if(code){
