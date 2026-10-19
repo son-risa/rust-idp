@@ -25,7 +25,7 @@ pub(super) async fn register_form(
         &format!(
             r#"<h1>[[Create an account]]</h1><p>[[We will send a confirmation link to your email address.]]</p>
 <form method="post" action="{action}">
-<input name="email" type="email" placeholder="email" autocomplete="email" autofocus>
+<input name="email" type="email" placeholder="[[Email address]]" autocomplete="email" autofocus>
 <button type="submit">[[Send confirmation email]]</button></form>"#
         ),
     )
@@ -88,10 +88,12 @@ pub(super) async fn register_submit(
             "<h1>[[Confirmation email sent]]</h1><p>[[Open the link in the email and create a passkey to finish signing up (the link expires in 15 minutes).]]</p>",
         )
         .into_response(),
-        Err(e) if e == "invalid email" => plain_error("invalid email"),
-        Err(e) if e == "rate_limited" => {
-            (StatusCode::TOO_MANY_REQUESTS, "rate limited; please retry later").into_response()
-        }
+        Err(e) if e == "invalid email" => plain_error(&localize("[[Enter a valid email address.]]", lang)),
+        Err(e) if e == "rate_limited" => (
+            StatusCode::TOO_MANY_REQUESTS,
+            localize("[[Too many requests. Please try again later.]]", lang),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("register_submit: {e}");
             plain_error("internal error")
@@ -203,6 +205,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <p id="msg"></p>
 <script>
 __WEBAUTHN_JS__
+__SERVER_ERROR_JS__
 const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
@@ -224,20 +227,20 @@ async function reg(){
  msg.textContent='[[Working…]]';
  try{
   const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:TOKEN})});
-  if(!r.ok){msg.textContent=await r.text();return;}
+  if(!r.ok){msg.textContent=await errorText(r);return;}
   const o=await r.json();
   const cred=await navigator.credentials.create({publicKey:{challenge:b64ToBuf(o.challenge),rp:o.rp,user:{id:b64ToBuf(o.user.id),name:o.user.name,displayName:o.user.displayName},pubKeyCredParams:o.pubKeyCredParams,authenticatorSelection:o.authenticatorSelection,attestation:o.attestation,timeout:o.timeout,excludeCredentials:(o.excludeCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id)}))}});
   const body={token:TOKEN,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),attestationObject:bufToB64(cred.response.attestationObject)}};
   if(nm)body.name=nm;
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){msg.textContent=await v.text();return;}
+  if(!v.ok){msg.textContent=await errorText(v);return;}
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
   msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to log in]]</a>';
  }catch(e){msg.textContent=e.message;}
 }
 </script></body></html>"##;
     Html(
-        localize(body, lang)
+        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), lang)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))

@@ -60,7 +60,7 @@ fn esc(s: &str) -> String {
 
 fn nav(p: &Provider) -> String {
     format!(
-        r#"<nav><a href="{home}">Admin</a><a href="{users}">Users</a><a href="{clients}">Clients</a><a href="{iats}">IATs</a><a href="{audit}">Audit</a><a href="{logout}">Sign out</a></nav>"#,
+        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">IATs</a><a href="{audit}">[[Audit log]]</a><a href="{logout}">[[Sign out]]</a></nav>"#,
         home = p.path("/admin"),
         users = p.path("/admin/users"),
         clients = p.path("/admin/clients"),
@@ -168,12 +168,12 @@ pub(super) async fn users_list(
         .iter()
         .map(|a| {
             let status = if a.disabled {
-                r#"<span class="badge badge-warn">disabled</span>"#
+                r#"<span class="badge badge-warn">[[Disabled]]</span>"#
             } else {
-                r#"<span class="badge badge-ok">active</span>"#
+                r#"<span class="badge badge-ok">[[Active]]</span>"#
             };
             let admin_badge = if admins.contains(&a.account_id) {
-                r#" <span class="badge badge-ok">admin</span>"#
+                r#" <span class="badge badge-ok">[[Admin]]</span>"#
             } else {
                 ""
             };
@@ -188,10 +188,10 @@ pub(super) async fn users_list(
         .collect();
 
     let body = format!(
-        "<h1>Users ({n})</h1><table><tr><th>Email</th><th>[[Status]]</th><th>sign_count</th><th>[[Registered]]</th></tr>{rows}</table>",
+        "<h1>[[Users]] ({n})</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>sign_count</th><th>[[Registered]]</th></tr>{rows}</table>",
         n = accounts.len(),
     );
-    page(&p, Lang::from_headers(&headers), "Users", &body).into_response()
+    page(&p, Lang::from_headers(&headers), "[[Users]]", &body).into_response()
 }
 
 pub(super) async fn user_detail(
@@ -315,7 +315,7 @@ pub(super) async fn user_detail(
     page(
         &p,
         Lang::from_headers(&headers),
-        &format!("User: {}", esc(&email)),
+        &format!("[[User]]: {}", esc(&email)),
         &body,
     )
     .into_response()
@@ -513,7 +513,7 @@ pub(super) async fn audit_list(
     let body = format!(
         "<h1>{heading}</h1><table><tr><th>[[Time]]</th><th>[[Actor]]</th><th>[[Action]]</th><th>[[Target]]</th><th>[[Details]]</th></tr>{rows}</table>",
     );
-    page(&p, lang, "Audit Log", &body).into_response()
+    page(&p, lang, "[[Audit log]]", &body).into_response()
 }
 
 /* ===== クライアント管理 ===== */
@@ -545,10 +545,10 @@ pub(super) async fn clients_list(
         })
         .collect();
     let body = format!(
-        "<h1>Clients ({n})</h1><table><tr><th>client_id</th><th>[[Auth method]]</th><th>grant_types</th></tr>{rows}</table>",
+        "<h1>[[Clients]] ({n})</h1><table><tr><th>client_id</th><th>[[Auth method]]</th><th>grant_types</th></tr>{rows}</table>",
         n = clients.len(),
     );
-    page(&p, Lang::from_headers(&headers), "Clients", &body).into_response()
+    page(&p, Lang::from_headers(&headers), "[[Clients]]", &body).into_response()
 }
 
 pub(super) async fn client_detail(
@@ -602,7 +602,7 @@ pub(super) async fn client_detail(
 <p>jwks_uri: {jwks_uri}</p>
 <p>jwks kids:</p><ul>{jwks}</ul>
 <p>require_par: {par} / require_pkce: {pkce} / dpop_bound: {dpop}</p>
-<form method="post" action="{revoke_action}" onsubmit="return confirm('[[Revoke this client? This cannot be undone.]]')"><button class="btn btn-danger" type="submit">Revoke</button></form>
+<form method="post" action="{revoke_action}" onsubmit="return confirm('[[Revoke this client? This cannot be undone.]]')"><button class="btn btn-danger" type="submit">[[Revoke]]</button></form>
 <p><a href="{back}">&larr; [[Back to the list]]</a></p>"#,
         id = esc(&c.client_id),
         auth = esc(&c.token_endpoint_auth_method),
@@ -628,7 +628,7 @@ pub(super) async fn client_detail(
     page(
         &p,
         Lang::from_headers(&headers),
-        &format!("Client: {}", esc(&c.client_id)),
+        &format!("[[Client]]: {}", esc(&c.client_id)),
         &body,
     )
     .into_response()
@@ -735,20 +735,20 @@ pub(super) async fn iats_pending_list(
         .map(|iat| {
             let expired = iat.expires_at < now_secs;
             let badge = if expired {
-                r#"<span class="badge badge-warn">expired</span>"#
+                r#"<span class="badge badge-warn">[[Expired]]</span>"#
             } else {
-                r#"<span class="badge badge-ok">pending</span>"#
+                r#"<span class="badge badge-ok">[[Unused]]</span>"#
             };
             format!(
                 r#"<tr><td><code>{hash}&hellip;</code></td><td>{profile}</td><td>{hosts}</td><td>{grants}</td><td>{badge}{reusable}</td>
 <td><form method="post" action="{revoke}" onsubmit="return confirm('[[Discard this IAT?]]')">
 <input type="hidden" name="update_time" value="{update_time}">
-<button class="btn btn-danger" type="submit">Revoke</button></form></td></tr>"#,
+<button class="btn btn-danger" type="submit">[[Discard]]</button></form></td></tr>"#,
                 hash = esc(&iat.hash[..iat.hash.len().min(16)]),
                 profile = profile_label(iat.constraints.profile),
                 hosts = esc(&iat.constraints.allowed_redirect_hosts.join(", ")),
                 grants = esc(&iat.constraints.allowed_grant_types.join(", ")),
-                reusable = if iat.reusable { " <span class=\"badge\">reusable</span>" } else { "" },
+                reusable = if iat.reusable { " <span class=\"badge\">[[Reusable]]</span>" } else { "" },
                 revoke = esc(&p.path(&format!("/admin/iats/{}/revoke", iat.hash))),
                 update_time = esc(&iat.update_time),
             )
@@ -761,7 +761,7 @@ pub(super) async fn iats_pending_list(
         n = iats.len(),
         mint_link = esc(&p.path("/admin/iats/new")),
     );
-    page(&p, Lang::from_headers(&headers), "Pending IATs", &body).into_response()
+    page(&p, Lang::from_headers(&headers), "[[Unused IATs]]", &body).into_response()
 }
 
 fn profile_label(profile: crate::dcr::ClientProfile) -> &'static str {
@@ -823,10 +823,10 @@ pub(super) async fn iat_mint_form(
 <input name="grant_types" placeholder="authorization_code, refresh_token">
 <label>[[Expires in (hours)]]</label>
 <input name="ttl_hours" type="number" value="24" min="1">
-<button class="btn" type="submit">Mint</button>
+<button class="btn" type="submit">[[Mint]]</button>
 </form>"#,
     );
-    page(&p, Lang::from_headers(&headers), "Mint IAT", &body).into_response()
+    page(&p, Lang::from_headers(&headers), "[[Mint a new IAT]]", &body).into_response()
 }
 
 #[derive(serde::Deserialize)]
