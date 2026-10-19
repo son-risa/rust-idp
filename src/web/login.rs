@@ -10,7 +10,7 @@ pub(super) async fn login_form(
     Path(uid): Path<String>,
 ) -> Html<String> {
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Log in]]</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title>
 <style>
 :root{--indigo:#3f51b5;--indigo-d:#303f9f}
 body{font-family:Roboto,-apple-system,'Helvetica Neue',sans-serif;max-width:360px;margin:0 auto;padding:56px 24px;color:#1a1a1a;text-align:center}

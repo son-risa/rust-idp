@@ -227,17 +227,17 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
 
 #[tokio::test]
 async fn sign_in_and_demo_pages_follow_the_browser_language() {
-    check_page("login", "Passkey でサインイン", |h| async move {
+    check_page("login", "Passkey でログイン", |h| async move {
         login::login_form(State(plain()), h, Path("uid-1".into()))
             .await
             .0
     })
     .await;
-    check_page("demo_start", "Passkey でサインイン", |h| async move {
+    check_page("demo_start", "Passkey でログイン", |h| async move {
         pages::demo_start(State(plain()), h).await.0
     })
     .await;
-    check_page("demo_callback", "サインイン処理中…", |h| async move {
+    check_page("demo_callback", "ログイン処理中…", |h| async move {
         pages::demo_callback(State(plain()), h).await.0
     })
     .await;
@@ -258,7 +258,7 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
         "{male:'男性'",
         "field('氏名',p.name)",
         "承認（passkey）",
-        "'セッションが切れました。再度サインインしてください。'",
+        "'セッションが切れました。再度ログインしてください。'",
     ] {
         assert!(html.contains(ja), "{ja}");
     }
@@ -408,7 +408,7 @@ async fn admin_pages_follow_the_browser_language() {
     for (id, ja) in [
         (
             "rp-1",
-            "（なし。このクライアントはサインアウト後の戻り先を持ちません）",
+            "（なし。このクライアントはログアウト後の戻り先を持ちません）",
         ),
         ("rp-2", "設定済み"),
     ] {
@@ -675,7 +675,7 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
 async fn sign_in_and_admin_refusals_follow_the_browser_language() {
     check_text(
         "admin without sign-in",
-        "サインインしてください。",
+        "ログインしてください。",
         |h| async move {
             body_of(admin::users_list(State(plain()), h, CookieJar::default()).await).await
         },

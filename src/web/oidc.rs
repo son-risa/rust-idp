@@ -619,10 +619,10 @@ pub(super) async fn end_session(
     let home = p.path("/");
     let html = format!(
         r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Log out]]</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
 <style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
 a{{color:#3f51b5}}</style></head><body>
-<h1 style="font-size:1.3rem;font-weight:500">[[You have logged out]]</h1>
+<h1 style="font-size:1.3rem;font-weight:500">[[You have signed out]]</h1>
 <p><a href="{home}">[[Go to sign in]]</a></p></body></html>"##
     );
     (jar, Html(localize(&html, Lang::from_headers(&headers)))).into_response()

@@ -89,7 +89,7 @@ function renderProfile(ui,prof,tok){
     +field('[[Gender]]',GENDER[p.gender]||p.gender)+field('[[Birthday]]',p.birthdate)
     +field('[[Time zone]]',p.zoneinfo)+field('[[Locale]]',p.locale)
     +'<button class="logout" style="color:var(--indigo);border-color:var(--indigo)" onclick="editProfile()">[[Edit]]</button>'
-    +'<button class="logout" onclick="logout()">[[Log out]]</button>'
+    +'<button class="logout" onclick="logout()">[[Sign out]]</button>'
     +'<details><summary>[[Token info (debug)]]</summary><pre>'+esc(JSON.stringify({token_type:tok.token_type,scope:tok.scope,userinfo:ui,profile:p},null,2))+'</pre></details>';
 }
 function inputRow(label,name,val){return '<div class="card"><div class="lbl">'+label+'</div><input id="f_'+name+'" value="'+esc(val||'')+'" style="width:100%;font-size:1.05rem;border:none;outline:none"></div>';}
