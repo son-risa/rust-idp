@@ -385,7 +385,7 @@ async fn admin_pages_follow_the_browser_language() {
             .await
     })
     .await;
-    for (expires_at, ja) in [(now() + 300, "IATを発行しました"), (1, "期限切れです")] {
+    for (expires_at, ja) in [(now() + 300, "IATを発行しました"), (1, "期限切れ")] {
         check_page("flash", ja, |h| async move {
             let flash = Uuid::new_v4().to_string();
             let doc = serde_json::json!({
@@ -564,4 +564,49 @@ fn mails_follow_the_browser_language_and_are_bilingual_without_one() {
         ),
         "今までの日本語と同じ並び"
     );
+}
+
+#[tokio::test]
+async fn the_admin_navigation_and_badges_follow_the_browser_language() {
+    let (p, _fs) = admin_world().await;
+    let jar = login_as(&p, "acc-me").await;
+    let html = body_of(admin::users_list(State(p), accept(Some("ja")), jar).await).await;
+    for ja in [
+        "<title>ユーザー</title>",
+        ">ユーザー</a>",
+        ">監査ログ</a>",
+        ">サインアウト</a>",
+        "<h1>ユーザー (4)</h1>",
+        "<th>メールアドレス</th>",
+        ">凍結中</span>",
+        ">有効</span>",
+        ">管理者</span>",
+    ] {
+        assert!(html.contains(ja), "「{ja}」が無い");
+    }
+}
+
+#[tokio::test]
+async fn passkey_pages_translate_the_api_failures_they_show() {
+    let login = |h| async move {
+        login::login_form(State(plain()), h, Path("uid-1".into()))
+            .await
+            .0
+    };
+    let en = login(accept(Some("en"))).await;
+    assert!(en.contains("'account disabled':'This account is disabled.'"));
+    assert!(en.contains("msgEl.textContent=await errorText(v)"));
+    let ja = login(accept(Some("ja"))).await;
+    assert!(ja.contains("'account disabled':'このアカウントは凍結されています。'"));
+
+    check_text(
+        "signup invalid email",
+        "正しいメールアドレスを入力してください。",
+        |h| async move {
+            let (p, _fs) = with_firestore().await;
+            let form = Form(serde_urlencoded::from_str("email=not-an-email").unwrap());
+            body_of(register::register_submit(State(p), h, form).await).await
+        },
+    )
+    .await;
 }

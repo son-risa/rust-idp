@@ -245,6 +245,30 @@ function b64ToBuf(b){b=b.replace(/-/g,'+').replace(/_/g,'/');while(b.length%4)b+
 function bufToB64(buf){const a=new Uint8Array(buf);let s='';for(let i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 "##;
 
+/// passkey の API が返す失敗の文言を画面の言語に置き換える JS。API の応答はアプリも読むので
+/// 英語の固定文のまま変えず、ページの側で訳す。表に無い文言はそのまま出す。
+/// 印を含むので `localize` を通す前のテンプレートに差し込む。
+const SERVER_ERROR_JS: &str = r##"
+const SERVER_ERRORS={
+ 'challenge invalid/expired':'[[This took too long. Please try again.]]',
+ 'cannot resolve user':'[[This passkey is not registered.]]',
+ 'credential not found':'[[This passkey is not registered.]]',
+ 'passkey verify failed':'[[The passkey could not be verified.]]',
+ 'account disabled':'[[This account is disabled.]]',
+ 'account needs re-registration':'[[This account needs to be registered again.]]',
+ 'interaction not found':'[[This sign-in has expired. Please start again.]]',
+ 'invalid or expired token':'[[This link has expired or has already been used.]]',
+ 'already registered':'[[This email address is already registered. Please sign in.]]',
+ 'registration failed':'[[The passkey could not be created.]]',
+ 'invalid name':'[[The name is too long or contains characters that cannot be used.]]',
+ 'name required':'[[Enter your name]]',
+ 'request not found':'[[This request was not found or has expired.]]',
+ 'no passkey':'[[No passkey is registered for this account.]]',
+ 'already handled':'[[This request has already been handled.]]'
+};
+async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));return k?SERVER_ERRORS[k]:t;}
+"##;
+
 #[derive(serde::Deserialize)]
 pub(super) struct AuthResponse {
     #[serde(rename = "clientDataJSON")]

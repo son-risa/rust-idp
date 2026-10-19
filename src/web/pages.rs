@@ -72,6 +72,7 @@ pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
 <div id="cibaBox"></div>
 <div id="out"><div class="center">[[Signing in…]]</div></div>
 <script>
+__SERVER_ERROR_JS__
 const ISSUER="__ISSUER__";
 const GENDER={male:'[[Male]]',female:'[[Female]]',other:'[[Other]]'};
 function esc(s){return String(s).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -147,7 +148,7 @@ async function fetchCibaPending(){
 function renderCiba(items){
   const box=document.getElementById('cibaBox');
   if(!items||!items.length){box.innerHTML='';return;}
-  box.innerHTML=items.map(it=>'<div class="card" style="border-color:var(--indigo)"><div class="lbl">[[Sign-in approval request]]</div><div class="val">'+esc(it.binding_message||'(no message)')+'</div><div style="color:#888;font-size:12px;margin-top:4px">from '+esc(it.client_id)+' / scope: '+esc(it.scope)+'</div><button class="logout" style="margin-top:10px;color:#fff;background:var(--indigo);border-color:var(--indigo)" onclick="approveCiba(\''+it.auth_req_id+'\')">[[Approve (passkey)]]</button><button class="logout" onclick="rejectCiba(\''+it.auth_req_id+'\')">[[Reject]]</button></div>').join('');
+  box.innerHTML=items.map(it=>'<div class="card" style="border-color:var(--indigo)"><div class="lbl">[[Sign-in approval request]]</div><div class="val">'+esc(it.binding_message||'[[(no message)]]')+'</div><div style="color:#888;font-size:12px;margin-top:4px">[[Requested by]] '+esc(it.client_id)+' / scope: '+esc(it.scope)+'</div><button class="logout" style="margin-top:10px;color:#fff;background:var(--indigo);border-color:var(--indigo)" onclick="approveCiba(\''+it.auth_req_id+'\')">[[Approve (passkey)]]</button><button class="logout" onclick="rejectCiba(\''+it.auth_req_id+'\')">[[Reject]]</button></div>').join('');
 }
 async function approveCiba(id){
   const t=getTokens();if(!t)return;cibaBusy=true;
@@ -155,14 +156,14 @@ async function approveCiba(id){
     let ath=await sha256u(t.access_token);
     let proof=await dpopProof('POST',ISSUER+'/ciba/'+id+'/passkey-options',ath);
     const r=await fetch(ISSUER+'/ciba/'+id+'/passkey-options',{method:'POST',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:'{}'});
-    if(!r.ok){alert(await r.text());cibaBusy=false;return;}
+    if(!r.ok){alert(await errorText(r));cibaBusy=false;return;}
     const o=await r.json();
     const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:'required',allowCredentials:(o.allowCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id),transports:c.transports}))}});
     const body={id:cred.id,response:{clientDataJSON:b64u(cred.response.clientDataJSON),authenticatorData:b64u(cred.response.authenticatorData),signature:b64u(cred.response.signature)}};
     ath=await sha256u(t.access_token);
     proof=await dpopProof('POST',ISSUER+'/ciba/'+id+'/approve',ath);
     const v=await fetch(ISSUER+'/ciba/'+id+'/approve',{method:'POST',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!v.ok){alert(await v.text());}
+    if(!v.ok){alert(await errorText(v));}
   }catch(e){alert(e.message);}
   cibaBusy=false;pollCiba();
 }
@@ -240,7 +241,7 @@ async function doRefresh(){
   fail('[[Your session has expired. Please sign in again.]]');
 })();
 </script></body></html>"##;
-    Html(localize(page, Lang::from_headers(&headers)).replace("__ISSUER__", &p.issuer))
+    Html(localize(&page.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), Lang::from_headers(&headers)).replace("__ISSUER__", &p.issuer))
 }
 
 #[cfg(test)]

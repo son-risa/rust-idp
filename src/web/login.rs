@@ -38,6 +38,7 @@ details input{font-size:14px;padding:8px;margin-top:8px}</style>
 <p id="msg"></p>
 <script>
 __WEBAUTHN_JS__
+__SERVER_ERROR_JS__
 const OPT="__OPT__",VER="__VER__";
 const msgEl=document.getElementById('msg');
 let cachedOpts=null;
@@ -51,12 +52,12 @@ async function pkLogin(){
  if(!window.PublicKeyCredential){msgEl.textContent='[[This browser does not support passkeys. Open this page in the standard Safari or Chrome app.]]';return;}
  try{
   let o=cachedOpts;
-  if(!o){const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!r.ok){msgEl.textContent=await r.text();return;}o=await r.json();}
+  if(!o){const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!r.ok){msgEl.textContent=await errorText(r);return;}o=await r.json();}
   const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:o.userVerification,allowCredentials:[]}});
   cachedOpts=null;prefetch();
   const body={id:cred.id,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),authenticatorData:bufToB64(cred.response.authenticatorData),signature:bufToB64(cred.response.signature),userHandle:cred.response.userHandle?bufToB64(cred.response.userHandle):null}};
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){msgEl.textContent=await v.text();return;}
+  if(!v.ok){msgEl.textContent=await errorText(v);return;}
   location.href=(await v.json()).redirect;
  }catch(e){
   if(e.name==='NotAllowedError'){
@@ -66,7 +67,7 @@ async function pkLogin(){
 }
 </script></body></html>"##;
     Html(
-        localize(body, Lang::from_headers(&headers))
+        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), Lang::from_headers(&headers))
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__OPT__", &p.path(&format!("/login/{uid}/passkey/options")))
             .replace("__VER__", &p.path(&format!("/login/{uid}/passkey/verify")))
