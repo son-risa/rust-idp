@@ -73,12 +73,8 @@ async fn issue_register_email(
 pub(super) async fn register_submit(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
-    form: Result<Form<RegisterForm>, FormRejection>,
+    Form(form): Form<RegisterForm>,
 ) -> Response {
-    let Form(form) = match form {
-        Ok(f) => f,
-        Err(e) => return bad_form(Lang::from_headers(&headers), e),
-    };
     let email = form.email.trim().to_lowercase();
     let fs = match &p.firestore {
         Some(fs) => fs,

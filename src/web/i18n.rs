@@ -295,7 +295,11 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ),
     (
         "Some of the entered values are invalid. Please check them and try again.",
-        "入力内容に正しくない値があります。確かめてもう一度お試しください。",
+        "入力内容に誤りがあります。確認してもう一度お試しください。",
+    ),
+    (
+        "This address is not valid. Please check the link and try again.",
+        "このアドレスは正しくありません。リンクを確認してもう一度お試しください。",
     ),
     (
         "Sign-in could not be completed. (error code: {code})",

@@ -284,7 +284,7 @@ async fn registration_pages_follow_the_browser_language() {
     check_page("signup sent", "確認メールを送信しました", |h| async move {
         let (p, _fs) = with_firestore().await;
         let form = Form(serde_urlencoded::from_str("email=new%40example.com").unwrap());
-        body_of(register::register_submit(State(p), h, Ok(form)).await).await
+        body_of(register::register_submit(State(p), h, form).await).await
     })
     .await;
     check_page(
@@ -519,7 +519,7 @@ async fn admin_messages_follow_the_browser_language() {
     let mint = |form: &'static str| {
         move |h: HeaderMap| async move {
             let form = Form(serde_urlencoded::from_str(form).unwrap());
-            body_of(admin::iat_mint_submit(State(p.clone()), h, jar.clone(), Ok(form)).await).await
+            body_of(admin::iat_mint_submit(State(p.clone()), h, jar.clone(), form).await).await
         }
     };
     check_text(
@@ -552,7 +552,7 @@ async fn admin_messages_follow_the_browser_language() {
                     .unwrap(),
                 );
                 let resp =
-                    admin::client_set_post_logout(State(p), h, jar, Path("rp-1".into()), Ok(form))
+                    admin::client_set_post_logout(State(p), h, jar, Path("rp-1".into()), form)
                         .await;
                 assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
                 body_of(resp).await
@@ -665,7 +665,7 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
         |h| async move {
             let (p, _fs) = with_firestore().await;
             let form = Form(serde_urlencoded::from_str("email=not-an-email").unwrap());
-            body_of(register::register_submit(State(p), h, Ok(form)).await).await
+            body_of(register::register_submit(State(p), h, form).await).await
         },
     )
     .await;
@@ -908,8 +908,45 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
     let link_en = "This link is incomplete. Please open the link in the email again.";
     let link_ja = "リンクが途中で切れています。メールのリンクを開き直してください。";
     let form_en = "Some of the entered values are invalid. Please check them and try again.";
-    let form_ja = "入力内容に正しくない値があります。確かめてもう一度お試しください。";
-    for (lang, link, form) in [("en", link_en, form_en), ("ja", link_ja, form_ja)] {
+    let form_ja = "入力内容に誤りがあります。確認してもう一度お試しください。";
+    let addr_en = "This address is not valid. Please check the link and try again.";
+    let addr_ja = "このアドレスは正しくありません。リンクを確認してもう一度お試しください。";
+    for (lang, link, form, bad_addr) in [
+        ("en", link_en, form_en, addr_en),
+        ("ja", link_ja, form_ja, addr_ja),
+    ] {
+        for path in [
+            "/r?t=a&t=b",
+            "/oidc/end-session?state=x&state=y",
+            "/oidc/login/%FF",
+        ] {
+            let resp = reqwest::Client::new()
+                .get(format!("http://{addr}{path}"))
+                .header("accept-language", lang)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 400, "{path}");
+            assert_eq!(resp.text().await.unwrap(), bad_addr, "{path}");
+        }
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/oidc/admin/whoami"))
+            .header("accept-language", lang)
+            .send()
+            .await
+            .unwrap();
+        let whoami = resp.text().await.unwrap();
+        assert_eq!(has_japanese(&whoami), lang == "ja", "{whoami}");
+        // 招待は token が無くても axum の英語の説明を出さない。ここは Firestore が無いので汎用の文になる。
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/oidc/invite"))
+            .header("accept-language", lang)
+            .send()
+            .await
+            .unwrap();
+        let invite = resp.text().await.unwrap();
+        assert!(!invite.contains("deserialize"), "{invite}");
+        assert_eq!(has_japanese(&invite), lang == "ja", "{invite}");
         for path in ["/r", "/oidc/signup/verify"] {
             let resp = reqwest::Client::new()
                 .get(format!("http://{addr}{path}"))
@@ -926,6 +963,8 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
                 "/oidc/admin/iats/new",
                 "profile=public&redirect_hosts=rp.example.com&ttl_hours=",
             ),
+            ("/oidc/admin/clients/rp-1/post-logout", ""),
+            ("/oidc/admin/iats/abc/revoke", ""),
         ] {
             let resp = reqwest::Client::new()
                 .post(format!("http://{addr}{path}"))
@@ -935,7 +974,8 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(resp.status().as_u16(), 400, "{path}");
+            // 項目の欠け（422）も値の形の誤り（400）も、axum の決めたステータスのまま返す。
+            assert!(matches!(resp.status().as_u16(), 400 | 422), "{path}");
             assert_eq!(resp.text().await.unwrap(), form, "{path}");
         }
     }
@@ -950,8 +990,8 @@ async fn scripts_do_not_show_english_details_from_the_server() {
     let ja = pages::demo_callback(State(plain()), accept(Some("ja")))
         .await
         .0;
-    assert!(en.contains("fail('Sign-in could not be completed. (error code: {code})'.replace('{code}',q.get('error')))"));
-    assert!(ja.contains("fail('ログインできませんでした。（エラーコード: {code}）'.replace('{code}',q.get('error')))"));
+    assert!(en.contains("fail('Sign-in could not be completed. (error code: {code})'.replace('{code}',()=>q.get('error')))"));
+    assert!(ja.contains("fail('ログインできませんでした。（エラーコード: {code}）'.replace('{code}',()=>q.get('error')))"));
     assert!(en.contains("console.error(t);return 'Something went wrong. Please try again.';"));
     assert!(ja.contains("console.error(t);return '問題が起きました。もう一度お試しください。';"));
     for html in [&en, &ja] {
