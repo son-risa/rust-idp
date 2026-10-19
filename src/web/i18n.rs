@@ -298,8 +298,8 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "入力内容に誤りがあります。確認してもう一度お試しください。",
     ),
     (
-        "This address is not valid. Please check the link and try again.",
-        "このアドレスは正しくありません。リンクを確認してもう一度お試しください。",
+        "The URL of this page is not valid. Please check the link and try again.",
+        "このページの URL が正しくありません。リンクを確認してもう一度お試しください。",
     ),
     (
         "Sign-in could not be completed. (error code: {code})",

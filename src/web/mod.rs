@@ -182,6 +182,41 @@ pub fn router(provider: Provider) -> Router {
         .layer(axum::middleware::from_fn(request_trace))
 }
 
+/// axum の Query・Path・Form の取り出しの失敗は英語の説明を text/plain の本文に入れて返すので、
+/// ブラウザの言語の文に差し替える。Content-Type 違いの 415 は RP の開発者向けなので英語のまま通す。
+async fn localize_rejections(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let lang = Lang::from_headers(req.headers());
+    let resp = next.run(req).await;
+    let is_plain = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/plain"));
+    if !resp.status().is_client_error() || !is_plain {
+        return resp;
+    }
+    let (parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(event = "rejection_body_unreadable", status = parts.status.as_u16(), "{e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
+    let detail = String::from_utf8_lossy(&bytes);
+    let msg = if detail.starts_with("Failed to deserialize form") {
+        "[[Some of the entered values are invalid. Please check them and try again.]]"
+    } else if detail.starts_with("Failed to deserialize query string") || detail.starts_with("Invalid URL") {
+        "[[The URL of this page is not valid. Please check the link and try again.]]"
+    } else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    // serde の説明は値を含みうるので、どの取り出しで落ちたかだけを残す。
+    let kind = detail.split(':').next().unwrap_or_default();
+    tracing::warn!(event = "request_rejected", status = parts.status.as_u16(), kind);
+    (parts.status, localize(msg, lang)).into_response()
+}
+
 /// リクエスト相関ミドルウェア（L4 Observability の Foundation 層）:
 /// request_id を採番（または健全な inbound `X-Request-Id` を踏襲）し、span でハンドラを囲んで
 /// 既存のドメインログ（`event=token_issued` 等）に request_id を継承させる。応答後に
@@ -189,29 +224,6 @@ pub fn router(provider: Provider) -> Router {
 ///
 /// 秘密はログに出さない: **query を含めず path のみ**（query には code 等が乗りうる）、
 /// ヘッダ・ボディ・Authorization・DPoP proof・トークン類は一切記録しない。
-async fn localize_rejections(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    let lang = Lang::from_headers(req.headers());
-    let resp = next.run(req).await;
-    if !resp.status().is_client_error() {
-        return resp;
-    }
-    let (parts, body) = resp.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, 64 * 1024).await else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
-    };
-    let detail = String::from_utf8_lossy(&bytes);
-    // axum の Query・Path・Form の取り出しの失敗は英語の説明を本文に入れて返すので、ブラウザの言語の文に差し替える。
-    let msg = if detail.starts_with("Failed to deserialize form") || detail.starts_with("Form requests must have") {
-        "[[Some of the entered values are invalid. Please check them and try again.]]"
-    } else if detail.starts_with("Failed to deserialize query string") || detail.starts_with("Invalid URL") {
-        "[[This address is not valid. Please check the link and try again.]]"
-    } else {
-        return Response::from_parts(parts, axum::body::Body::from(bytes));
-    };
-    tracing::warn!(event = "request_rejected", status = parts.status.as_u16(), "{detail}");
-    (parts.status, localize(msg, lang)).into_response()
-}
-
 async fn request_trace(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string(); // query は付けない（秘密が乗りうる）

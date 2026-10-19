@@ -909,8 +909,8 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
     let link_ja = "リンクが途中で切れています。メールのリンクを開き直してください。";
     let form_en = "Some of the entered values are invalid. Please check them and try again.";
     let form_ja = "入力内容に誤りがあります。確認してもう一度お試しください。";
-    let addr_en = "This address is not valid. Please check the link and try again.";
-    let addr_ja = "このアドレスは正しくありません。リンクを確認してもう一度お試しください。";
+    let addr_en = "The URL of this page is not valid. Please check the link and try again.";
+    let addr_ja = "このページの URL が正しくありません。リンクを確認してもう一度お試しください。";
     for (lang, link, form, bad_addr) in [
         ("en", link_en, form_en, addr_en),
         ("ja", link_ja, form_ja, addr_ja),
@@ -957,14 +957,16 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
             assert_eq!(resp.status().as_u16(), 400, "{path}");
             assert_eq!(resp.text().await.unwrap(), link, "{path}");
         }
-        for (path, body) in [
-            ("/oidc/signup", ""),
+        // ステータスは axum の決めた 422 のまま返す。
+        for (path, body, status) in [
+            ("/oidc/signup", "", 422),
             (
                 "/oidc/admin/iats/new",
                 "profile=public&redirect_hosts=rp.example.com&ttl_hours=",
+                422,
             ),
-            ("/oidc/admin/clients/rp-1/post-logout", ""),
-            ("/oidc/admin/iats/abc/revoke", ""),
+            ("/oidc/admin/clients/rp-1/post-logout", "", 422),
+            ("/oidc/admin/iats/abc/revoke", "", 422),
         ] {
             let resp = reqwest::Client::new()
                 .post(format!("http://{addr}{path}"))
@@ -974,8 +976,7 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
                 .send()
                 .await
                 .unwrap();
-            // 項目の欠け（422）も値の形の誤り（400）も、axum の決めたステータスのまま返す。
-            assert!(matches!(resp.status().as_u16(), 400 | 422), "{path}");
+            assert_eq!(resp.status().as_u16(), status, "{path}");
             assert_eq!(resp.text().await.unwrap(), form, "{path}");
         }
     }
@@ -998,4 +999,51 @@ async fn scripts_do_not_show_english_details_from_the_server() {
         assert!(!html.contains("SERVER_ERRORS[k]:t"));
         assert!(!html.contains("+(q.get('error_description')"));
     }
+}
+
+// 差し替えるのは axum の取り出しの失敗だけで、自前の 4xx と RP 向けの応答は本文もヘッダもそのまま通す。
+#[tokio::test]
+async fn own_errors_and_rp_facing_rejections_pass_through_unchanged() {
+    let app = router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("http://{addr}/oidc/token"))
+        .header("accept-language", "ja")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body("grant_type=bogus")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    assert_eq!(resp.headers()["content-type"], "application/json");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"].is_string(), "{body}");
+
+    let resp = client
+        .post(format!("http://{addr}/oidc/token"))
+        .header("accept-language", "ja")
+        .header("content-type", "text/plain")
+        .body("grant_type=bogus")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 415);
+    assert!(resp
+        .text()
+        .await
+        .unwrap()
+        .starts_with("Form requests must have"));
+
+    let resp = client
+        .get(format!("http://{addr}/oidc/admin/users"))
+        .header("accept-language", "ja")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
+    assert_eq!(resp.text().await.unwrap(), "ログインしてください。");
 }
