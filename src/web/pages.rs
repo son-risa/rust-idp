@@ -227,7 +227,7 @@ async function doRefresh(){
 (async()=>{
   const q=new URLSearchParams(location.search);
   if(q.get('error')==='access_denied'){fail('[[Sign-in was canceled.]]');return;}
-  if(q.get('error')){fail('[[Error]]: '+q.get('error')+' / '+(q.get('error_description')||''));return;}
+  if(q.get('error')){console.error(q.get('error_description'));fail('[[Sign-in could not be completed. (error code: {code})]]'.replace('{code}',q.get('error')));return;}
   const code=q.get('code');
   if(code){
     const verifier=sessionStorage.getItem('pkce_verifier');

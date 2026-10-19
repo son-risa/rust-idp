@@ -147,7 +147,6 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Sign-in approval request", "ログイン承認の依頼"),
     ("Approve (passkey)", "承認（passkey）"),
     ("Reject", "拒否"),
-    ("Error", "エラー"),
     ("Your session has expired. Please sign in again.", "セッションが切れました。再度ログインしてください。"),
     // register.rs
     ("Sign up", "登録"),
@@ -290,6 +289,18 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "ログアウト後の戻り先がこのアプリに登録されていません。アプリの提供元にお問い合わせください。",
     ),
     ("Page not found", "ページが見つかりません"),
+    (
+        "This link is incomplete. Please open the link in the email again.",
+        "リンクが途中で切れています。メールのリンクを開き直してください。",
+    ),
+    (
+        "Some of the entered values are invalid. Please check them and try again.",
+        "入力内容に正しくない値があります。確かめてもう一度お試しください。",
+    ),
+    (
+        "Sign-in could not be completed. (error code: {code})",
+        "ログインできませんでした。（エラーコード: {code}）",
+    ),
     ("Sign-in was canceled.", "ログインをキャンセルしました。"),
     ("Failed to save. Please try again.", "保存に失敗しました。もう一度お試しください。"),
     ("IATs", "IAT"),

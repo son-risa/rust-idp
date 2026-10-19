@@ -73,8 +73,12 @@ async fn issue_register_email(
 pub(super) async fn register_submit(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
-    Form(form): Form<RegisterForm>,
+    form: Result<Form<RegisterForm>, FormRejection>,
 ) -> Response {
+    let Form(form) = match form {
+        Ok(f) => f,
+        Err(e) => return bad_form(Lang::from_headers(&headers), e),
+    };
     let email = form.email.trim().to_lowercase();
     let fs = match &p.firestore {
         Some(fs) => fs,
@@ -262,6 +266,7 @@ fn js_string_literal(s: &str) -> String {
 /// メールリンク /r?t= の着地。iPhone は AASA でアプリ起動、PC/Mac はブラウザ登録。
 #[derive(serde::Deserialize)]
 pub(super) struct MagicQuery {
+    #[serde(default)]
     t: String,
 }
 
@@ -269,8 +274,8 @@ pub(super) async fn magic_redirect(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     Query(q): Query<MagicQuery>,
-) -> Html<String> {
-    passkey_register_page(&p, Lang::from_headers(&headers), &q.t, None)
+) -> Response {
+    link_landing(&p, Lang::from_headers(&headers), &q.t)
 }
 
 /// oidc.sonrisa.co.jp は Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
@@ -285,6 +290,7 @@ pub(super) async fn apple_app_site_association() -> Response {
 
 #[derive(serde::Deserialize)]
 pub(super) struct VerifyQuery {
+    #[serde(default)]
     token: String,
 }
 
@@ -293,8 +299,16 @@ pub(super) async fn verify_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     Query(q): Query<VerifyQuery>,
-) -> Html<String> {
-    passkey_register_page(&p, Lang::from_headers(&headers), &q.token, None)
+) -> Response {
+    link_landing(&p, Lang::from_headers(&headers), &q.token)
+}
+
+/// メールのリンクが途中で切れて token が無いときは、登録画面を出さずにその旨を伝える。
+fn link_landing(p: &Provider, lang: Lang, token: &str) -> Response {
+    if token.is_empty() {
+        return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
+    }
+    passkey_register_page(p, lang, token, None).into_response()
 }
 
 /* ===== 招待（RP が発行を頼む、確認メール不要の登録リンク） ===== */
