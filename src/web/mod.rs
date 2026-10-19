@@ -6,6 +6,7 @@ use crate::context::{AddressedRequest, RawAuthRequest};
 use crate::error::OAuthError;
 use crate::model::{AuthParams, AuthorizationCode, Interaction, Session};
 use crate::provider::Provider;
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -238,6 +239,12 @@ fn plain_error(msg: &str) -> Response {
     (StatusCode::BAD_REQUEST, msg.to_string()).into_response()
 }
 
+/// 画面のフォームの値が型に合わない（数値欄が空など）と axum は英語の説明を返すので、ブラウザの言語の文に差し替える。
+fn bad_form(lang: Lang, e: FormRejection) -> Response {
+    tracing::warn!(event = "form_rejected", "{e}");
+    plain_error(&localize("[[Some of the entered values are invalid. Please check them and try again.]]", lang))
+}
+
 /* ===== interaction (login) ===== */
 
 /// b64url <-> ArrayBuffer のブラウザ側ヘルパー（passkey ページ共通）。
@@ -266,6 +273,9 @@ const SERVER_ERRORS={
  'invalid name':'[[The name is too long or contains characters that cannot be used.]]',
  'name required':'[[Enter your name]]',
  'request not found':'[[This request was not found or has expired.]]',
+ 'expired':'[[This request was not found or has expired.]]',
+ 'invalid email':'[[Enter a valid email address.]]',
+ 'rate limited':'[[Too many requests. Please try again later.]]',
  'no passkey':'[[No passkey is registered for this account.]]',
  'already handled':'[[This request has already been handled.]]',
  'no challenge':'[[Something went wrong. Please try again.]]',
@@ -279,7 +289,7 @@ const SERVER_ERRORS={
  'DPoP jkt mismatch':'[[Your session has expired. Please sign in again.]]',
  'DPoP':'[[Your session has expired. Please sign in again.]]'
 };
-async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));return k?SERVER_ERRORS[k]:t;}
+async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));if(k)return SERVER_ERRORS[k];console.error(t);return '[[Something went wrong. Please try again.]]';}
 function passkeyErrorText(e){if(e&&e.name==='NotAllowedError')return '[[The passkey was canceled or timed out.]]';console.error(e);return '[[Something went wrong. Please try again.]]';}
 "##;
 

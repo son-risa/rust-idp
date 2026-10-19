@@ -657,8 +657,12 @@ pub(super) async fn client_set_post_logout(
     headers: HeaderMap,
     jar: CookieJar,
     Path(client_id): Path<String>,
-    Form(form): Form<PostLogoutForm>,
+    form: Result<Form<PostLogoutForm>, FormRejection>,
 ) -> Response {
+    let Form(form) = match form {
+        Ok(f) => f,
+        Err(e) => return bad_form(Lang::from_headers(&headers), e),
+    };
     let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
@@ -810,8 +814,12 @@ pub(super) async fn iat_revoke(
     headers: HeaderMap,
     jar: CookieJar,
     Path(hash): Path<String>,
-    Form(form): Form<IatRevokeForm>,
+    form: Result<Form<IatRevokeForm>, FormRejection>,
 ) -> Response {
+    let Form(form) = match form {
+        Ok(f) => f,
+        Err(e) => return bad_form(Lang::from_headers(&headers), e),
+    };
     let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
@@ -868,8 +876,12 @@ pub(super) async fn iat_mint_submit(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     jar: CookieJar,
-    Form(form): Form<IatMintForm>,
+    form: Result<Form<IatMintForm>, FormRejection>,
 ) -> Response {
+    let Form(form) = match form {
+        Ok(f) => f,
+        Err(e) => return bad_form(Lang::from_headers(&headers), e),
+    };
     let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
