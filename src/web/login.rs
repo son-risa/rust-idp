@@ -62,7 +62,7 @@ async function pkLogin(){
  }catch(e){
   if(e.name==='NotAllowedError'){
    msgEl.textContent='[[Could not start the passkey. Open this page in the standard Safari or Chrome app (in-app browsers are not supported).]]';
-  }else{msgEl.textContent=(e.name||'')+': '+(e.message||String(e));}
+  }else{msgEl.textContent=passkeyErrorText(e);}
  }
 }
 </script></body></html>"##;

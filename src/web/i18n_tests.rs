@@ -61,6 +61,61 @@ where
         "{name} [ja]: 「{ja_heading}」が無い"
     );
     assert!(!html.contains("[["), "{name} [ja]: 訳されずに残った印");
+    let english = english_words_shown(&html);
+    assert!(
+        english.is_empty(),
+        "{name} [ja] に訳されていない英語: {english:?}"
+    );
+}
+
+/// 日本語の画面にそのまま出ても構わない英字の語。固有名と仕様の用語（値として出る none・openid・true・false と、
+/// 日本語化の前から使っている redirect host を含む）、
+/// それと管理画面のボタンに添えている操作名（「凍結（disable）」など、日本語化の前からの表記）。
+const JA_ALLOWED_WORDS: &[&str] = &[
+    "passkey", "Passkey", "IAT", "ID", "client", "CIBA", "Web", "iCloud", "Keychain", "scope",
+    "openid", "none", "true", "false", "jwks", "kids", "redirect", "host", "delete", "enable",
+    "disable",
+];
+
+/// 句としてだけ許すもの（client のプロファイル名）。語に分ける前に取り除く。
+const JA_ALLOWED_PHRASES: &[&str] = &["Public（none）", "Confidential Secret", "Confidential Key"];
+
+/// 画面に見える文字（タグの外の文字と placeholder・title・aria-label）のうち、英字だけでできた語。
+/// メールアドレスや ID のように記号や数字を含む語はデータなので数えない。script と style の中は見ない。
+fn english_words_shown(html: &str) -> Vec<String> {
+    let mut shown = String::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        shown.push_str(&rest[..lt]);
+        shown.push(' ');
+        let tag_end = rest[lt..].find('>').map_or(rest.len(), |i| lt + i + 1);
+        let tag = &rest[lt..tag_end];
+        for attr in ["placeholder=\"", "title=\"", "aria-label=\""] {
+            if let Some(i) = tag.find(attr) {
+                let v = &tag[i + attr.len()..];
+                shown.push_str(&v[..v.find('"').unwrap_or(v.len())]);
+                shown.push(' ');
+            }
+        }
+        rest = &rest[tag_end..];
+        for raw in ["script", "style"] {
+            if tag.starts_with(&format!("<{raw}")) {
+                let close = format!("</{raw}>");
+                rest = rest.find(&close).map_or("", |i| &rest[i + close.len()..]);
+            }
+        }
+    }
+    shown.push_str(rest);
+    for phrase in JA_ALLOWED_PHRASES {
+        shown = shown.replace(phrase, " ");
+    }
+    shown
+        .split(|c: char| c.is_whitespace() || !c.is_ascii())
+        .map(|w| w.trim_matches(|c: char| ",.:;!?()（）\"'".contains(c)))
+        .filter(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphabetic()))
+        .filter(|w| !JA_ALLOWED_WORDS.contains(w))
+        .map(str::to_string)
+        .collect()
 }
 
 /// ブラウザにそのまま出る素の文言。
@@ -84,6 +139,11 @@ where
     assert!(
         text.contains(ja_text),
         "{name} [ja]: 「{ja_text}」が無い: {text}"
+    );
+    let english = english_words_shown(&text);
+    assert!(
+        english.is_empty(),
+        "{name} [ja] に訳されていない英語: {english:?}"
     );
 }
 
@@ -197,7 +257,7 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
         "'<h1>プロフィール</h1>",
         "{male:'男性'",
         "field('氏名',p.name)",
-        "承認 (passkey)",
+        "承認（passkey）",
         "'セッションが切れました。再度サインインしてください。'",
     ] {
         assert!(html.contains(ja), "{ja}");
@@ -286,10 +346,10 @@ async fn the_ciba_approval_page_follows_the_browser_language() {
         },
     )
     .await;
-    check_page("ciba (one pending)", "承認 (passkey)", |h| async move {
+    check_page("ciba (one pending)", "承認（passkey）", |h| async move {
         let p = plain();
         p.ciba
-            .create("client-1", "acc-1", "openid", "Pay 100", None)
+            .create("client-1", "acc-1", "openid", "order-100", None)
             .await
             .unwrap();
         let jar = login_as(&p, "acc-1").await;
@@ -348,7 +408,7 @@ async fn admin_pages_follow_the_browser_language() {
     for (id, ja) in [
         (
             "rp-1",
-            "(なし — この client はサインアウト後の戻り先を持ちません)",
+            "（なし。このクライアントはサインアウト後の戻り先を持ちません）",
         ),
         ("rp-2", "設定済み"),
     ] {
@@ -376,7 +436,7 @@ async fn admin_pages_follow_the_browser_language() {
         body_of(admin::iats_pending_list(State(p.clone()), h, jar.clone()).await).await
     })
     .await;
-    check_page("mint form", "新規IATをmint", |h| async move {
+    check_page("mint form", "IATを新規発行", |h| async move {
         body_of(admin::iat_mint_form(State(p.clone()), h, jar.clone()).await).await
     })
     .await;
@@ -470,7 +530,7 @@ async fn admin_messages_follow_the_browser_language() {
     .await;
     check_text(
         "mint with a long ttl",
-        "ttl_hours は1〜8760(365日)の範囲で指定してください",
+        "ttl_hours は1〜8760（365日）の範囲で指定してください",
         mint("profile=public&redirect_hosts=rp.example.com&ttl_hours=9000"),
     )
     .await;
@@ -478,28 +538,28 @@ async fn admin_messages_follow_the_browser_language() {
     crate::dcr_store::save_client(&fs, &client("rp-1"))
         .await
         .unwrap();
-    for lang in [None, Some("ja")] {
-        let form = Form(
-            serde_urlencoded::from_str(
-                "post_logout_redirect_uris=https%3A%2F%2Fevil.example.net%2F",
-            )
-            .unwrap(),
-        );
-        let resp = admin::client_set_post_logout(
-            State(p.clone()),
-            accept(lang),
-            jar.clone(),
-            Path("rp-1".into()),
-            form,
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let text = body_of(resp).await;
-        assert!(
-            !has_japanese(&text) && text.contains("evil.example.net"),
-            "OAuth の検証の文言は英語だけ: {text}"
-        );
-    }
+    check_text(
+        "foreign return address",
+        "同じホストにしてください: evil.example.net",
+        |h| {
+            let p = p.clone();
+            let jar = jar.clone();
+            async move {
+                let form = Form(
+                    serde_urlencoded::from_str(
+                        "post_logout_redirect_uris=https%3A%2F%2Fevil.example.net%2F",
+                    )
+                    .unwrap(),
+                );
+                let resp =
+                    admin::client_set_post_logout(State(p), h, jar, Path("rp-1".into()), form)
+                        .await;
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                body_of(resp).await
+            }
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -575,8 +635,8 @@ async fn the_admin_navigation_and_badges_follow_the_browser_language() {
         "<title>ユーザー</title>",
         ">ユーザー</a>",
         ">監査ログ</a>",
-        ">サインアウト</a>",
-        "<h1>ユーザー (4)</h1>",
+        ">ログアウト</a>",
+        "<h1>ユーザー（4）</h1>",
         "<th>メールアドレス</th>",
         ">凍結中</span>",
         ">有効</span>",
@@ -606,6 +666,45 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
             let (p, _fs) = with_firestore().await;
             let form = Form(serde_urlencoded::from_str("email=not-an-email").unwrap());
             body_of(register::register_submit(State(p), h, form).await).await
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn sign_in_and_admin_refusals_follow_the_browser_language() {
+    check_text(
+        "admin without sign-in",
+        "サインインしてください。",
+        |h| async move {
+            body_of(admin::users_list(State(plain()), h, CookieJar::default()).await).await
+        },
+    )
+    .await;
+    check_text(
+        "admin without Firestore",
+        "管理コンソールは使えません。",
+        |h| async move {
+            let p = plain();
+            let jar = login_as(&p, "acc-1").await;
+            body_of(admin::users_list(State(p), h, jar).await).await
+        },
+    )
+    .await;
+    check_text(
+        "resume of an unknown sign-in",
+        "最初からやり直してください",
+        |h| async move {
+            let q = HashMap::from([("uid".to_string(), "missing".to_string())]);
+            body_of(oidc::authorize_resume(State(plain()), h, Query(q)).await).await
+        },
+    )
+    .await;
+    check_text(
+        "cancel of an unknown sign-in",
+        "最初からやり直してください",
+        |h| async move {
+            body_of(oidc::authorize_cancel(State(plain()), h, Path("missing".into())).await).await
         },
     )
     .await;

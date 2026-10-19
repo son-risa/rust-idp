@@ -57,7 +57,7 @@ pub(super) async fn demo_callback(
     headers: HeaderMap,
 ) -> Html<String> {
     let page = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>callback</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Profile]]</title>
 <style>:root{--indigo:#3f51b5}
 body{font-family:Roboto,-apple-system,'Helvetica Neue',sans-serif;max-width:420px;margin:0 auto;padding:32px 20px;color:#1a1a1a}
 h1{font-size:1.5rem;font-weight:500;margin:0}
@@ -118,7 +118,7 @@ async function saveProfile(){
   const ath=await sha256u(t.access_token);
   const proof=await dpopProof('PUT',ISSUER+'/me/profile',ath);
   const r=await fetch(ISSUER+'/me/profile',{method:'PUT',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){fail('[[Failed to save]] ('+r.status+')');return;}
+  if(!r.ok){console.error('PUT /me/profile',r.status);fail('[[Failed to save. Please try again.]]');return;}
   const prof=await r.json();
   renderProfile(lastUi,prof,lastTok);
 }
@@ -164,7 +164,7 @@ async function approveCiba(id){
     proof=await dpopProof('POST',ISSUER+'/ciba/'+id+'/approve',ath);
     const v=await fetch(ISSUER+'/ciba/'+id+'/approve',{method:'POST',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!v.ok){alert(await errorText(v));}
-  }catch(e){alert(e.message);}
+  }catch(e){alert(passkeyErrorText(e));}
   cibaBusy=false;pollCiba();
 }
 async function rejectCiba(id){
@@ -226,6 +226,7 @@ async function doRefresh(){
 }
 (async()=>{
   const q=new URLSearchParams(location.search);
+  if(q.get('error')==='access_denied'){fail('[[Sign-in was canceled.]]');return;}
   if(q.get('error')){fail('[[Error]]: '+q.get('error')+' / '+(q.get('error_description')||''));return;}
   const code=q.get('code');
   if(code){

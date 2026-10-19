@@ -2,20 +2,20 @@ use super::*;
 
 /// ログイン済セッションが管理者か確認する。未ログインは 401、非管理者は 403、
 /// Firestore 未接続（ローカル既定構成）は 503 で fail-closed にする。
-pub(super) async fn require_admin(p: &Provider, jar: &CookieJar) -> Result<String, Response> {
+pub(super) async fn require_admin(p: &Provider, jar: &CookieJar, lang: Lang) -> Result<String, Response> {
     let account_id = session_account(p, jar)
         .await
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "login required").into_response())?;
+        .ok_or_else(|| text(StatusCode::UNAUTHORIZED, lang, "[[Please sign in.]]"))?;
     let fs = p
         .firestore
         .as_ref()
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "admin console unavailable").into_response())?;
+        .ok_or_else(|| text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]"))?;
     match crate::admin_store::is_admin(fs, &account_id).await {
         Ok(true) => Ok(account_id),
-        Ok(false) => Err((StatusCode::FORBIDDEN, "admin only").into_response()),
+        Ok(false) => Err(text(StatusCode::FORBIDDEN, lang, "[[Only admins can open this page.]]")),
         Err(e) => {
             tracing::error!("require_admin: is_admin check failed for {account_id}: {e}");
-            Err((StatusCode::SERVICE_UNAVAILABLE, "admin check failed").into_response())
+            Err(text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]"))
         }
     }
 }
@@ -25,15 +25,16 @@ pub(super) async fn require_admin(p: &Provider, jar: &CookieJar) -> Result<Strin
 async fn require_admin_fs<'p>(
     p: &'p Provider,
     jar: &CookieJar,
+    lang: Lang,
 ) -> Result<(String, &'p std::sync::Arc<crate::firestore::Firestore>), Response> {
-    let account_id = require_admin(p, jar).await?;
+    let account_id = require_admin(p, jar, lang).await?;
     let fs = p.firestore.as_ref().expect("require_admin already confirmed firestore is configured");
     Ok((account_id, fs))
 }
 
 /// 疎通確認用: 自分が管理者として認識されているかを返す。
 pub(super) async fn whoami(State(p): State<Arc<Provider>>, jar: CookieJar) -> Response {
-    match require_admin(&p, &jar).await {
+    match require_admin(&p, &jar, Lang::En).await {
         Ok(account_id) => Json(serde_json::json!({ "account_id": account_id })).into_response(),
         Err(r) => r,
     }
@@ -60,7 +61,7 @@ fn esc(s: &str) -> String {
 
 fn nav(p: &Provider) -> String {
     format!(
-        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">IATs</a><a href="{audit}">[[Audit log]]</a><a href="{logout}">[[Sign out]]</a></nav>"#,
+        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">[[IATs]]</a><a href="{audit}">[[Audit log]]</a><a href="{logout}">[[Log out]]</a></nav>"#,
         home = p.path("/admin"),
         users = p.path("/admin/users"),
         clients = p.path("/admin/clients"),
@@ -113,9 +114,9 @@ fn redirect(p: &Provider, path: &str) -> Response {
     Redirect::to(&p.path(path)).into_response()
 }
 
-fn server_error(context: &str, e: &str) -> Response {
+fn server_error(lang: Lang, context: &str, e: &str) -> Response {
     tracing::error!("{context}: {e}");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+    text(StatusCode::INTERNAL_SERVER_ERROR, lang, "[[Something went wrong. Please try again.]]")
 }
 
 /* ===== ホーム ===== */
@@ -125,7 +126,7 @@ pub(super) async fn admin_home(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    if let Err(r) = require_admin(&p, &jar).await {
+    if let Err(r) = require_admin(&p, &jar, Lang::from_headers(&headers)).await {
         return r;
     }
     page(
@@ -144,7 +145,7 @@ pub(super) async fn users_list(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -153,7 +154,7 @@ pub(super) async fn users_list(
         tokio::join!(crate::registration::list_accounts(fs), crate::admin_store::list_admins(fs));
     let mut accounts = match accounts_result {
         Ok(a) => a,
-        Err(e) => return server_error("users_list", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "users_list", &e),
     };
     accounts.sort_by(|a, b| a.email.cmp(&b.email));
     let admins: std::collections::HashSet<String> = match admins_result {
@@ -188,8 +189,8 @@ pub(super) async fn users_list(
         .collect();
 
     let body = format!(
-        "<h1>[[Users]] ({n})</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>sign_count</th><th>[[Registered]]</th></tr>{rows}</table>",
-        n = accounts.len(),
+        "<h1>{heading}</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>[[Signature counter]]</th><th>[[Registered]]</th></tr>{rows}</table>",
+        heading = localize("[[Users ({n})]]", Lang::from_headers(&headers)).replace("{n}", &accounts.len().to_string()),
     );
     page(&p, Lang::from_headers(&headers), "[[Users]]", &body).into_response()
 }
@@ -200,7 +201,7 @@ pub(super) async fn user_detail(
     jar: CookieJar,
     Path(account_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -213,17 +214,17 @@ pub(super) async fn user_detail(
     );
     let email = match email_result {
         Ok(Some(e)) => e,
-        Ok(None) => return (StatusCode::NOT_FOUND, "user not found").into_response(),
-        Err(e) => return server_error("user_detail: find_email", &e),
+        Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: find_email", &e),
     };
     let cred = match crate::registration::get_credential(fs, &email).await {
         Ok(Some(c)) => c,
-        Ok(None) => return (StatusCode::NOT_FOUND, "user not found").into_response(),
-        Err(e) => return server_error("user_detail: get_credential", &e),
+        Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: get_credential", &e),
     };
     let is_admin_user = match is_admin_result {
         Ok(b) => b,
-        Err(e) => return server_error("user_detail: is_admin", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: is_admin", &e),
     };
     let is_self = account_id == viewer;
 
@@ -327,7 +328,7 @@ pub(super) async fn user_disable(
     jar: CookieJar,
     Path(account_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -341,31 +342,32 @@ pub(super) async fn user_disable(
     }
     let email = match crate::registration::find_email_by_account_id(fs, &account_id).await {
         Ok(Some(e)) => e,
-        Ok(None) => return (StatusCode::NOT_FOUND, "user not found").into_response(),
-        Err(e) => return server_error("user_disable: find_email", &e),
+        Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_disable: find_email", &e),
     };
     if let Err(e) = crate::account_admin::disable_account(fs, &viewer, &email).await {
-        return server_error("user_disable", &e);
+        return server_error(Lang::from_headers(&headers), "user_disable", &e);
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
 }
 
 pub(super) async fn user_enable(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     jar: CookieJar,
     Path(account_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let email = match crate::registration::find_email_by_account_id(fs, &account_id).await {
         Ok(Some(e)) => e,
-        Ok(None) => return (StatusCode::NOT_FOUND, "user not found").into_response(),
-        Err(e) => return server_error("user_enable: find_email", &e),
+        Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_enable: find_email", &e),
     };
     if let Err(e) = crate::account_admin::enable_account(fs, &viewer, &email).await {
-        return server_error("user_enable", &e);
+        return server_error(Lang::from_headers(&headers), "user_enable", &e);
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
 }
@@ -376,7 +378,7 @@ pub(super) async fn user_delete(
     jar: CookieJar,
     Path(account_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -390,12 +392,12 @@ pub(super) async fn user_delete(
             )
         }
         Ok(false) => {}
-        Err(e) => return server_error("user_delete: is_admin", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_delete: is_admin", &e),
     }
     let email = match crate::registration::find_email_by_account_id(fs, &account_id).await {
         Ok(Some(e)) => e,
-        Ok(None) => return (StatusCode::NOT_FOUND, "user not found").into_response(),
-        Err(e) => return server_error("user_delete: find_email", &e),
+        Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_delete: find_email", &e),
     };
     match crate::account_admin::delete_account(fs, &viewer, &email).await {
         Ok(crate::account_admin::DeleteOutcome::Deleted(_)) => redirect(&p, "/admin/users"),
@@ -405,9 +407,9 @@ pub(super) async fn user_delete(
             "[[An account that is not disabled cannot be deleted. Disable it first]]",
         ),
         Ok(crate::account_admin::DeleteOutcome::NotFound) => {
-            (StatusCode::NOT_FOUND, "user not found").into_response()
+            text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]")
         }
-        Err(e) => server_error("user_delete", &e),
+        Err(e) => server_error(Lang::from_headers(&headers), "user_delete", &e),
     }
 }
 
@@ -417,7 +419,7 @@ pub(super) async fn user_grant_admin(
     jar: CookieJar,
     Path(account_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -434,7 +436,7 @@ pub(super) async fn user_grant_admin(
             Lang::from_headers(&headers),
             "[[This conflicted with another change. Please try again]]",
         ),
-        Err(e) => server_error("user_grant_admin", &e),
+        Err(e) => server_error(Lang::from_headers(&headers), "user_grant_admin", &e),
     }
 }
 
@@ -444,7 +446,7 @@ pub(super) async fn user_revoke_admin(
     jar: CookieJar,
     Path(account_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -477,7 +479,7 @@ pub(super) async fn user_revoke_admin(
             Lang::from_headers(&headers),
             "[[This conflicted with another change. Please try again]]",
         ),
-        Err(e) => server_error("user_revoke_admin", &e),
+        Err(e) => server_error(Lang::from_headers(&headers), "user_revoke_admin", &e),
     }
 }
 
@@ -486,13 +488,13 @@ pub(super) async fn audit_list(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let entries = match crate::audit_log::list_recent(fs, 200).await {
         Ok(e) => e,
-        Err(e) => return server_error("audit_list", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "audit_list", &e),
     };
     let rows: String = entries
         .iter()
@@ -523,13 +525,13 @@ pub(super) async fn clients_list(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let mut clients = match crate::dcr_store::list_clients(fs).await {
         Ok(c) => c,
-        Err(e) => return server_error("clients_list", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "clients_list", &e),
     };
     clients.sort_by(|a, b| a.client_id.cmp(&b.client_id));
     let rows: String = clients
@@ -545,8 +547,8 @@ pub(super) async fn clients_list(
         })
         .collect();
     let body = format!(
-        "<h1>[[Clients]] ({n})</h1><table><tr><th>client_id</th><th>[[Auth method]]</th><th>grant_types</th></tr>{rows}</table>",
-        n = clients.len(),
+        "<h1>{heading}</h1><table><tr><th>[[Client ID]]</th><th>[[Auth method]]</th><th>[[Grant types]]</th></tr>{rows}</table>",
+        heading = localize("[[Clients ({n})]]", Lang::from_headers(&headers)).replace("{n}", &clients.len().to_string()),
     );
     page(&p, Lang::from_headers(&headers), "[[Clients]]", &body).into_response()
 }
@@ -557,13 +559,13 @@ pub(super) async fn client_detail(
     jar: CookieJar,
     Path(client_id): Path<String>,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let c = match crate::dcr_store::load_client(fs, &client_id).await {
         Some(c) => c,
-        None => return (StatusCode::NOT_FOUND, "client not found").into_response(),
+        None => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[Client not found]]"),
     };
 
     let redirect_uris: String = if c.redirect_uris.is_empty() {
@@ -657,7 +659,7 @@ pub(super) async fn client_set_post_logout(
     Path(client_id): Path<String>,
     Form(form): Form<PostLogoutForm>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -670,10 +672,23 @@ pub(super) async fn client_set_post_logout(
 
     let (mut client, update_time) = match crate::dcr_store::load_client_with_version(fs, &client_id).await {
         Ok(Some(x)) => x,
-        Ok(None) => return (StatusCode::NOT_FOUND, "client not found").into_response(),
-        Err(e) => return server_error("client_set_post_logout load", &e),
+        Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[Client not found]]"),
+        Err(e) => return server_error(Lang::from_headers(&headers), "client_set_post_logout load", &e),
     };
-    if let Err(msg) = crate::dcr::check_admin_post_logout_uris(&uris, &client.redirect_uris) {
+    if let Err(e) = crate::dcr::check_admin_post_logout_uris(&uris, &client.redirect_uris) {
+        let lang = Lang::from_headers(&headers);
+        let msg = match e {
+            crate::dcr::PostLogoutUriError::BadForm(uri) => localize(
+                "[[A return address must use https and must not contain a fragment or user info: {uri}]]",
+                lang,
+            )
+            .replace("{uri}", &uri),
+            crate::dcr::PostLogoutUriError::ForeignHost(host) => localize(
+                "[[A return address must be on the host of a redirect_uri of this client: {host}]]",
+                lang,
+            )
+            .replace("{host}", &host),
+        };
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
     client.post_logout_redirect_uris = uris.clone();
@@ -688,17 +703,18 @@ pub(super) async fn client_set_post_logout(
                 "[[This client was changed by another update. Reopen it and try again.]]",
             )
         }
-        Err(e) => return server_error("client_set_post_logout", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "client_set_post_logout", &e),
     }
     redirect(&p, &format!("/admin/clients/{client_id}"))
 }
 
 pub(super) async fn client_revoke(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     jar: CookieJar,
     Path(client_id): Path<String>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -707,7 +723,7 @@ pub(super) async fn client_revoke(
             crate::audit_log::record(fs, &viewer, "revoke_client", &client_id, "").await;
         }
         Ok(false) => {}
-        Err(e) => return server_error("client_revoke", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "client_revoke", &e),
     }
     redirect(&p, "/admin/clients")
 }
@@ -719,13 +735,13 @@ pub(super) async fn iats_pending_list(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let mut iats = match crate::dcr_store::list_pending_iats(fs).await {
         Ok(i) => i,
-        Err(e) => return server_error("iats_pending_list", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "iats_pending_list", &e),
     };
     iats.sort_by(|a, b| b.expires_at.cmp(&a.expires_at));
     let now_secs = now();
@@ -745,7 +761,7 @@ pub(super) async fn iats_pending_list(
 <input type="hidden" name="update_time" value="{update_time}">
 <button class="btn btn-danger" type="submit">[[Discard]]</button></form></td></tr>"#,
                 hash = esc(&iat.hash[..iat.hash.len().min(16)]),
-                profile = profile_label(iat.constraints.profile),
+                profile = profile_display(iat.constraints.profile),
                 hosts = esc(&iat.constraints.allowed_redirect_hosts.join(", ")),
                 grants = esc(&iat.constraints.allowed_grant_types.join(", ")),
                 reusable = if iat.reusable { " <span class=\"badge\">[[Reusable]]</span>" } else { "" },
@@ -756,19 +772,28 @@ pub(super) async fn iats_pending_list(
         .collect();
 
     let body = format!(
-        r#"<h1>[[Unused IATs]] ({n})</h1><p><a class="btn" href="{mint_link}">+ [[New mint]]</a></p>
-<table><tr><th>hash</th><th>profile</th><th>redirect hosts</th><th>grant types</th><th>[[Status]]</th><th></th></tr>{rows}</table>"#,
-        n = iats.len(),
+        r#"<h1>{heading}</h1><p><a class="btn" href="{mint_link}">+ [[New mint]]</a></p>
+<table><tr><th>[[Hash]]</th><th>[[Client profile]]</th><th>[[Redirect hosts]]</th><th>[[Grant types]]</th><th>[[Status]]</th><th></th></tr>{rows}</table>"#,
+        heading = localize("[[Unused IATs ({n})]]", Lang::from_headers(&headers)).replace("{n}", &iats.len().to_string()),
         mint_link = esc(&p.path("/admin/iats/new")),
     );
     page(&p, Lang::from_headers(&headers), "[[Unused IATs]]", &body).into_response()
 }
 
+/// 監査ログに残す識別子。画面に出すのは `profile_display`。
 fn profile_label(profile: crate::dcr::ClientProfile) -> &'static str {
     match profile {
         crate::dcr::ClientProfile::Public => "public",
         crate::dcr::ClientProfile::ConfidentialSecret => "confidential-secret",
         crate::dcr::ClientProfile::ConfidentialKey => "confidential-key",
+    }
+}
+
+fn profile_display(profile: crate::dcr::ClientProfile) -> &'static str {
+    match profile {
+        crate::dcr::ClientProfile::Public => "[[Public (none)]]",
+        crate::dcr::ClientProfile::ConfidentialSecret => "[[Confidential Secret (client_secret_basic)]]",
+        crate::dcr::ClientProfile::ConfidentialKey => "[[Confidential Key (private_key_jwt, FAPI2 equivalent)]]",
     }
 }
 
@@ -782,11 +807,12 @@ pub(super) struct IatRevokeForm {
 
 pub(super) async fn iat_revoke(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     jar: CookieJar,
     Path(hash): Path<String>,
     Form(form): Form<IatRevokeForm>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -796,7 +822,7 @@ pub(super) async fn iat_revoke(
         }
         // 既に消費/失効済み、または一覧表示後に別操作で更新された。冪等に成功扱いでよい。
         Ok(false) => {}
-        Err(e) => return server_error("iat_revoke: consume", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "iat_revoke: consume", &e),
     }
     redirect(&p, "/admin/iats")
 }
@@ -806,7 +832,7 @@ pub(super) async fn iat_mint_form(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    if let Err(r) = require_admin(&p, &jar).await {
+    if let Err(r) = require_admin(&p, &jar, Lang::from_headers(&headers)).await {
         return r;
     }
     let action = esc(&p.path("/admin/iats/new"));
@@ -844,7 +870,7 @@ pub(super) async fn iat_mint_submit(
     jar: CookieJar,
     Form(form): Form<IatMintForm>,
 ) -> Response {
-    let (viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -853,7 +879,7 @@ pub(super) async fn iat_mint_submit(
         "public" => crate::dcr::ClientProfile::Public,
         "confidential-secret" => crate::dcr::ClientProfile::ConfidentialSecret,
         "confidential-key" => crate::dcr::ClientProfile::ConfidentialKey,
-        _ => return (StatusCode::BAD_REQUEST, "invalid profile").into_response(),
+        _ => return text(StatusCode::BAD_REQUEST, Lang::from_headers(&headers), "[[Choose a client profile]]"),
     };
     let hosts: Vec<String> = form
         .redirect_hosts
@@ -908,7 +934,7 @@ pub(super) async fn iat_mint_submit(
         }
     };
     if let Err(e) = crate::dcr_store::put_iat(fs, &hash, &constraints, expires_at, false).await {
-        return server_error("iat_mint_submit: put_iat", &e);
+        return server_error(Lang::from_headers(&headers), "iat_mint_submit: put_iat", &e);
     }
     crate::audit_log::record(
         fs,
@@ -961,7 +987,7 @@ pub(super) async fn iat_show_once(
     jar: CookieJar,
     Path(flash_id): Path<String>,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar).await {
+    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -972,12 +998,12 @@ pub(super) async fn iat_show_once(
             return page(
                 &p,
                 Lang::from_headers(&headers),
-                "IAT",
+                "[[Already shown]]",
                 "<h1>[[Already shown]]</h1><p>[[This token was already shown or has expired. Mint a new one.]]</p>",
             )
             .into_response()
         }
-        Err(e) => return server_error("iat_show_once", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "iat_show_once", &e),
     };
     // ベストエフォートで削除する（一度だけ表示。多重タブでの低頻度な競合は許容する。
     // registration.rs の consume_email_challenge と同じ read-then-delete の idiom）。
@@ -988,7 +1014,7 @@ pub(super) async fn iat_show_once(
         return page(
             &p,
             Lang::from_headers(&headers),
-            "IAT",
+            "[[Expired]]",
             "<h1>[[Expired]]</h1><p>[[It took too long to show it. Mint a new one.]]</p>",
         )
         .into_response();
@@ -1040,7 +1066,7 @@ mod tests {
     #[tokio::test]
     async fn require_admin_401_when_not_logged_in() {
         let (p, _fs) = provider_with_firestore().await;
-        let err = require_admin(&p, &CookieJar::default()).await.unwrap_err();
+        let err = require_admin(&p, &CookieJar::default(), Lang::En).await.unwrap_err();
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -1048,7 +1074,7 @@ mod tests {
     async fn require_admin_403_when_logged_in_but_not_admin() {
         let (p, _fs) = provider_with_firestore().await;
         let jar = login_as(&p, "acc-nonadmin").await;
-        let err = require_admin(&p, &jar).await.unwrap_err();
+        let err = require_admin(&p, &jar, Lang::En).await.unwrap_err();
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
     }
 
@@ -1057,7 +1083,7 @@ mod tests {
         let (p, fs) = provider_with_firestore().await;
         crate::admin_store::grant_admin(&fs, "acc-admin", "cli").await.unwrap();
         let jar = login_as(&p, "acc-admin").await;
-        let account_id = require_admin(&p, &jar).await.unwrap();
+        let account_id = require_admin(&p, &jar, Lang::En).await.unwrap();
         assert_eq!(account_id, "acc-admin");
     }
 
@@ -1068,7 +1094,7 @@ mod tests {
         // firestore=Noneの分岐(503)を踏む(セッション自体が無ければ401で先に落ちてしまう)。
         let p = Provider::new("http://localhost:8080".to_string());
         let jar = login_as(&p, "acc-x").await;
-        let err = require_admin(&p, &jar).await.unwrap_err();
+        let err = require_admin(&p, &jar, Lang::En).await.unwrap_err();
         assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

@@ -189,19 +189,26 @@ pub(super) async fn authorize(
 
 pub(super) async fn authorize_resume(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
+    let expired = || {
+        plain_error(&localize(
+            "[[This sign-in has expired. Please start again.]]",
+            Lang::from_headers(&headers),
+        ))
+    };
     let uid = match q.get("uid") {
         Some(u) => u,
         None => return plain_error("uid required"),
     };
     let interaction = match p.store.get_interaction(uid).await {
         Some(i) => i,
-        None => return plain_error("interaction not found"),
+        None => return expired(),
     };
     let account_id = match interaction.account_id {
         Some(a) => a,
-        None => return plain_error("interaction not completed"),
+        None => return expired(),
     };
 
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
@@ -223,7 +230,7 @@ pub(super) async fn authorize_resume(
     // 完了済み interaction を単回消費してからコード発行。失敗（既に消費＝リプレイ/二重投入）なら
     // 再発行しない（1認証=1コード、PAR request_uri の単回化も保つ）。
     if !p.store.consume_interaction(uid).await {
-        return plain_error("interaction already used");
+        return expired();
     }
     issue_code(&p, &req, account_id, interaction.auth_time).await
 }
@@ -232,11 +239,17 @@ pub(super) async fn authorize_resume(
 /// access_denied を返す（OIDC Core 3.1.2.6 / RFC 6749 §4.1.2.1）。
 pub(super) async fn authorize_cancel(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     Path(uid): Path<String>,
 ) -> Response {
     let interaction = match p.store.get_interaction(&uid).await {
         Some(i) => i,
-        None => return plain_error("interaction not found"),
+        None => {
+            return plain_error(&localize(
+                "[[This sign-in has expired. Please start again.]]",
+                Lang::from_headers(&headers),
+            ))
+        }
     };
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
         Ok(p) => p,
