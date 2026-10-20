@@ -119,6 +119,19 @@ impl Store for FirestoreStore {
         })
     }
 
+    async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool {
+        // 読んだ updateTime の CAS で書く。間に resume が消費（CAS 削除）していれば負けて false。
+        let Ok(Some((mut f, update_time))) = self.fs.get_doc_with_update_time("interactions", uid).await else {
+            return false;
+        };
+        if doc_expired(&f) {
+            return false;
+        }
+        f["accountId"] = fs_h::s(account_id);
+        f["authTime"] = fs_h::int(auth_time);
+        matches!(self.fs.set_doc_if_unchanged("interactions", uid, f, &update_time).await, Ok(true))
+    }
+
     async fn consume_interaction(&self, uid: &str) -> bool {
         // updateTime CAS で単回削除（並行 resume / リプレイで高々 1 回だけ成功）。
         self.cas_take("interactions", uid).await.is_some()
@@ -514,6 +527,7 @@ mod revoke_family_tests {
             client_id: "rp".into(),
             redirect_uris: vec!["https://rp.example/cb".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             token_endpoint_auth_method: "client_secret_basic".into(),
             client_secret: Some("hash".into()),
             grant_types: vec!["refresh_token".into()],
@@ -565,5 +579,128 @@ mod revoke_family_tests {
         let tomb = fs.get_doc(FAMILY_REVOCATIONS, "F").await.unwrap().expect("札が無い");
         let expires = fs_h::field_ts_secs(&tomb, "expiresAt").unwrap();
         assert!(expires >= released_at + REFRESH_TTL + 2 * 24 * 3600, "札の期限が短い: {expires} < {}", released_at + REFRESH_TTL + 2 * 24 * 3600);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::firestore::fake_firestore;
+
+    async fn store() -> FirestoreStore {
+        store_and_fake().await.0
+    }
+
+    async fn store_and_fake() -> (FirestoreStore, Arc<fake_firestore::FakeState>) {
+        let (host, state) = fake_firestore::spawn().await;
+        (FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))), state)
+    }
+
+    fn rt(token: &str, family: &str, replaced_by: Option<&str>) -> RefreshToken {
+        RefreshToken {
+            token: token.into(),
+            client_id: "rp".into(),
+            account_id: "acct".into(),
+            scope: "openid offline_access".into(),
+            resource: None,
+            jkt: None,
+            acr: None,
+            auth_time: None,
+            family_id: family.into(),
+            used: replaced_by.is_some(),
+            replaced_by: replaced_by.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_token_is_rotated_once() {
+        let s = store().await;
+        s.save_refresh_token(rt("R1", "F", None)).await;
+        assert!(s.mark_refresh_used("R1", Some("R2")).await);
+        assert!(!s.mark_refresh_used("R1", Some("R3")).await, "使用済みの RT は 2 度目のローテーションに使えない");
+        assert_eq!(s.get_refresh_token("R1").await.unwrap().replaced_by.as_deref(), Some("R2"));
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_rotations_of_one_refresh_token_let_only_one_through() {
+        let s = store().await;
+        s.save_refresh_token(rt("R1", "F", None)).await;
+        let (a, b) = tokio::join!(s.mark_refresh_used("R1", Some("Ra")), s.mark_refresh_used("R1", Some("Rb")));
+        assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn revoking_a_family_deletes_the_whole_chain_and_nothing_else() {
+        let s = store().await;
+        s.save_refresh_token(rt("R1", "F", Some("R2"))).await;
+        s.save_refresh_token(rt("R2", "F", Some("R3"))).await;
+        s.save_refresh_token(rt("R3", "F", None)).await;
+        s.save_refresh_token(rt("X1", "G", None)).await;
+        s.revoke_refresh_family("F", "R1").await;
+        for t in ["R1", "R2", "R3"] {
+            assert!(s.get_refresh_token(t).await.is_none(), "{t} が残っている");
+        }
+        assert!(s.get_refresh_token("X1").await.is_some());
+    }
+
+    /// 循環した鎖でも止まる。止めているのは辿った RT の集合（seen）で、REVOKE_MAX_RTS の上限ではない。
+    /// 集合つきの walk が止まり取りこぼさないことは、Kani の refresh_family_walk_terminates が抽象化したモデルで見ている。
+    #[tokio::test]
+    async fn revoking_a_cyclic_family_stops_because_deleted_links_are_gone() {
+        let s = store().await;
+        s.save_refresh_token(rt("C1", "F", Some("C2"))).await;
+        s.save_refresh_token(rt("C2", "F", Some("C1"))).await;
+        s.revoke_refresh_family("F", "C1").await;
+        assert!(s.get_refresh_token("C1").await.is_none());
+        assert!(s.get_refresh_token("C2").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_interaction_is_consumed_once_even_when_two_resumes_race() {
+        let s = store().await;
+        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+        s.save_interaction(i).await;
+        let (a, b) = tokio::join!(s.consume_interaction("U1"), s.consume_interaction("U1"));
+        assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
+        assert!(!s.consume_interaction("U1").await);
+    }
+
+    #[tokio::test]
+    async fn rotation_of_an_unknown_refresh_token_fails() {
+        let s = store().await;
+        assert!(!s.mark_refresh_used("NOPE", Some("R2")).await);
+    }
+
+    #[tokio::test]
+    async fn rotation_fails_closed_when_the_store_errs() {
+        for method in ["GET", "PATCH"] {
+            let (s, fake) = store_and_fake().await;
+            s.save_refresh_token(rt("R1", "F", None)).await;
+            fake.fail_once(method, "refreshTokens", Some("R1"));
+            assert!(!s.mark_refresh_used("R1", Some("R2")).await, "{method} の 503 で通ってしまった");
+            assert!(!s.get_refresh_token("R1").await.unwrap().used, "{method} の 503 で使用済みになった");
+        }
+    }
+
+    #[tokio::test]
+    async fn consuming_an_interaction_fails_closed_when_the_store_errs() {
+        for method in ["GET", "DELETE"] {
+            let (s, fake) = store_and_fake().await;
+            let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+            s.save_interaction(i).await;
+            fake.fail_once(method, "interactions", Some("U1"));
+            assert!(!s.consume_interaction("U1").await, "{method} の 503 で消費が通ってしまった");
+            assert!(s.get_interaction("U1").await.is_some(), "{method} の 503 で interaction が消えた");
+        }
+    }
+
+    /// 読んだ後の CAS 削除が 404（並行する削除に先を越された）なら、消費は通らない。
+    #[tokio::test]
+    async fn consuming_an_interaction_that_another_request_deleted_first_fails() {
+        let (s, fake) = store_and_fake().await;
+        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+        s.save_interaction(i).await;
+        fake.fail_once_with("DELETE", "interactions", Some("U1"), axum::http::StatusCode::NOT_FOUND);
+        assert!(!s.consume_interaction("U1").await, "削除の 404 で消費が通ってしまった");
     }
 }

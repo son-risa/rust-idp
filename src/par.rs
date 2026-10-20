@@ -64,11 +64,12 @@ pub async fn peek(fs: &Firestore, request_uri: &str) -> Result<Option<(String, S
     Ok(Some((client_id, params)))
 }
 
-/// request_uri を削除する（コード発行時に呼び、以後の再利用を不可にする）。
-pub async fn delete(fs: &Firestore, request_uri: &str) {
-    if let Some(id) = request_uri.strip_prefix(URN_PREFIX) {
-        fs.delete_doc(COL, id).await.ok();
-    }
+/// request_uri を単回消費する（コード発行時に呼ぶ）。並行した完了のうち、削除に勝った 1 つだけが true。
+pub async fn consume(fs: &Firestore, request_uri: &str) -> Result<bool, String> {
+    let Some(id) = request_uri.strip_prefix(URN_PREFIX) else {
+        return Ok(false);
+    };
+    Ok(fs.take_doc(COL, id).await?.is_some())
 }
 
 #[cfg(test)]
@@ -92,13 +93,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_makes_request_uri_unusable() {
+    async fn consume_makes_request_uri_unusable() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
 
         let uri = create(&fs, "client-1", "p=1").await.unwrap();
-        delete(&fs, &uri.0).await;
-        assert!(peek(&fs, &uri.0).await.unwrap().is_none(), "delete 後は再利用できない");
+        assert!(consume(&fs, &uri.0).await.unwrap());
+        assert!(!consume(&fs, &uri.0).await.unwrap(), "2 度目の消費は通らない");
+        assert!(peek(&fs, &uri.0).await.unwrap().is_none(), "消費の後は再利用できない");
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_consumes_of_one_request_uri_let_only_one_through() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+
+        let uri = create(&fs, "client-1", "p=1").await.unwrap();
+        let (a, b) = tokio::join!(consume(&fs, &uri.0), consume(&fs, &uri.0));
+        assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|w| **w).count(), 1);
     }
 
     #[tokio::test]

@@ -483,6 +483,7 @@ mod tests {
             client_secret: None,
             grant_types: vec!["authorization_code".into(), "refresh_token".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![],
             jwks_uri: None,
@@ -863,6 +864,7 @@ mod tests {
         async fn save_interaction(&self, i: crate::model::Interaction) { self.inner.save_interaction(i).await }
         async fn get_interaction(&self, uid: &str) -> Option<crate::model::Interaction> { self.inner.get_interaction(uid).await }
         async fn consume_interaction(&self, uid: &str) -> bool { self.inner.consume_interaction(uid).await }
+        async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool { self.inner.complete_interaction(uid, account_id, auth_time).await }
         async fn save_session(&self, s: crate::model::Session) { self.inner.save_session(s).await }
         async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
         async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
