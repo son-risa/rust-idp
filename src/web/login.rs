@@ -266,7 +266,8 @@ pub(super) async fn login_passkey_verify(
     let account = p.store.find_account(&cred.account_id).await;
     match finalize_login(&p, jar, &uid, account.sub).await {
         Some((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
-        None => (StatusCode::BAD_REQUEST, "interaction not found or already used").into_response(),
+        // 画面はこの固定文で期限切れと見て読み直す（SERVER_ERRORS・login_form の JS）。
+        None => (StatusCode::BAD_REQUEST, "interaction not found").into_response(),
     }
 }
 
@@ -280,6 +281,7 @@ mod tests {
             client_id: "rp".into(),
             redirect_uris: vec!["https://rp.example/cb".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             token_endpoint_auth_method: "client_secret_basic".into(),
             client_secret: Some("hash".into()),
             grant_types: vec!["authorization_code".into()],
@@ -294,7 +296,7 @@ mod tests {
 
     async fn resume(p: &Arc<Provider>, uid: &str) -> Response {
         let q = HashMap::from([("uid".to_string(), uid.to_string())]);
-        super::super::oidc::authorize_resume(State(p.clone()), Query(q)).await
+        super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), Query(q)).await
     }
 
     fn gave_code(r: &Response) -> bool {
