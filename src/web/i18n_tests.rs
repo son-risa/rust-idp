@@ -61,6 +61,61 @@ where
         "{name} [ja]: 「{ja_heading}」が無い"
     );
     assert!(!html.contains("[["), "{name} [ja]: 訳されずに残った印");
+    let english = english_words_shown(&html);
+    assert!(
+        english.is_empty(),
+        "{name} [ja] に訳されていない英語: {english:?}"
+    );
+}
+
+/// 日本語の画面にそのまま出ても構わない英字の語。固有名と仕様の用語（値として出る none・openid・true・false と、
+/// 日本語化の前から使っている redirect host を含む）、
+/// それと管理画面のボタンに添えている操作名（「凍結（disable）」など、日本語化の前からの表記）。
+const JA_ALLOWED_WORDS: &[&str] = &[
+    "passkey", "Passkey", "IAT", "ID", "client", "CIBA", "Web", "iCloud", "Keychain", "scope",
+    "openid", "none", "true", "false", "jwks", "kids", "redirect", "host", "delete", "enable",
+    "disable",
+];
+
+/// 句としてだけ許すもの（client のプロファイル名）。語に分ける前に取り除く。
+const JA_ALLOWED_PHRASES: &[&str] = &["Public（none）", "Confidential Secret", "Confidential Key"];
+
+/// 画面に見える文字（タグの外の文字と placeholder・title・aria-label）のうち、英字だけでできた語。
+/// メールアドレスや ID のように記号や数字を含む語はデータなので数えない。script と style の中は見ない。
+fn english_words_shown(html: &str) -> Vec<String> {
+    let mut shown = String::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        shown.push_str(&rest[..lt]);
+        shown.push(' ');
+        let tag_end = rest[lt..].find('>').map_or(rest.len(), |i| lt + i + 1);
+        let tag = &rest[lt..tag_end];
+        for attr in ["placeholder=\"", "title=\"", "aria-label=\""] {
+            if let Some(i) = tag.find(attr) {
+                let v = &tag[i + attr.len()..];
+                shown.push_str(&v[..v.find('"').unwrap_or(v.len())]);
+                shown.push(' ');
+            }
+        }
+        rest = &rest[tag_end..];
+        for raw in ["script", "style"] {
+            if tag.starts_with(&format!("<{raw}")) {
+                let close = format!("</{raw}>");
+                rest = rest.find(&close).map_or("", |i| &rest[i + close.len()..]);
+            }
+        }
+    }
+    shown.push_str(rest);
+    for phrase in JA_ALLOWED_PHRASES {
+        shown = shown.replace(phrase, " ");
+    }
+    shown
+        .split(|c: char| c.is_whitespace() || !c.is_ascii())
+        .map(|w| w.trim_matches(|c: char| ",.:;!?()（）\"'".contains(c)))
+        .filter(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphabetic()))
+        .filter(|w| !JA_ALLOWED_WORDS.contains(w))
+        .map(str::to_string)
+        .collect()
 }
 
 /// ブラウザにそのまま出る素の文言。
@@ -85,10 +140,31 @@ where
         text.contains(ja_text),
         "{name} [ja]: 「{ja_text}」が無い: {text}"
     );
+    let english = english_words_shown(&text);
+    assert!(
+        english.is_empty(),
+        "{name} [ja] に訳されていない英語: {english:?}"
+    );
 }
 
 fn plain() -> Arc<Provider> {
     Arc::new(Provider::new("https://idp.example/oidc".to_string()))
+}
+
+/// 生きている interaction "uid-1" のログイン画面。
+async fn login_page(h: HeaderMap) -> String {
+    let p = plain();
+    p.store
+        .save_interaction(crate::model::Interaction {
+            uid: "uid-1".into(),
+            raw_query: String::new(),
+            account_id: None,
+            auth_time: None,
+            request_uri: None,
+        })
+        .await;
+    let q: login::LoginQuery = serde_urlencoded::from_str("").unwrap();
+    body_of(login::login_form(State(p), h, Path("uid-1".into()), Query(q)).await).await
 }
 
 async fn with_firestore() -> (Arc<Provider>, Arc<Firestore>) {
@@ -131,6 +207,7 @@ fn client(id: &str) -> crate::model::Client {
         client_id: id.into(),
         redirect_uris: vec!["https://rp.example.com/cb".into()],
         post_logout_redirect_uris: vec![],
+        initiate_login_uri: None,
         token_endpoint_auth_method: "none".into(),
         client_secret: None,
         grant_types: vec!["authorization_code".into()],
@@ -167,17 +244,15 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
 
 #[tokio::test]
 async fn sign_in_and_demo_pages_follow_the_browser_language() {
-    check_page("login", "Passkey でサインイン", |h| async move {
-        login::login_form(State(plain()), h, Path("uid-1".into()))
-            .await
-            .0
+    check_page("login", "Passkey でログイン", |h| async move {
+        login_page(h).await
     })
     .await;
-    check_page("demo_start", "Passkey でサインイン", |h| async move {
+    check_page("demo_start", "Passkey でログイン", |h| async move {
         pages::demo_start(State(plain()), h).await.0
     })
     .await;
-    check_page("demo_callback", "サインイン処理中…", |h| async move {
+    check_page("demo_callback", "ログイン処理中…", |h| async move {
         pages::demo_callback(State(plain()), h).await.0
     })
     .await;
@@ -197,8 +272,8 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
         "'<h1>プロフィール</h1>",
         "{male:'男性'",
         "field('氏名',p.name)",
-        "承認 (passkey)",
-        "'セッションが切れました。再度サインインしてください。'",
+        "承認（passkey）",
+        "'セッションが切れました。再度ログインしてください。'",
     ] {
         assert!(html.contains(ja), "{ja}");
     }
@@ -232,9 +307,7 @@ async fn registration_pages_follow_the_browser_language() {
         "passkey を作成",
         |h| async move {
             let q = serde_urlencoded::from_str("t=abc").unwrap();
-            register::magic_redirect(State(plain()), h, Query(q))
-                .await
-                .0
+            body_of(register::magic_redirect(State(plain()), h, Query(q)).await).await
         },
     )
     .await;
@@ -243,7 +316,7 @@ async fn registration_pages_follow_the_browser_language() {
         "passkey を作成",
         |h| async move {
             let q = serde_urlencoded::from_str("token=abc").unwrap();
-            register::verify_form(State(plain()), h, Query(q)).await.0
+            body_of(register::verify_form(State(plain()), h, Query(q)).await).await
         },
     )
     .await;
@@ -253,13 +326,15 @@ async fn registration_pages_follow_the_browser_language() {
         body_of(register::invite_page(State(p), h, Query(q)).await).await
     })
     .await;
-    let ja = register::magic_redirect(
-        State(plain()),
-        accept(Some("ja")),
-        Query(serde_urlencoded::from_str("t=a").unwrap()),
+    let ja = body_of(
+        register::magic_redirect(
+            State(plain()),
+            accept(Some("ja")),
+            Query(serde_urlencoded::from_str("t=a").unwrap()),
+        )
+        .await,
     )
-    .await
-    .0;
+    .await;
     assert!(
         ja.contains("NAME_REQUIRED?'氏名（必須）':'氏名（任意）'"),
         "氏名の必須・任意の表示は今までと同じ文字列"
@@ -286,10 +361,10 @@ async fn the_ciba_approval_page_follows_the_browser_language() {
         },
     )
     .await;
-    check_page("ciba (one pending)", "承認 (passkey)", |h| async move {
+    check_page("ciba (one pending)", "承認（passkey）", |h| async move {
         let p = plain();
         p.ciba
-            .create("client-1", "acc-1", "openid", "Pay 100", None)
+            .create("client-1", "acc-1", "openid", "order-100", None)
             .await
             .unwrap();
         let jar = login_as(&p, "acc-1").await;
@@ -348,7 +423,7 @@ async fn admin_pages_follow_the_browser_language() {
     for (id, ja) in [
         (
             "rp-1",
-            "(なし — この client はサインアウト後の戻り先を持ちません)",
+            "（なし。このクライアントはログアウト後の戻り先を持ちません）",
         ),
         ("rp-2", "設定済み"),
     ] {
@@ -376,7 +451,7 @@ async fn admin_pages_follow_the_browser_language() {
         body_of(admin::iats_pending_list(State(p.clone()), h, jar.clone()).await).await
     })
     .await;
-    check_page("mint form", "新規IATをmint", |h| async move {
+    check_page("mint form", "IATを新規発行", |h| async move {
         body_of(admin::iat_mint_form(State(p.clone()), h, jar.clone()).await).await
     })
     .await;
@@ -385,7 +460,7 @@ async fn admin_pages_follow_the_browser_language() {
             .await
     })
     .await;
-    for (expires_at, ja) in [(now() + 300, "IATを発行しました"), (1, "期限切れです")] {
+    for (expires_at, ja) in [(now() + 300, "IATを発行しました"), (1, "期限切れ")] {
         check_page("flash", ja, |h| async move {
             let flash = Uuid::new_v4().to_string();
             let doc = serde_json::json!({
@@ -470,7 +545,7 @@ async fn admin_messages_follow_the_browser_language() {
     .await;
     check_text(
         "mint with a long ttl",
-        "ttl_hours は1〜8760(365日)の範囲で指定してください",
+        "ttl_hours は1〜8760（365日）の範囲で指定してください",
         mint("profile=public&redirect_hosts=rp.example.com&ttl_hours=9000"),
     )
     .await;
@@ -478,28 +553,53 @@ async fn admin_messages_follow_the_browser_language() {
     crate::dcr_store::save_client(&fs, &client("rp-1"))
         .await
         .unwrap();
-    for lang in [None, Some("ja")] {
-        let form = Form(
-            serde_urlencoded::from_str(
-                "post_logout_redirect_uris=https%3A%2F%2Fevil.example.net%2F",
-            )
-            .unwrap(),
-        );
-        let resp = admin::client_set_post_logout(
-            State(p.clone()),
-            accept(lang),
-            jar.clone(),
-            Path("rp-1".into()),
-            form,
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let text = body_of(resp).await;
-        assert!(
-            !has_japanese(&text) && text.contains("evil.example.net"),
-            "OAuth の検証の文言は英語だけ: {text}"
-        );
-    }
+    check_text(
+        "foreign return address",
+        "同じホストにしてください: evil.example.net",
+        |h| {
+            let p = p.clone();
+            let jar = jar.clone();
+            async move {
+                let form = Form(
+                    serde_urlencoded::from_str(
+                        "post_logout_redirect_uris=https%3A%2F%2Fevil.example.net%2F",
+                    )
+                    .unwrap(),
+                );
+                let resp =
+                    admin::client_set_post_logout(State(p), h, jar, Path("rp-1".into()), form)
+                        .await;
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                body_of(resp).await
+            }
+        },
+    )
+    .await;
+
+    let set_entry = |value: &'static str| {
+        let p = p.clone();
+        let jar = jar.clone();
+        move |h| async move {
+            let form = Form(serde_urlencoded::from_str(&format!("initiate_login_uri={value}")).unwrap());
+            admin::client_set_initiate_login(State(p), h, jar, Path("rp-1".into()), form).await
+        }
+    };
+    check_text("foreign sign-in start address", "同じホストにしてください: evil.example.net", |h| {
+        let f = set_entry("https%3A%2F%2Fevil.example.net%2Flogin");
+        async move {
+            let resp = f(h).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            body_of(resp).await
+        }
+    })
+    .await;
+    let resp = set_entry("+https%3A%2F%2Frp.example.com%2Fauth%2Flogin+")(accept(Some("ja"))).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let stored = crate::dcr_store::load_client(&fs, "rp-1").await.unwrap();
+    assert_eq!(stored.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
+    let resp = set_entry("")(accept(Some("ja"))).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(crate::dcr_store::load_client(&fs, "rp-1").await.unwrap().initiate_login_uri.is_none());
 }
 
 #[tokio::test]
@@ -563,5 +663,504 @@ fn mails_follow_the_browser_language_and_are_bilingual_without_one() {
             "このメールアドレス (<strong>a@example.com</strong>) は既に登録されています。"
         ),
         "今までの日本語と同じ並び"
+    );
+}
+
+#[tokio::test]
+async fn the_admin_navigation_and_badges_follow_the_browser_language() {
+    let (p, _fs) = admin_world().await;
+    let jar = login_as(&p, "acc-me").await;
+    let html = body_of(admin::users_list(State(p), accept(Some("ja")), jar).await).await;
+    for ja in [
+        "<title>ユーザー</title>",
+        ">ユーザー</a>",
+        ">監査ログ</a>",
+        ">ログアウト</a>",
+        "<h1>ユーザー（4）</h1>",
+        "<th>メールアドレス</th>",
+        ">凍結中</span>",
+        ">有効</span>",
+        ">管理者</span>",
+    ] {
+        assert!(html.contains(ja), "「{ja}」が無い");
+    }
+}
+
+#[tokio::test]
+async fn passkey_pages_translate_the_api_failures_they_show() {
+    let login = |h| async move {
+        login_page(h).await
+    };
+    let en = login(accept(Some("en"))).await;
+    assert!(en.contains("'account disabled':'This account is disabled.'"));
+    assert!(en.contains("msgEl.textContent=await errorText(v)"));
+    let ja = login(accept(Some("ja"))).await;
+    assert!(ja.contains("'account disabled':'このアカウントは凍結されています。'"));
+
+    check_text(
+        "signup invalid email",
+        "正しいメールアドレスを入力してください。",
+        |h| async move {
+            let (p, _fs) = with_firestore().await;
+            let form = Form(serde_urlencoded::from_str("email=not-an-email").unwrap());
+            body_of(register::register_submit(State(p), h, form).await).await
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn sign_in_and_admin_refusals_follow_the_browser_language() {
+    check_text(
+        "admin without sign-in",
+        "ログインしてください。",
+        |h| async move {
+            body_of(admin::users_list(State(plain()), h, CookieJar::default()).await).await
+        },
+    )
+    .await;
+    check_text(
+        "admin without Firestore",
+        "管理コンソールは使えません。",
+        |h| async move {
+            let p = plain();
+            let jar = login_as(&p, "acc-1").await;
+            body_of(admin::users_list(State(p), h, jar).await).await
+        },
+    )
+    .await;
+    check_text(
+        "resume of an unknown sign-in",
+        "最初からやり直してください",
+        |h| async move {
+            let q = HashMap::from([("uid".to_string(), "missing".to_string())]);
+            body_of(oidc::authorize_resume(State(plain()), h, Query(q)).await).await
+        },
+    )
+    .await;
+    check_text(
+        "cancel of an unknown sign-in",
+        "最初からやり直してください",
+        |h| async move {
+            body_of(oidc::authorize_cancel(State(plain()), h, Path("missing".into())).await).await
+        },
+    )
+    .await;
+}
+
+/// 英語は sign in / sign out、日本語はログイン / ログアウト。
+#[tokio::test]
+async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
+    for (lang, expected) in [
+        (
+            Some("en"),
+            [
+                "<title>Sign in</title>",
+                "Sign in with a passkey",
+                "You have signed out",
+                ">Sign out</a>",
+            ],
+        ),
+        (
+            Some("ja"),
+            [
+                "<title>ログイン</title>",
+                "Passkey でログイン",
+                "ログアウトしました",
+                ">ログアウト</a>",
+            ],
+        ),
+    ] {
+        let login = login_page(accept(lang)).await;
+        let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
+        let logged_out = body_of(
+            oidc::end_session(State(plain()), accept(lang), CookieJar::default(), Query(q)).await,
+        )
+        .await;
+        let (p, _fs) = admin_world().await;
+        let jar = login_as(&p, "acc-me").await;
+        let admin = body_of(admin::users_list(State(p), accept(lang), jar).await).await;
+        let all = format!("{login}{logged_out}{admin}");
+        for e in expected {
+            assert!(all.contains(e), "[{lang:?}] 「{e}」が無い");
+        }
+        let lower = all.to_lowercase();
+        for bad in [
+            "log in",
+            "log out",
+            "logged",
+            ">login",
+            ">logout",
+            "サインイン",
+            "サインアウト",
+        ] {
+            assert!(!lower.contains(bad), "[{lang:?}] 「{bad}」が出ている");
+        }
+    }
+}
+
+#[tokio::test]
+async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
+    let authorize = |query: &'static str| {
+        move |h| async move {
+            body_of(
+                oidc::authorize(
+                    State(plain()),
+                    h,
+                    CookieJar::default(),
+                    RawQuery(Some(query.to_string())),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    check_text(
+        "authorize with an unknown client",
+        "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: invalid_client）",
+        authorize("client_id=nope&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code"),
+    )
+    .await;
+    check_text(
+        "authorize without a client",
+        "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: invalid_request）",
+        authorize("response_type=code"),
+    )
+    .await;
+    check_text(
+        "authorize with a pushed request when PAR is unavailable",
+        "問題が起きました。もう一度お試しください。（エラーコード: server_error）",
+        authorize("client_id=nope&request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz"),
+    )
+    .await;
+    check_text(
+        "authorize with an unknown pushed request",
+        "アプリからの要求を確認できませんでした。アプリからやり直してください。（エラーコード: invalid_request_uri）",
+        |h| async move {
+            let (p, _fs) = with_firestore().await;
+            body_of(
+                oidc::authorize(
+                    State(p),
+                    h,
+                    CookieJar::default(),
+                    RawQuery(Some("client_id=nope&request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz".to_string())),
+                )
+                .await,
+            )
+            .await
+        },
+    )
+    .await;
+    check_text(
+        "sign-out to an unregistered address",
+        "ログアウト後の戻り先がこのアプリに登録されていません。",
+        |h| async move {
+            let q: oidc::EndSessionQuery = serde_urlencoded::from_str(
+                "client_id=nope&post_logout_redirect_uri=https%3A%2F%2Fevil.example.net%2F",
+            )
+            .unwrap();
+            body_of(oidc::end_session(State(plain()), h, CookieJar::default(), Query(q)).await)
+                .await
+        },
+    )
+    .await;
+    check_text("unknown page", "ページが見つかりません", |h| async move {
+        body_of(
+            log_unmatched(axum::http::Method::GET, "/nope".parse().unwrap(), h)
+                .await
+                .into_response(),
+        )
+        .await
+    })
+    .await;
+}
+
+// 障害は 500、要求の不備は 400 で返し、en でも文そのものを固定する。
+#[tokio::test]
+async fn protocol_errors_keep_their_status_and_english_text() {
+    let call = |p: Arc<Provider>, query: &str| {
+        let mut h = HeaderMap::new();
+        h.insert(header::ACCEPT_LANGUAGE, "en".parse().unwrap());
+        oidc::authorize(
+            State(p),
+            h,
+            CookieJar::default(),
+            RawQuery(Some(query.to_string())),
+        )
+    };
+    let urn = "request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabcdefghijklmnopqrstuvwxyz";
+    let resp = call(plain(), urn).await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        body_of(resp).await,
+        "Something went wrong. Please try again. (error code: server_error)"
+    );
+    let (p, _fs) = with_firestore().await;
+    let resp = call(p, urn).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_of(resp).await,
+        "The request from the app could not be verified. Please start again from the app. (error code: invalid_request_uri)"
+    );
+    let resp = call(
+        plain(),
+        "client_id=nope&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_of(resp).await,
+        "This app is not registered. Please contact the app provider. (error code: invalid_client)"
+    );
+}
+
+// 本番は /oidc の下に置くので、その構成でも未知のパスにブラウザの言語で応える。
+#[tokio::test]
+async fn unknown_path_under_the_base_path_is_answered_in_the_browser_language() {
+    let app = router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for (lang, expected) in [("en", "Page not found"), ("ja", "ページが見つかりません")]
+    {
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/oidc/nope"))
+            .header("accept-language", lang)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 404);
+        assert_eq!(resp.text().await.unwrap(), expected);
+    }
+}
+
+// 途中で切れたリンクや型に合わないフォームの値でも、axum の英語の説明を出さずにブラウザの言語で応える。
+#[tokio::test]
+async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language() {
+    let app = router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let link_en = "This link is incomplete. Please open the link in the email again.";
+    let link_ja = "リンクが途中で切れています。メールのリンクを開き直してください。";
+    let form_en = "Some of the entered values are invalid. Please check them and try again.";
+    let form_ja = "入力内容に誤りがあります。確認してもう一度お試しください。";
+    let addr_en = "The URL of this page is not valid. Please check the link and try again.";
+    let addr_ja = "このページの URL が正しくありません。リンクを確認してもう一度お試しください。";
+    for (lang, link, form, bad_addr) in [
+        ("en", link_en, form_en, addr_en),
+        ("ja", link_ja, form_ja, addr_ja),
+    ] {
+        for path in [
+            "/r?t=a&t=b",
+            "/oidc/end-session?state=x&state=y",
+            "/oidc/login/%FF",
+        ] {
+            let resp = reqwest::Client::new()
+                .get(format!("http://{addr}{path}"))
+                .header("accept-language", lang)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 400, "{path}");
+            assert_eq!(resp.text().await.unwrap(), bad_addr, "{path}");
+        }
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/oidc/admin/whoami"))
+            .header("accept-language", lang)
+            .send()
+            .await
+            .unwrap();
+        let whoami = resp.text().await.unwrap();
+        assert_eq!(has_japanese(&whoami), lang == "ja", "{whoami}");
+        // 招待は token が無くても axum の英語の説明を出さない。ここは Firestore が無いので汎用の文になる。
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/oidc/invite"))
+            .header("accept-language", lang)
+            .send()
+            .await
+            .unwrap();
+        let invite = resp.text().await.unwrap();
+        assert!(!invite.contains("deserialize"), "{invite}");
+        assert_eq!(has_japanese(&invite), lang == "ja", "{invite}");
+        for path in ["/r", "/oidc/signup/verify"] {
+            let resp = reqwest::Client::new()
+                .get(format!("http://{addr}{path}"))
+                .header("accept-language", lang)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 400, "{path}");
+            assert_eq!(resp.text().await.unwrap(), link, "{path}");
+        }
+        // ステータスは axum の決めた 422 のまま返す。
+        for (path, body, status) in [
+            ("/oidc/signup", "", 422),
+            (
+                "/oidc/admin/iats/new",
+                "profile=public&redirect_hosts=rp.example.com&ttl_hours=",
+                422,
+            ),
+            ("/oidc/admin/clients/rp-1/post-logout", "", 422),
+            ("/oidc/admin/iats/abc/revoke", "", 422),
+        ] {
+            let resp = reqwest::Client::new()
+                .post(format!("http://{addr}{path}"))
+                .header("accept-language", lang)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), status, "{path}");
+            assert_eq!(resp.text().await.unwrap(), form, "{path}");
+        }
+    }
+}
+
+// 画面の JS は、サーバーやアプリから来た英語の説明をそのまま見せない。
+#[tokio::test]
+async fn scripts_do_not_show_english_details_from_the_server() {
+    let en = pages::demo_callback(State(plain()), accept(Some("en")))
+        .await
+        .0;
+    let ja = pages::demo_callback(State(plain()), accept(Some("ja")))
+        .await
+        .0;
+    assert!(en.contains("fail('Sign-in could not be completed. (error code: {code})'.replace('{code}',()=>q.get('error')))"));
+    assert!(ja.contains("fail('ログインできませんでした。（エラーコード: {code}）'.replace('{code}',()=>q.get('error')))"));
+    assert!(en.contains("console.error(t);return 'Something went wrong. Please try again.';"));
+    assert!(ja.contains("console.error(t);return '問題が起きました。もう一度お試しください。';"));
+    for html in [&en, &ja] {
+        assert!(!html.contains("SERVER_ERRORS[k]:t"));
+        assert!(!html.contains("+(q.get('error_description')"));
+    }
+}
+
+// 差し替えるのは axum の取り出しの失敗だけで、自前の 4xx と RP 向けの応答は本文もヘッダもそのまま通す。
+#[tokio::test]
+async fn own_errors_and_rp_facing_rejections_pass_through_unchanged() {
+    let app = router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("http://{addr}/oidc/token"))
+        .header("accept-language", "ja")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body("grant_type=bogus")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    assert_eq!(resp.headers()["content-type"], "application/json");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"].is_string(), "{body}");
+
+    let resp = client
+        .post(format!("http://{addr}/oidc/token"))
+        .header("accept-language", "ja")
+        .header("content-type", "text/plain")
+        .body("grant_type=bogus")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 415);
+    assert!(resp
+        .text()
+        .await
+        .unwrap()
+        .starts_with("Form requests must have"));
+
+    let resp = client
+        .get(format!("http://{addr}/oidc/admin/users"))
+        .header("accept-language", "ja")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
+    assert_eq!(resp.text().await.unwrap(), "ログインしてください。");
+}
+
+/// 期限切れのログイン画面: 入口のある client ならそこへ iss つきで送り直し、
+/// 入口の無い client・client_id の無い URL では期限切れを画面の言語で伝える。
+#[tokio::test]
+async fn expired_sign_in_is_sent_back_to_the_client_login_entry() {
+    let mut with_entry = client("rp-entry");
+    with_entry.initiate_login_uri = Some("https://rp.example.com/auth/login".into());
+    let p = Arc::new(
+        Provider::new("https://idp.example/oidc".to_string())
+            .with_client(with_entry)
+            .with_client(client("rp-plain")),
+    );
+    let open = |query: &'static str, lang: Option<&'static str>| {
+        let p = p.clone();
+        async move {
+            let q: login::LoginQuery = serde_urlencoded::from_str(query).unwrap();
+            login::login_form(State(p), accept(lang), Path("gone".into()), Query(q)).await
+        }
+    };
+
+    let r = open("client_id=rp-entry", Some("ja")).await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        r.headers()[header::LOCATION],
+        "https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc"
+    );
+
+    for (query, lang, want) in [
+        ("client_id=rp-plain", Some("ja"), "ログインの有効期限が切れました。最初からやり直してください。"),
+        ("client_id=unknown", Some("en"), "This sign-in has expired. Please start again."),
+        ("", Some("en"), "This sign-in has expired. Please start again."),
+    ] {
+        let r = open(query, lang).await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(body_of(r).await, want, "{query}");
+    }
+}
+
+/// authorize が案内するログイン画面の URL に client_id が載り、期限切れの後もそれで
+/// 入口へ送り直せる（interaction は掃除されて client を引けなくなるため）。
+#[tokio::test]
+async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
+    let mut c = client("rp-entry");
+    c.initiate_login_uri = Some("https://rp.example.com/auth/login".into());
+    let app = router(
+        Provider::new("https://idp.example/oidc".to_string())
+            .with_base_path("/oidc")
+            .with_client(c),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let resp = http
+        .get(format!(
+            "http://{addr}/oidc/authorize?response_type=code&client_id=rp-entry\
+             &redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&scope=openid&state=s&nonce=n\
+             &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let to = resp.headers()[reqwest::header::LOCATION].to_str().unwrap().to_string();
+    assert!(to.starts_with("/oidc/login/") && to.ends_with("?client_id=rp-entry"), "{to}");
+    let live = http.get(format!("http://{addr}{to}")).send().await.unwrap();
+    assert_eq!(live.status(), 200);
+
+    let expired = http
+        .get(format!("http://{addr}/oidc/login/gone?client_id=rp-entry"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        expired.headers()[reqwest::header::LOCATION],
+        "https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc"
     );
 }

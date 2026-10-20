@@ -25,7 +25,7 @@ pub(super) async fn register_form(
         &format!(
             r#"<h1>[[Create an account]]</h1><p>[[We will send a confirmation link to your email address.]]</p>
 <form method="post" action="{action}">
-<input name="email" type="email" placeholder="email" autocomplete="email" autofocus>
+<input name="email" type="email" placeholder="[[Email address]]" autocomplete="email" autofocus>
 <button type="submit">[[Send confirmation email]]</button></form>"#
         ),
     )
@@ -78,7 +78,7 @@ pub(super) async fn register_submit(
     let email = form.email.trim().to_lowercase();
     let fs = match &p.firestore {
         Some(fs) => fs,
-        None => return plain_error("registration not available (no Firestore)"),
+        None => return plain_error(&localize("[[Something went wrong. Please try again.]]", Lang::from_headers(&headers))),
     };
     let lang = Lang::from_headers(&headers);
     match issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang)).await {
@@ -88,13 +88,19 @@ pub(super) async fn register_submit(
             "<h1>[[Confirmation email sent]]</h1><p>[[Open the link in the email and create a passkey to finish signing up (the link expires in 15 minutes).]]</p>",
         )
         .into_response(),
-        Err(e) if e == "invalid email" => plain_error("invalid email"),
-        Err(e) if e == "rate_limited" => {
-            (StatusCode::TOO_MANY_REQUESTS, "rate limited; please retry later").into_response()
-        }
+        Err(e) if e == "invalid email" => plain_error(&localize("[[Enter a valid email address.]]", lang)),
+        Err(e) if e == "rate_limited" => (
+            StatusCode::TOO_MANY_REQUESTS,
+            localize("[[Too many requests. Please try again later.]]", lang),
+        )
+            .into_response(),
         Err(e) => {
             tracing::error!("register_submit: {e}");
-            plain_error("internal error")
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response()
         }
     }
 }
@@ -203,6 +209,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <p id="msg"></p>
 <script>
 __WEBAUTHN_JS__
+__SERVER_ERROR_JS__
 const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
@@ -224,20 +231,20 @@ async function reg(){
  msg.textContent='[[Working…]]';
  try{
   const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:TOKEN})});
-  if(!r.ok){msg.textContent=await r.text();return;}
+  if(!r.ok){msg.textContent=await errorText(r);return;}
   const o=await r.json();
   const cred=await navigator.credentials.create({publicKey:{challenge:b64ToBuf(o.challenge),rp:o.rp,user:{id:b64ToBuf(o.user.id),name:o.user.name,displayName:o.user.displayName},pubKeyCredParams:o.pubKeyCredParams,authenticatorSelection:o.authenticatorSelection,attestation:o.attestation,timeout:o.timeout,excludeCredentials:(o.excludeCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id)}))}});
   const body={token:TOKEN,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),attestationObject:bufToB64(cred.response.attestationObject)}};
   if(nm)body.name=nm;
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){msg.textContent=await v.text();return;}
+  if(!v.ok){msg.textContent=await errorText(v);return;}
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
-  msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to log in]]</a>';
- }catch(e){msg.textContent=e.message;}
+  msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to sign in]]</a>';
+ }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script></body></html>"##;
     Html(
-        localize(body, lang)
+        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), lang)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
@@ -255,6 +262,7 @@ fn js_string_literal(s: &str) -> String {
 /// メールリンク /r?t= の着地。iPhone は AASA でアプリ起動、PC/Mac はブラウザ登録。
 #[derive(serde::Deserialize)]
 pub(super) struct MagicQuery {
+    #[serde(default)]
     t: String,
 }
 
@@ -262,8 +270,8 @@ pub(super) async fn magic_redirect(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     Query(q): Query<MagicQuery>,
-) -> Html<String> {
-    passkey_register_page(&p, Lang::from_headers(&headers), &q.t, None)
+) -> Response {
+    link_landing(&p, Lang::from_headers(&headers), &q.t)
 }
 
 /// oidc.sonrisa.co.jp は Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
@@ -278,6 +286,7 @@ pub(super) async fn apple_app_site_association() -> Response {
 
 #[derive(serde::Deserialize)]
 pub(super) struct VerifyQuery {
+    #[serde(default)]
     token: String,
 }
 
@@ -286,8 +295,16 @@ pub(super) async fn verify_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     Query(q): Query<VerifyQuery>,
-) -> Html<String> {
-    passkey_register_page(&p, Lang::from_headers(&headers), &q.token, None)
+) -> Response {
+    link_landing(&p, Lang::from_headers(&headers), &q.token)
+}
+
+/// メールのリンクが途中で切れて token が無いときは、登録画面を出さずにその旨を伝える。
+fn link_landing(p: &Provider, lang: Lang, token: &str) -> Response {
+    if token.is_empty() {
+        return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
+    }
+    passkey_register_page(p, lang, token, None).into_response()
 }
 
 /* ===== 招待（RP が発行を頼む、確認メール不要の登録リンク） ===== */
@@ -447,7 +464,13 @@ pub(super) async fn invite_page(
     let lang = Lang::from_headers(&headers);
     let fs = match &p.firestore {
         Some(fs) => fs,
-        None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response()
+        }
     };
     let (email, return_to) = match crate::registration::peek_invite(fs, &q.t).await {
         Ok(Some(t)) => t,
@@ -464,7 +487,11 @@ pub(super) async fn invite_page(
         }
         Err(e) => {
             tracing::error!("peek_invite: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response();
         }
     };
     if matches!(crate::registration::account_exists(fs, &email).await, Ok(true)) {
@@ -574,25 +601,6 @@ pub(super) struct RegVerifyReq {
     name: Option<String>,
 }
 
-const NAME_MAX_CHARS: usize = 80;
-
-/// 表示の向きを変える書式文字（Unicode の Bidi_Control）。RP の画面で氏名の見た目を偽れるので断る。
-fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-
-/// 氏名を前後の空白を除いて受け取る。空なら None、長すぎる・制御文字や向きを変える文字を含むなら Err。
-fn normalize_name(raw: Option<&str>) -> Result<Option<String>, &'static str> {
-    let name = raw.map(str::trim).unwrap_or("");
-    if name.is_empty() {
-        return Ok(None);
-    }
-    if name.chars().count() > NAME_MAX_CHARS || name.chars().any(|c| c.is_control() || is_bidi_control(c)) {
-        return Err("invalid name");
-    }
-    Ok(Some(name.to_string()))
-}
-
 pub(super) async fn register_passkey_verify(
     State(p): State<Arc<Provider>>,
     Json(req): Json<RegVerifyReq>,
@@ -604,9 +612,9 @@ pub(super) async fn register_passkey_verify(
     if let Some(r) = refuse_invite_for_registered(fs, &req.token).await {
         return r;
     }
-    let name = match normalize_name(req.name.as_deref()) {
+    let name = match crate::registration::normalize_profile_value(req.name.as_deref().unwrap_or("")) {
         Ok(n) => n,
-        Err(e) => return plain_error(e),
+        Err(()) => return plain_error("invalid name"),
     };
     if name.is_none() {
         match crate::registration::peek_invite(fs, &req.token).await {
@@ -689,6 +697,7 @@ mod invite_tests {
             client_id: id.into(),
             redirect_uris: vec![format!("{RP_ORIGIN}/auth/callback")],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             token_endpoint_auth_method: auth.into(),
             client_secret: secret.map(crate::dcr::hash_token),
             grant_types: vec!["authorization_code".into()],
