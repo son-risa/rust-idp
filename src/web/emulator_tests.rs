@@ -39,6 +39,7 @@ fn test_provider() -> Arc<Provider> {
             client_id: "test-ciba-rp".into(),
             redirect_uris: vec![],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             token_endpoint_auth_method: "none".into(),
             client_secret: None,
             grant_types: vec!["urn:openid:params:grant-type:ciba".into()],

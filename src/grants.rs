@@ -466,6 +466,7 @@ mod tests {
             client_secret: None,
             grant_types: vec!["authorization_code".into(), "refresh_token".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![],
             jwks_uri: None,
