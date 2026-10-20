@@ -34,9 +34,10 @@ formal/check.sh      # 手元で Tamarin の期待表を照合
 formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 ```
 
-下の各節の「表に出た前提 → rust-op の担保」の P-* は、[`premises.json`](./premises.json) に機械が読む形で写してある
-（担保のコード・試験・Kani ハーネス、または試験にできない理由）。`cargo test` の `formal_ledger_tests` が、README の前提の表
-（見出しの最初のセルが ID の表）の P-* と台帳の行が過不足なく対応すること、台帳が指すモデル・関数が在ること、Kani ハーネスが
+下の各節の「表に出た前提 → rust-op の担保」の表は、[`premises.json`](./premises.json)（担保のコード・試験・Kani ハーネス、
+または試験にできない理由を持つ台帳）から作る。`<!-- premises: {model} -->` と `<!-- /premises -->` の間は手で書かず、
+`UPDATE_PREMISE_TABLES=1 cargo test formal_ledger` で作り直す。前提の表は範囲の中だけに置き、範囲の外に前提の表を書かない（範囲の外の行は照合しない）。`cargo test` の `formal_ledger_tests` が、その範囲が台帳から
+作った表とバイト一致すること、台帳の ID の形と (id, model) の重なり、台帳が指すモデル・関数が在ること、Kani ハーネスが
 `kani-harnesses.txt` に在ることを検める。台帳の試験の名前は、CI の test の job で `formal/check-ledger-tests.sh` が
 `cargo test -- --list` の一覧と完全一致で照らし、`#[ignore]` の試験も断る。
 
@@ -79,7 +80,8 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 ## 表に出た前提 → rust-op の担保（本層の成果物）
 
-| ID | モデルが要求する前提（抽象） | rust-op の担保（具体） |
+<!-- premises: oauth_code_pkce.spthy -->
+| ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-SINGLEUSE | 認可コードは**原子的に単回消費**される（`AS_Code` が linear） | store の code 消費（単回）。回帰テスト `store::code_reuse_revokes_issued_tokens` |
 | P-CODEFRESH | 認可コードは**推測不能**（CSPRNG = Fr） | code 生成（乱数） |
@@ -87,7 +89,9 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 | P-CKEY | クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる） | private_key_jwt（`client_auth.rs`）。rust-op は**公開鍵のみ保持** |
 | P-REG | クライアントは**事前登録**され AS が公開鍵を知る | `with_client` / DCR（`clients` 登録、`resolve_client`） |
 | P-TLS | トークン配送路は**機密**で正しいクライアントへ届く（モデルでは鍵への暗号化で抽象化） | TLS（Firebase Hosting / Cloud Run）＋ token endpoint |
-| （攻撃者モデル） | In/Out を完全支配する回線攻撃者に耐える | — |
+<!-- /premises -->
+
+- （攻撃者モデル） In/Out を完全支配する回線攻撃者に耐える（担保: —）
 
 → 「**`token_secrecy` は、攻撃者X(回線支配)に対し、前提 {P-SINGLEUSE, P-VERIFIER, P-CKEY, P-REG, P-TLS} の下で成り立つ**」。
 これが目標「前提の明示」の1行。
@@ -127,12 +131,14 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
   = **cnf.jkt 束縛検査は必要**。外すと攻撃者が盗んだ token に**自分の鍵の proof** を付けて RS を通せる。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: dpop_binding.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-DKEY | DPoP 秘密鍵は秘匿（漏れると束縛が無効） | クライアント側保持。rust-op は proof を検証するだけで**鍵を持たない** |
 | P-CNF | RS は「proof の鍵 thumbprint = token の cnf.jkt」を検査 | `authenticate_token`（`at.jkt` と proof の jkt 一致）。introspection が cnf.jkt 公開 |
 | P-PROOFSIG | DPoP proof の署名検証（ES256） | `Es256Dpop`（`dpop.rs`） |
 | P-JTI | DPoP proof の jti 単回（リプレイ防止） | jti 単回ストア（`NonceStore` / Firestore 分散） |
+<!-- /premises -->
 
 → 導出された運用要件: **RS は token の cnf.jkt と DPoP proof の鍵 thumbprint の一致を検査せよ**（外すと盗難トークンが通る）。
 
@@ -162,6 +168,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 → **マンデート単回が必要**（外すと同一 auth_req_id から複数トークン）。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: ciba_rar.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-BIND | ユーザ承認は**具体的 mandate に commit** し、AS は承認された mandate のみ発行 | binding_message + authorization_details を auth_req_id に紐付け表示・承認、token に approved mandate |
@@ -169,7 +176,9 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 | P-MSINGLE | マンデート(auth_req_id) は**単回消費** | `mandate_consumed` CAS（/oauth/mandate/consume）+ CIBA store の単回 |
 | P-CAUTH | backchannel と poll で**クライアント認証** | ciba-rp Basic（live e2e で実機確認済） |
 | P-UAUTH | 承認は**ユーザ認証**（passkey） | fido2demo アプリで passkey 承認 |
-| （反スパム） | 無認証トリガの**レート制限** | `ciba_rate`（**記号的検証の対象外**＝量的性質） |
+<!-- /premises -->
+
+- （反スパム） 無認証トリガの**レート制限**（担保: `ciba_rate`（**記号的検証の対象外**＝量的性質））
 
 → 導出された運用要件: **ユーザ承認を具体的 mandate に暗号的に束縛し、AS は承認された mandate のみ発行せよ**（外すと表示すり替え）。**マンデートは単回消費せよ**。
 
@@ -197,13 +206,16 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 → **challenge 単回が必要**（外すとアサーション再送）。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: webauthn.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-AKEY | 認証器 credential 鍵は秘匿 | secure enclave。rust-op は**公開鍵のみ保持** |
 | P-ORIGIN | RP は origin/rpId == 自分 を検査 | `webauthn::verify_authentication`（origin + rpIdHash） |
-| P-CHAL | challenge 新鮮 + 単回 | `create/consume_webauthn_challenge`（単回） |
+| P-CHAL | challenge 新鮮 + 単回 | `create/consume_webauthn_challenge`（単回。updateTime の CAS 削除 `Firestore::take_doc` で、並行した 2 つの要求の片方だけが通る） |
 | P-SIG | 登録公開鍵で署名検証 | `webauthn::verify_authentication` |
-| （anti-clone） | signCount 単調増加 | signcount 検査（**記号的モデル対象外**＝異常検知） |
+<!-- /premises -->
+
+- （anti-clone） signCount 単調増加（担保: signcount 検査（**記号的モデル対象外**＝異常検知））
 
 → 導出された運用要件: **RP は origin/rpId が自分のものか検査せよ**（外すとフィッシング）／**challenge は単回**。
 
@@ -230,6 +242,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 → **aud 束縛が必要**（外すと RP1 宛 token を RP2 が受理）／**nonce 新鮮が必要**（外すと古い token 再送）。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: id_token.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-OPKEY | OP 署名鍵は秘匿 | ES256 / Cloud KMS（鍵をプロセスに展開しない） |
@@ -237,6 +250,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 | P-NONCE | nonce 新鮮 + RP が一致検査 | OP: 認可要求の nonce を token へ。RP: nonce 検証 |
 | P-SIG | RP は OP の JWKS で署名検証 | discovery / JWKS 公開、RP が検証 |
 | P-ISS | iss（発行者）確認（IdP mix-up 防止） | token の iss=OP。RP は OP の鍵で検証（モデルは OP 鍵束縛で表現） |
+<!-- /premises -->
 
 → 導出された運用要件: **RP は aud==自分・nonce==自 flow・iss==期待 OP・署名を検査せよ**（外すと audience confusion / replay / mix-up）。
 
@@ -406,12 +420,14 @@ AS の登録は 2 段に分けてある。先に「E がまだ登録済みでな
 → 単回の役割は「1 token 1 登録」に限られる。鍵の持ち主の束縛（`invite_binding`）は、単回が無くても崩れない。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: invite.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-ICLIENT | 招待を頼めるのは、招待を許した confidential client だけ（クライアント認証） | `authorize_invite_client`（`web/register.rs`、許可リストと public client の拒否） |
 | P-ITOKEN | token は推測不能（Fr） | `random_token`（OsRng の 32 バイト） |
 | P-ISINGLE | 招待は**原子的に単回消費**される（`Invite` が linear） | `consume_email_challenge`（`registration.rs`）。updateTime の CAS 削除で、勝った 1 つの要求だけが通る |
 | P-IMAIL | リンクは E のメール箱の持ち主にだけ届く | RP とメールの配送の基盤（モデルの外。漏れは `Leak_Link` で表す） |
+<!-- /premises -->
 
 → 導出された運用要件: **招待の token は、確認とは別に、消費そのものを原子的に行え**（確認だけでは並行した要求を止められない）。
 

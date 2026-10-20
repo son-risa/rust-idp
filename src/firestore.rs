@@ -140,6 +140,13 @@ fn resolve_database(raw: Result<String, std::env::VarError>) -> String {
     raw.ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "(default)".into())
 }
 
+/// Firestore への 1 回の要求の時間の上限。応答が返らない要求で、呼び出し（失効の走査・ローテーション）が止まり続けない。
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().expect("reqwest client")
+}
+
 impl Firestore {
     pub fn new(project: impl Into<String>) -> Self {
         let project = project.into();
@@ -150,7 +157,7 @@ impl Firestore {
         Self {
             project,
             database,
-            http: reqwest::Client::new(),
+            http: http_client(),
             token: Mutex::new(None),
             emulator_host: std::env::var("FIRESTORE_EMULATOR_HOST").ok(),
         }
@@ -163,7 +170,7 @@ impl Firestore {
         Self {
             project: project.into(),
             database: "(default)".into(),
-            http: reqwest::Client::new(),
+            http: http_client(),
             token: Mutex::new(None),
             emulator_host: Some(emulator_host.into()),
         }
@@ -678,10 +685,14 @@ pub(crate) mod fake_firestore {
 
     #[derive(Default)]
     pub struct FakeState {
+        /// 門: (メソッド, col, id) の要求が届いたら reached を鳴らし、release まで止める（並走の順を固定する）。
+        gates: Mutex<HashMap<(&'static str, String, String), (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
         docs: Mutex<HashMap<(String, String), Doc>>,
         next_version: Mutex<u64>,
         /// fcm.rs の send() が投げた message body をそのまま記録する（identifier 一貫性の検証用）。
         fcm_sent: Mutex<Vec<Value>>,
+        /// 失敗の注入: (メソッド, col, id) に合う次の要求に 1 回だけ、その状態の番号を返す。id が None なら col の全ての id に合う。
+        failures: Mutex<Vec<(&'static str, String, Option<String>, StatusCode)>>,
     }
 
     impl FakeState {
@@ -693,6 +704,40 @@ pub(crate) mod fake_firestore {
 
         pub fn fcm_sent_messages(&self) -> Vec<Value> {
             self.fcm_sent.lock().unwrap().clone()
+        }
+
+        /// method は "GET"・"PATCH"・"DELETE" のどれか。次の 1 回だけ 503 を返す。
+        pub fn fail_once(&self, method: &'static str, col: &str, id: Option<&str>) {
+            self.fail_once_with(method, col, id, StatusCode::SERVICE_UNAVAILABLE);
+        }
+
+        /// fail_once と同じだが、返す状態の番号を選べる（例えば、並行する削除に先を越された 404）。
+        pub fn fail_once_with(&self, method: &'static str, col: &str, id: Option<&str>, status: StatusCode) {
+            self.failures.lock().unwrap().push((method, col.to_string(), id.map(str::to_string), status));
+        }
+
+        fn take_failure(&self, method: &str, col: &str, id: &str) -> Option<StatusCode> {
+            let mut f = self.failures.lock().unwrap();
+            let k = f.iter().position(|(m, c, i, _)| *m == method && c == col && i.as_deref().is_none_or(|i| i == id))?;
+            Some(f.remove(k).3)
+        }
+    }
+
+    impl FakeState {
+        /// (method, col, id) の次の要求を止める門を置く。返す (reached, release) の reached は要求が届いたら鳴り、
+        /// release を鳴らすと要求が進む（その後に fail_once の注入があれば、それが効く）。
+        pub fn gate(&self, method: &'static str, col: &str, id: &str) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+            let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+            self.gates.lock().unwrap().insert((method, col.to_string(), id.to_string()), gate.clone());
+            gate
+        }
+
+        async fn pass_gate(&self, method: &'static str, col: &str, id: &str) {
+            let gate = self.gates.lock().unwrap().remove(&(method, col.to_string(), id.to_string()));
+            if let Some((reached, release)) = gate {
+                reached.notify_one();
+                release.notified().await;
+            }
         }
     }
 
@@ -716,6 +761,10 @@ pub(crate) mod fake_firestore {
         State(st): State<Arc<FakeState>>,
         Path((_project, col, id)): Path<(String, String, String)>,
     ) -> Response {
+        st.pass_gate("GET", &col, &id).await;
+        if let Some(status) = st.take_failure("GET", &col, &id) {
+            return status.into_response();
+        }
         let docs = st.docs.lock().unwrap();
         match docs.get(&(col, id)) {
             Some(d) => {
@@ -732,6 +781,10 @@ pub(crate) mod fake_firestore {
         Query(pre): Query<Precondition>,
         Json(body): Json<Value>,
     ) -> Response {
+        st.pass_gate("PATCH", &col, &id).await;
+        if let Some(status) = st.take_failure("PATCH", &col, &id) {
+            return status.into_response();
+        }
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);
         if let Some(want) = &pre.exists {
@@ -773,6 +826,10 @@ pub(crate) mod fake_firestore {
         Path((_project, col, id)): Path<(String, String, String)>,
         Query(pre): Query<Precondition>,
     ) -> Response {
+        st.pass_gate("DELETE", &col, &id).await;
+        if let Some(status) = st.take_failure("DELETE", &col, &id) {
+            return status.into_response();
+        }
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);
         if let Some(want_ut) = &pre.update_time {
@@ -1156,5 +1213,15 @@ mod tests {
 
     fn ts_field(rfc3339: &str) -> Value {
         json!({ "timestampValue": rfc3339 })
+    }
+
+    /// 応答が返らない要求は、HTTP の時間の上限で誤りとして返る（呼び出しが止まり続けない）。
+    #[tokio::test]
+    async fn a_request_that_never_answers_times_out() {
+        let (host, state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let (_reached, _release) = state.gate("GET", "refreshTokens", "HANG");
+        let r = tokio::time::timeout(HTTP_TIMEOUT * 3, fs.get_doc("refreshTokens", "HANG")).await;
+        assert!(matches!(r, Ok(Err(_))), "時間の上限で誤りにならなかった");
     }
 }

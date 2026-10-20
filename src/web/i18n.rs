@@ -111,11 +111,10 @@ fn translate(key: &str) -> Option<&'static str> {
 
 pub(crate) const CATALOG: &[(&str, &str)] = &[
     // login.rs / pages.rs
-    ("Log in", "ログイン"),
-    ("Sign in", "サインイン"),
-    ("Sign in with a passkey", "Passkey でサインイン"),
+    ("Sign in", "ログイン"),
+    ("Sign in with a passkey", "Passkey でログイン"),
     ("Email address (optional)", "メールアドレス（任意）"),
-    ("Sign up with email", "新規登録 (メアドで)"),
+    ("Sign up with email", "メールアドレスで新規登録"),
     ("Cancel", "キャンセル"),
     (
         "This browser does not support passkeys. Open this page in the standard Safari or Chrome app.",
@@ -125,7 +124,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "Could not start the passkey. Open this page in the standard Safari or Chrome app (in-app browsers are not supported).",
         "passkey を起動できませんでした。標準の Safari / Chrome アプリで開いてください（アプリ内ブラウザでは使えません）。",
     ),
-    ("Signing in…", "サインイン処理中…"),
+    ("Signing in…", "ログイン処理中…"),
     ("Male", "男性"),
     ("Female", "女性"),
     ("Other", "その他"),
@@ -138,24 +137,24 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Time zone", "タイムゾーン"),
     ("Locale", "ロケール"),
     ("Edit", "編集"),
-    ("Log out", "ログアウト"),
-    ("Token info (debug)", "トークン情報 (デバッグ)"),
+    ("Sign out", "ログアウト"),
+    ("Token info (debug)", "トークン情報（デバッグ）"),
     ("Edit profile", "プロフィール編集"),
-    ("Gender (male/female/other)", "性別 (male/female/other)"),
-    ("Birthday (YYYY-MM-DD)", "誕生日 (YYYY-MM-DD)"),
+    ("Gender (male/female/other)", "性別（male/female/other）"),
+    ("Birthday (YYYY-MM-DD)", "誕生日（YYYY-MM-DD）"),
     ("Save", "保存"),
     ("Your session has expired", "セッションが切れました"),
-    ("Failed to save", "保存に失敗しました"),
     ("Sign-in approval request", "ログイン承認の依頼"),
-    ("Approve (passkey)", "承認 (passkey)"),
+    ("Approve (passkey)", "承認（passkey）"),
     ("Reject", "拒否"),
-    ("Error", "エラー"),
-    ("Your session has expired. Please sign in again.", "セッションが切れました。再度サインインしてください。"),
+    ("Your session has expired. Please sign in again.", "セッションが切れました。再度ログインしてください。"),
     // register.rs
     ("Sign up", "登録"),
     ("Create an account", "ユーザー登録"),
     ("We will send a confirmation link to your email address.", "メールアドレスに確認リンクを送ります。"),
     ("Send confirmation email", "確認メールを送信"),
+    ("Enter a valid email address.", "正しいメールアドレスを入力してください。"),
+    ("Too many requests. Please try again later.", "要求が多すぎます。しばらくしてからお試しください。"),
     ("Sent", "送信しました"),
     ("Confirmation email sent", "確認メールを送信しました"),
     (
@@ -191,16 +190,39 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Create a passkey and sign up", "passkey を作成して登録"),
     ("Enter your name", "氏名を入力してください"),
     ("Working…", "処理中…"),
-    ("Registration complete. Taking you to sign in…", "登録が完了しました。サインインの画面へ移ります…"),
+    ("Registration complete. Taking you to sign in…", "登録が完了しました。ログイン画面へ移ります…"),
     ("Registration complete.", "登録が完了しました。"),
-    ("Go to log in", "ログインへ"),
+    // mod.rs（passkey の API の失敗）
+    ("This took too long. Please try again.", "時間が経ちすぎました。もう一度お試しください。"),
+    ("This passkey is not registered.", "この passkey は登録されていません。"),
+    ("The passkey could not be verified.", "passkey を確認できませんでした。"),
+    ("This account is disabled.", "このアカウントは凍結されています。"),
+    ("This account needs to be registered again.", "このアカウントは登録し直す必要があります。"),
+    ("This sign-in has expired. Please start again.", "ログインの有効期限が切れました。最初からやり直してください。"),
+    ("This link has expired or has already been used.", "このリンクは期限が切れたか、既に使われています。"),
+    (
+        "This email address is already registered. Please sign in.",
+        "このメールアドレスは既に登録されています。ログインしてください。",
+    ),
+    ("The passkey could not be created.", "passkey を作成できませんでした。"),
+    (
+        "The name is too long or contains characters that cannot be used.",
+        "氏名が長すぎるか、使えない文字が入っています。",
+    ),
+    ("This request was not found or has expired.", "この要求は見つからないか、期限が切れています。"),
+    ("No passkey is registered for this account.", "このアカウントには passkey が登録されていません。"),
+    ("This request has already been handled.", "この要求は既に処理されています。"),
+    ("Something went wrong. Please try again.", "問題が起きました。もう一度お試しください。"),
+    ("The passkey was canceled or timed out.", "passkey の操作が取り消されたか、時間切れになりました。"),
     // oidc.rs
-    ("You have logged out", "ログアウトしました"),
-    ("Go to sign in", "サインインへ"),
+    ("You have signed out", "ログアウトしました"),
+    ("Go to sign in", "ログインへ"),
     // ciba.rs
-    ("You need to log in to approve.", "承認するにはログインが必要です。"),
+    ("You need to sign in to approve.", "承認するにはログインが必要です。"),
     ("CIBA approval", "CIBA 承認"),
     ("There are no pending requests.", "保留中の要求はありません。"),
+    ("(no message)", "（メッセージなし）"),
+    ("Requested by", "要求元"),
     // admin.rs
     ("Admin console", "管理コンソール"),
     ("Choose an action from the navigation above.", "上のナビゲーションから操作を選んでください。"),
@@ -211,11 +233,11 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "Delete this account permanently? Its passkey, profile, and notification registration are also removed, and this cannot be undone (the CIBA approval history is kept).",
         "このアカウントを完全に削除しますか？passkey・プロフィール・通知の登録も消え、元に戻せません（CIBA の承認の履歴は残ります）。",
     ),
-    ("Delete", "削除(delete)"),
-    ("Enable", "凍結解除(enable)"),
+    ("Delete", "削除（delete）"),
+    ("Enable", "凍結解除（enable）"),
     ("You cannot disable yourself (your session would end immediately).", "自分自身は凍結できません（セッションが即座に失効するため）。"),
     ("Disable this account? Its sessions and tokens are also revoked.", "このアカウントを凍結しますか？セッション・トークンも失効します。"),
-    ("Disable", "凍結(disable)"),
+    ("Disable", "凍結（disable）"),
     ("Revoke your own admin rights?", "自分自身の管理者権限を剥奪しますか？"),
     ("Revoke admin rights?", "管理者権限を剥奪しますか？"),
     ("Revoke admin", "管理者を剥奪"),
@@ -226,12 +248,80 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Action", "操作"),
     ("Details", "詳細"),
     ("Target", "対象"),
-    ("Role", "管理者"),
+    ("Role", "権限"),
     ("History", "操作履歴"),
     ("Back to the list", "一覧へ戻る"),
     ("Disabled", "凍結中"),
     ("Active", "有効"),
     ("Admin", "管理者"),
+    ("Users", "ユーザー"),
+    ("Users ({n})", "ユーザー（{n}）"),
+    ("Clients ({n})", "クライアント（{n}）"),
+    ("Unused IATs ({n})", "未消費のIAT（{n}）"),
+    ("Signature counter", "署名カウンタ"),
+    ("Client ID", "クライアント ID"),
+    (
+        "A return address must use https and must not contain a fragment or user info: {uri}",
+        "戻り先は https で、フラグメントやユーザー情報を含まないものにしてください: {uri}",
+    ),
+    (
+        "A return address must be on the host of a redirect_uri of this client: {host}",
+        "戻り先は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
+    ),
+    (
+        "This app is not registered. Please contact the app provider. (error code: {code})",
+        "このアプリは登録されていません。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
+    ),
+    (
+        "The request from the app could not be verified. Please start again from the app. (error code: {code})",
+        "アプリからの要求を確認できませんでした。アプリからやり直してください。（エラーコード: {code}）",
+    ),
+    (
+        "Something went wrong. Please try again. (error code: {code})",
+        "問題が起きました。もう一度お試しください。（エラーコード: {code}）",
+    ),
+    (
+        "The request from the app is invalid. Please contact the app provider. (error code: {code})",
+        "アプリからの要求に問題があります。アプリの提供元にお問い合わせください。（エラーコード: {code}）",
+    ),
+    (
+        "The return address after sign-out is not registered for this app. Please contact the app provider.",
+        "ログアウト後の戻り先がこのアプリに登録されていません。アプリの提供元にお問い合わせください。",
+    ),
+    ("Page not found", "ページが見つかりません"),
+    (
+        "This link is incomplete. Please open the link in the email again.",
+        "リンクが途中で切れています。メールのリンクを開き直してください。",
+    ),
+    (
+        "Some of the entered values are invalid. Please check them and try again.",
+        "入力内容に誤りがあります。確認してもう一度お試しください。",
+    ),
+    (
+        "The URL of this page is not valid. Please check the link and try again.",
+        "このページの URL が正しくありません。リンクを確認してもう一度お試しください。",
+    ),
+    (
+        "Sign-in could not be completed. (error code: {code})",
+        "ログインできませんでした。（エラーコード: {code}）",
+    ),
+    ("Sign-in was canceled.", "ログインをキャンセルしました。"),
+    ("Failed to save. Please try again.", "保存に失敗しました。もう一度お試しください。"),
+    ("IATs", "IAT"),
+    ("Hash", "ハッシュ"),
+    ("Redirect hosts", "redirect host"),
+    ("Grant types", "grant_type"),
+    ("User not found", "ユーザーが見つかりません"),
+    ("Client not found", "クライアントが見つかりません"),
+    ("Choose a client profile", "プロファイルを選んでください"),
+    ("Please sign in.", "ログインしてください。"),
+    ("Only admins can open this page.", "このページは管理者だけが開けます。"),
+    ("The admin console is not available.", "管理コンソールは使えません。"),
+    ("User", "ユーザー"),
+    ("Clients", "クライアント"),
+    ("Client", "クライアント"),
+    ("Audit log", "監査ログ"),
+    ("Email address", "メールアドレス"),
     ("Regular user", "一般"),
     ("You cannot disable yourself", "自分自身は凍結できません"),
     ("Admins cannot be deleted. Revoke admin first", "管理者は削除できません。先に管理者を剥奪してください"),
@@ -245,27 +335,45 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("The last admin cannot be revoked", "最後の管理者は剥奪できません"),
     ("Audit log (latest {n})", "監査ログ（直近{n}件）"),
     ("Auth method", "認証方式"),
-    ("(none)", "(なし)"),
+    ("(none)", "（なし）"),
     (
         "(none — this client has no return address after sign-out)",
-        "(なし — この client はサインアウト後の戻り先を持ちません)",
+        "（なし。このクライアントはログアウト後の戻り先を持ちません）",
     ),
     (
         "post_logout_redirect_uris (one per line; leave empty for no return address)",
         "post_logout_redirect_uris（1 行に 1 つ。空にすると戻り先なし）",
     ),
     ("Save return addresses", "戻り先を保存"),
+    (
+        "initiate_login_uri (where an expired sign-in is sent to start again; leave empty to show the expired message)",
+        "initiate_login_uri（期限切れのログイン画面からここへ送り直す。空にすると期限切れの案内を出す）",
+    ),
+    ("Save sign-in start address", "ログインの入口を保存"),
+    (
+        "A sign-in start address must use https and must not contain a fragment or user info: {uri}",
+        "ログインの入口は https で、フラグメントやユーザー情報を含まないものにしてください: {uri}",
+    ),
+    (
+        "A sign-in start address must be on the host of a redirect_uri of this client: {host}",
+        "ログインの入口は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
+    ),
     ("Revoke this client? This cannot be undone.", "このクライアントを失効させますか？取り消せません。"),
+    ("Revoke", "失効"),
     ("Set", "設定済み"),
     ("None", "なし"),
     (
         "This client was changed by another update. Reopen it and try again.",
-        "この client は別の更新で変わりました。開き直してからやり直してください。",
+        "このクライアントは別の更新で変わりました。開き直してからやり直してください。",
     ),
     ("Unused IATs", "未消費のIAT"),
-    ("New mint", "新規mint"),
+    ("New mint", "新規発行"),
+    ("Unused", "未消費"),
+    ("Reusable", "再利用可"),
+    ("Discard", "破棄"),
     ("Discard this IAT?", "このIATを破棄しますか？"),
-    ("Mint a new IAT", "新規IATをmint"),
+    ("Mint", "発行"),
+    ("Mint a new IAT", "IATを新規発行"),
     ("Client profile", "プロファイル"),
     ("Confidential Key (private_key_jwt, FAPI2 equivalent)", "Confidential Key（private_key_jwt、FAPI2相当）"),
     ("Confidential Secret (client_secret_basic)", "Confidential Secret（client_secret_basic）"),
@@ -277,16 +385,16 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Allowed grant_type (default: authorization_code, refresh_token)", "許可する grant_type（省略時: authorization_code, refresh_token）"),
     ("Expires in (hours)", "有効期限（時間）"),
     ("Specify at least one redirect host", "redirect host を最低1つ指定してください"),
-    ("ttl_hours must be between 1 and {max} (365 days)", "ttl_hours は1〜{max}(365日)の範囲で指定してください"),
+    ("ttl_hours must be between 1 and {max} (365 days)", "ttl_hours は1〜{max}（365日）の範囲で指定してください"),
     ("ttl_hours is too large", "ttl_hours が大きすぎます"),
     (
         "The IAT was issued (hash={hash}), but the raw token cannot be shown because saving it for display failed.",
         "IATの発行自体は成功しました（hash={hash}）が、表示用の一時保存に失敗したため生トークンは表示できません。",
     ),
     ("Already shown", "表示済みです"),
-    ("This token was already shown or has expired. Mint a new one.", "このトークンは既に表示済み、または期限切れです。再度mintしてください。"),
-    ("Expired", "期限切れです"),
-    ("It took too long to show it. Mint a new one.", "表示までに時間がかかりすぎました。再度mintしてください。"),
+    ("This token was already shown or has expired. Mint a new one.", "このトークンは既に表示済み、または期限切れです。もう一度発行してください。"),
+    ("Expired", "期限切れ"),
+    ("It took too long to show it. Mint a new one.", "表示までに時間がかかりすぎました。もう一度発行してください。"),
     ("IAT issued", "IATを発行しました"),
     ("This screen is shown only once. Copy the token now.", "この画面は一度しか表示されません。今すぐコピーしてください。"),
     ("IAT issuance complete", "IAT発行完了"),
@@ -304,7 +412,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("This email address", "このメールアドレス"),
     (
         "is already registered. Please sign in instead of signing up.",
-        "は既に登録されています。新規登録ではなくサインインをご利用ください。",
+        "は既に登録されています。新規登録ではなくログインをご利用ください。",
     ),
     // fcm.rs
     ("Sign-in approval", "ログインの承認"),
@@ -367,6 +475,24 @@ mod tests {
         assert_eq!(keys.len(), CATALOG.len(), "同じ鍵が二度ある");
     }
 
+    // 英語は sign in / sign out、日本語はログイン / ログアウトに揃える。
+    #[test]
+    fn sign_in_wording_is_consistent() {
+        for (en, ja) in CATALOG {
+            // post_logout_redirect_uris・initiate_login_uri は仕様の項目名なので語としては数えない。
+            let text = en
+                .to_lowercase()
+                .replace("post_logout_redirect_uri", "")
+                .replace("initiate_login_uri", "");
+            for bad in ["log in", "log-in", "login", "log out", "log-out", "logout", "logged", "logon"] {
+                assert!(!text.contains(bad), "英語に「{bad}」: {en}");
+            }
+            for bad in ["サインイン", "サインアウト"] {
+                assert!(!ja.contains(bad), "日本語に「{bad}」: {ja}");
+            }
+        }
+    }
+
     #[test]
     fn catalog_text_is_safe_everywhere() {
         for (en, ja) in CATALOG {
@@ -405,7 +531,7 @@ mod tests {
         );
         assert_eq!(
             localize(&t, Lang::Ja),
-            format!("<html lang=\"ja\">サインイン {OPEN}not a key{CLOSE} {OPEN}open")
+            format!("<html lang=\"ja\">ログイン {OPEN}not a key{CLOSE} {OPEN}open")
         );
         assert_eq!(
             bilingual(&format!("{OPEN}Sign-in approval{CLOSE}")),
@@ -418,7 +544,7 @@ mod tests {
         let t = format!("<td>{OPEN}</td><button>{OPEN}Sign in{CLOSE}</button>");
         assert_eq!(
             localize(&t, Lang::Ja),
-            format!("<td>{OPEN}</td><button>サインイン</button>")
+            format!("<td>{OPEN}</td><button>ログイン</button>")
         );
         assert_eq!(
             localize(&t, Lang::En),

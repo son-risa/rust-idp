@@ -23,6 +23,9 @@ pub const INTERACTION_TTL_SECS: u64 = 3600; // ログイン完了までの猶予
 pub const SESSION_TTL_SECS: u64 = 7 * 24 * 3600; // ブラウザセッション(7日)
 pub const ACCESS_TTL_SECS: u64 = 900; // access token(15分、grants の expires_in と一致)
 pub const REFRESH_TTL_SECS: u64 = 14 * 24 * 3600; // refresh token(14日)
+/// 系列の失効の札を RT の TTL より長く残す余裕。インスタンスの間の時計のずれ（1 日まで）と、札の書き込みの
+/// 遅れ（HTTP の時間の上限と書き直しの回数で 1 日より十分短い）の分。
+pub const FAMILY_REVOCATION_MARGIN_SECS: u64 = 2 * 24 * 3600;
 
 /// 値に絶対失効時刻を添えるラッパー。expires_at(UNIX 秒)を過ぎたら失効とみなす。
 struct Expiring<T> {
@@ -48,6 +51,10 @@ fn retain_alive<K, V>(map: &mut HashMap<K, Expiring<V>>) {
 pub trait Store: Send + Sync {
     async fn save_interaction(&self, i: Interaction);
     async fn get_interaction(&self, uid: &str) -> Option<Interaction>;
+    /// ログインの完了（account_id と auth_time）を、まだ在る interaction にだけ書く。在れば true。
+    /// 消費済みの interaction を作り直さないため、無ければ書かずに false（遅れて届いた verify が
+    /// 同じ uid の interaction を蘇らせ、2 回目の resume で 2 つ目のコードが出るのを防ぐ）。
+    async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool;
     /// interaction を単回消費（削除）する。削除に成功（=この呼び出しが初回）したら true、
     /// 既に無い（消費済み/未存在）なら false。authorize_resume で「1認証=1コード」を保証する。
     async fn consume_interaction(&self, uid: &str) -> bool;
@@ -82,9 +89,12 @@ pub trait Store: Send + Sync {
     /// 成功）、既に used or 競合敗北 or 未存在なら false。delete でなく used マークで残すことで、
     /// 後の再提示を「再利用」として検知できる。
     async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool;
-    /// 再利用検知時に系列を失効する。start から `replaced_by` を辿り各 RT を削除する
-    /// （盗難者・正規ユーザ双方の RT を無効化＝再認証を強制）。
-    async fn revoke_refresh_family(&self, start_token: &str);
+    /// 再利用検知時に系列を失効する。系列に失効の札を書き（以後その系列の RT はどれも使えない）、
+    /// 後片付けとして start から `replaced_by` を辿って各 RT を削除する。札が使わせないので、
+    /// 後片付けの消し漏れは安全に関わらない（盗難者・正規ユーザ双方に再認証を強制）。
+    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str);
+    /// 系列に失効の札があれば true。ストアに問い合わせられないときも true（閉じる側に倒す）。
+    async fn refresh_family_revoked(&self, family_id: &str) -> bool;
 
     /// sub からアカウントを解決。未登録なら自動生成する（PoC 用）。
     async fn find_account(&self, sub: &str) -> Account;
@@ -110,6 +120,7 @@ pub struct MemoryStore {
     codes: Mutex<HashMap<String, Expiring<CodeRecord>>>,
     access_tokens: Mutex<HashMap<String, Expiring<AccessToken>>>,
     refresh_tokens: Mutex<HashMap<String, Expiring<RefreshToken>>>,
+    revoked_families: Mutex<HashMap<String, Expiring<()>>>,
 }
 
 
@@ -129,6 +140,16 @@ impl Store for MemoryStore {
                 None
             }
             None => None,
+        }
+    }
+    async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool {
+        match self.interactions.lock().unwrap().get_mut(uid) {
+            Some(e) if e.alive() => {
+                e.value.account_id = Some(account_id.to_string());
+                e.value.auth_time = Some(auth_time);
+                true
+            }
+            _ => false,
         }
     }
     async fn consume_interaction(&self, uid: &str) -> bool {
@@ -261,15 +282,20 @@ impl Store for MemoryStore {
             _ => false,
         }
     }
-    async fn revoke_refresh_family(&self, start_token: &str) {
+    async fn refresh_family_revoked(&self, family_id: &str) -> bool {
+        self.revoked_families.lock().unwrap().get(family_id).is_some_and(|e| e.alive())
+    }
+    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
+        self.revoked_families
+            .lock()
+            .unwrap()
+            .insert(family_id.to_string(), Expiring::new((), now_secs() + REFRESH_TTL_SECS + FAMILY_REVOCATION_MARGIN_SECS));
+        // 後片付け: ローテーションは単回なので鎖は枝分かれせず、start から replaced_by を辿れば以後の RT を
+        // 全部消せる。壊れた replaced_by の循環は訪れた集合で止める。
         let mut map = self.refresh_tokens.lock().unwrap();
+        let mut seen = std::collections::HashSet::new();
         let mut cur = Some(start_token.to_string());
-        let mut guard = 0;
-        while let Some(t) = cur {
-            guard += 1;
-            if guard > 64 {
-                break; // 系列長の安全上限（壊れた replaced_by ループ対策）
-            }
+        while let Some(t) = cur.filter(|t| seen.insert(t.clone())) {
             cur = map.remove(&t).and_then(|e| e.value.replaced_by);
         }
     }
@@ -285,6 +311,7 @@ impl Store for MemoryStore {
         retain_alive(&mut self.codes.lock().unwrap());
         retain_alive(&mut self.access_tokens.lock().unwrap());
         retain_alive(&mut self.refresh_tokens.lock().unwrap());
+        retain_alive(&mut self.revoked_families.lock().unwrap());
     }
 }
 
@@ -394,7 +421,7 @@ mod tests {
                 let rb = if i < n { Some(format!("RT{}", i + 1)) } else { None };
                 s.save_refresh_token(rtok(&format!("RT{i}"), rb.as_deref(), i < n)).await;
             }
-            s.revoke_refresh_family("RT1").await;
+            s.revoke_refresh_family("fam", "RT1").await;
             for i in 1..=n {
                 assert!(s.get_refresh_token(&format!("RT{i}")).await.is_none(), "n={n} RT{i} 残存");
             }
@@ -407,7 +434,7 @@ mod tests {
         let s = MemoryStore::default();
         s.save_refresh_token(rtok("RT1", Some("RT2"), true)).await;
         s.save_refresh_token(rtok("RT2", Some("RT1"), true)).await; // RT1<->RT2 循環
-        s.revoke_refresh_family("RT1").await; // 停止すること自体が検証点
+        s.revoke_refresh_family("fam", "RT1").await; // 停止すること自体が検証点
         assert!(s.get_refresh_token("RT1").await.is_none());
         assert!(s.get_refresh_token("RT2").await.is_none());
     }

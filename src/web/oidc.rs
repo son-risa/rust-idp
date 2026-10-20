@@ -68,11 +68,27 @@ pub(super) async fn jwks(State(p): State<Arc<Provider>>) -> Json<serde_json::Val
 }
 /* ===== authorize ===== */
 
+/// redirect_uri を信用できない段階の失敗を、ブラウザの言語で表示する。英語の詳細は
+/// RP の開発者が運営に問い合わせたときに引けるようにログへ残し、画面には OAuth のエラーコードだけ添える。
+fn app_error(lang: Lang, code: &str, detail: &str) -> Response {
+    tracing::warn!(event = "authorize_rejected", code, detail);
+    let msg = match code {
+        "invalid_client" => "[[This app is not registered. Please contact the app provider. (error code: {code})]]",
+        "invalid_request_uri" => "[[The request from the app could not be verified. Please start again from the app. (error code: {code})]]",
+        "server_error" => "[[Something went wrong. Please try again. (error code: {code})]]",
+        _ => "[[The request from the app is invalid. Please contact the app provider. (error code: {code})]]",
+    };
+    let status = if code == "server_error" { StatusCode::INTERNAL_SERVER_ERROR } else { StatusCode::BAD_REQUEST };
+    (status, localize(msg, lang).replace("{code}", code)).into_response()
+}
+
 pub(super) async fn authorize(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     jar: CookieJar,
     RawQuery(raw): RawQuery,
 ) -> Response {
+    let lang = Lang::from_headers(&headers);
     let raw = raw.unwrap_or_default();
     // 非 PAR の素の request_uri は run_checks 後に拒否する（SSRF 回避、PAR-only 維持）。
     let q0: HashMap<String, String> = serde_urlencoded::from_str(&raw).unwrap_or_default();
@@ -89,18 +105,18 @@ pub(super) async fn authorize(
         let cid = q0.get("client_id").map(|s| s.as_str()).unwrap_or("");
         let client = match p.resolve_client(cid).await {
             Some(c) => c,
-            None => return plain_error("unknown client for request object"),
+            None => return app_error(lang, "invalid_client", "unknown client for request object"),
         };
         match crate::request_object::verify(&client, req, &p.issuer, &p.jar_jti).await {
             Ok(params) => serde_urlencoded::to_string(&params).unwrap_or_default(),
-            Err(e) => return plain_error(&format!("invalid request object: {}", e.description())),
+            Err(e) => return app_error(lang, "invalid_request_object", &e.description()),
         }
     } else {
         match q0.get("request_uri") {
             Some(request_uri) if request_uri.starts_with(crate::par::URN_PREFIX) => {
                 let fs = match &p.firestore {
                     Some(fs) => fs,
-                    None => return plain_error("PAR unavailable (no Firestore)"),
+                    None => return app_error(lang, "server_error", "PAR unavailable (no Firestore)"),
                 };
                 // peek: 削除しない。認可完了前は再利用可。コード発行時に delete で単回化する。
                 match crate::par::peek(fs, request_uri).await {
@@ -110,7 +126,8 @@ pub(super) async fn authorize(
                         par_request_uri = Some(request_uri.clone());
                         params
                     }
-                    _ => return plain_error("invalid or expired request_uri"),
+                    Ok(None) => return app_error(lang, "invalid_request_uri", "invalid or expired request_uri"),
+                    Err(e) => return app_error(lang, "server_error", &format!("PAR lookup failed: {e}")),
                 }
             }
             _ => raw,
@@ -120,12 +137,12 @@ pub(super) async fn authorize(
     // PAR 作成クライアントと異なる場合は拒否する（別クライアントによる request_uri 流用防止）。
     if let (Some(creator), Some(req_cid)) = (&par_creator, q0.get("client_id")) {
         if req_cid != creator {
-            return plain_error("request_uri was issued to a different client");
+            return app_error(lang, "invalid_request_uri", "request_uri was issued to a different client");
         }
     }
     let params: AuthParams = match serde_urlencoded::from_str(&raw) {
         Ok(p) => p,
-        Err(e) => return plain_error(&format!("invalid query: {e}")),
+        Err(e) => return app_error(lang, "invalid_request", &format!("invalid query: {e}")),
     };
     // Phase 0→1: client 解決 + redirect_uri 検証。ここで失敗した場合は redirect_uri を
     // 一切信用できないため plain 表示のみ（authorize_error は型的に呼べない）。
@@ -136,7 +153,7 @@ pub(super) async fn authorize(
     .await
     {
         Ok(r) => r,
-        Err(e) => return plain_error(&format!("{}: {}", e.code(), e.description())),
+        Err(e) => return app_error(lang, e.code(), &e.description()),
     };
     // Phase 1: 可換なポリシーチェック群。以降のエラーは検証済み redirect へ返せる。
     if let Err(e) = run_checks(&p, &req).await {
@@ -184,29 +201,35 @@ pub(super) async fn authorize(
             request_uri: par_request_uri,
         })
         .await;
-    Redirect::to(&p.path(&format!("/login/{uid}"))).into_response()
+    // client_id を URL に残す: 期限切れの後は interaction が掃除されて client を引けないが、
+    // ログイン画面はその client の入口（initiate_login_uri）へ送り直したい。
+    let q = serde_urlencoded::to_string([("client_id", &req.client.client_id)]).unwrap_or_default();
+    Redirect::to(&p.path(&format!("/login/{uid}?{q}"))).into_response()
 }
 
 pub(super) async fn authorize_resume(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
+    let lang = Lang::from_headers(&headers);
+    let expired = || plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang));
     let uid = match q.get("uid") {
         Some(u) => u,
-        None => return plain_error("uid required"),
+        None => return expired(),
     };
     let interaction = match p.store.get_interaction(uid).await {
         Some(i) => i,
-        None => return plain_error("interaction not found"),
+        None => return expired(),
     };
     let account_id = match interaction.account_id {
         Some(a) => a,
-        None => return plain_error("interaction not completed"),
+        None => return expired(),
     };
 
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
         Ok(p) => p,
-        Err(e) => return plain_error(&format!("invalid stored query: {e}")),
+        Err(e) => return app_error(lang, "server_error", &format!("invalid stored query: {e}")),
     };
     let req = match resolve_addressee(
         &p,
@@ -215,7 +238,7 @@ pub(super) async fn authorize_resume(
     .await
     {
         Ok(r) => r,
-        Err(e) => return plain_error(&format!("{}: {}", e.code(), e.description())),
+        Err(e) => return app_error(lang, e.code(), &e.description()),
     };
     if let Err(e) = run_checks(&p, &req).await {
         return authorize_error(&p, &req, e);
@@ -223,7 +246,7 @@ pub(super) async fn authorize_resume(
     // 完了済み interaction を単回消費してからコード発行。失敗（既に消費＝リプレイ/二重投入）なら
     // 再発行しない（1認証=1コード、PAR request_uri の単回化も保つ）。
     if !p.store.consume_interaction(uid).await {
-        return plain_error("interaction already used");
+        return expired();
     }
     issue_code(&p, &req, account_id, interaction.auth_time).await
 }
@@ -232,15 +255,17 @@ pub(super) async fn authorize_resume(
 /// access_denied を返す（OIDC Core 3.1.2.6 / RFC 6749 §4.1.2.1）。
 pub(super) async fn authorize_cancel(
     State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
     Path(uid): Path<String>,
 ) -> Response {
+    let lang = Lang::from_headers(&headers);
     let interaction = match p.store.get_interaction(&uid).await {
         Some(i) => i,
-        None => return plain_error("interaction not found"),
+        None => return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang)),
     };
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
         Ok(p) => p,
-        Err(e) => return plain_error(&format!("invalid stored query: {e}")),
+        Err(e) => return app_error(lang, "server_error", &format!("invalid stored query: {e}")),
     };
     // redirect_uri を検証してから error redirect する（未登録 URI には返さない）。
     // AddressedRequest を得られない限り authorize_error は呼べない = 規律が型で強制される。
@@ -251,7 +276,7 @@ pub(super) async fn authorize_cancel(
     .await
     {
         Ok(r) => r,
-        Err(e) => return plain_error(&format!("{}: {}", e.code(), e.description())),
+        Err(e) => return app_error(lang, e.code(), &e.description()),
     };
     if let Err(e) = run_checks(&p, &req).await {
         return authorize_error(&p, &req, e);
@@ -293,6 +318,20 @@ async fn issue_code(
             );
         }
     }
+    // 認可完了: PAR の request_uri をコードを作る前に単回消費する（RFC 9126）。
+    // 並行した完了のうち消費に勝った 1 つだけがコードを受け取る。
+    if let (Some(ru), Some(fs)) = (&req.request_uri, &p.firestore) {
+        match crate::par::consume(fs, ru).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return authorize_error(p, req, OAuthError::InvalidRequest("request_uri already used".into()))
+            }
+            Err(e) => {
+                tracing::error!("par consume: {e}");
+                return authorize_error(p, req, OAuthError::ServerError("request_uri consume failed".into()));
+            }
+        }
+    }
     let code = uuid::Uuid::new_v4().simple().to_string();
     p.store
         .save_code(AuthorizationCode {
@@ -317,11 +356,6 @@ async fn issue_code(
             expires_at: now() + 60,
         })
         .await;
-
-    // 認可完了: PAR の request_uri を削除して以後の再利用を不可にする（RFC 9126）。
-    if let (Some(ru), Some(fs)) = (&req.request_uri, &p.firestore) {
-        crate::par::delete(fs, ru).await;
-    }
 
     let mut out = vec![("code".to_string(), code)];
     if let Some(state) = &req.params.state {
@@ -591,7 +625,12 @@ pub(super) async fn end_session(
             None => false,
         };
         if !registered {
-            return (jar, plain_error("post_logout_redirect_uri not registered")).into_response();
+            tracing::warn!("end_session: post_logout_redirect_uri not registered: {uri}");
+            let msg = localize(
+                "[[The return address after sign-out is not registered for this app. Please contact the app provider.]]",
+                Lang::from_headers(&headers),
+            );
+            return (jar, plain_error(&msg)).into_response();
         }
         let mut target = uri.clone();
         if let Some(state) = &q.state {
@@ -606,10 +645,10 @@ pub(super) async fn end_session(
     let home = p.path("/");
     let html = format!(
         r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Log out]]</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
 <style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
 a{{color:#3f51b5}}</style></head><body>
-<h1 style="font-size:1.3rem;font-weight:500">[[You have logged out]]</h1>
+<h1 style="font-size:1.3rem;font-weight:500">[[You have signed out]]</h1>
 <p><a href="{home}">[[Go to sign in]]</a></p></body></html>"##
     );
     (jar, Html(localize(&html, Lang::from_headers(&headers)))).into_response()
@@ -741,8 +780,12 @@ pub(super) async fn profile_put(State(p): State<Arc<Provider>>, headers: HeaderM
         Ok(m) => m,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid body: {e}")).into_response(),
     };
-    if let Err(e) = crate::registration::save_profile(fs, &at.account_id, &updates).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("save: {e}")).into_response();
+    match crate::registration::save_profile(fs, &at.account_id, &updates).await {
+        Ok(()) => {}
+        Err(e @ crate::registration::ProfileError::Invalid(_)) => {
+            return (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("save: {e}")).into_response(),
     }
     let profile = crate::registration::get_profile(fs, &at.account_id)
         .await
@@ -910,6 +953,7 @@ fn registration_request_from_json(v: &serde_json::Value) -> crate::dcr::Registra
     crate::dcr::RegistrationRequest {
         redirect_uris: json_string_array(v, "redirect_uris"),
         post_logout_redirect_uris: json_string_array(v, "post_logout_redirect_uris"),
+        initiate_login_uri: v.get("initiate_login_uri").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(String::from),
         grant_types: json_string_array(v, "grant_types"),
         jwks: crate::dcr::jwks_from_jwk_set(v.get("jwks")),
         jwks_uri: v.get("jwks_uri").and_then(|x| x.as_str()).map(String::from),
@@ -937,6 +981,9 @@ fn register_response(c: &crate::model::Client, raw_client_secret: Option<&str>) 
         "post_logout_redirect_uris": c.post_logout_redirect_uris,
         "require_pushed_authorization_requests": c.require_par,
     });
+    if let Some(uri) = &c.initiate_login_uri {
+        resp["initiate_login_uri"] = serde_json::json!(uri);
+    }
     if let Some(uri) = &c.jwks_uri {
         resp["jwks_uri"] = serde_json::json!(uri);
     }
@@ -959,6 +1006,7 @@ mod tests {
             client_id: "dcr-x".into(),
             redirect_uris: vec!["https://rp.example.com/cb".into()],
             post_logout_redirect_uris: uris.iter().map(|s| s.to_string()).collect(),
+            initiate_login_uri: None,
             token_endpoint_auth_method: "client_secret_basic".into(),
             client_secret: Some("hash".into()),
             grant_types: vec!["authorization_code".into()],
@@ -968,6 +1016,74 @@ mod tests {
             require_par: false,
             require_pkce: true,
             id_token_signed_response_alg: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_uri_cannot_be_used_by_another_client() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(Provider::new("https://op.example").with_firestore(fs.clone()));
+        let ru = crate::par::create(&fs, "dcr-y", "client_id=dcr-y&response_type=code&scope=openid").await.unwrap();
+        let authorize_as = |client: &str| {
+            let q = serde_urlencoded::to_string([("client_id", client), ("request_uri", ru.0.as_str())]).unwrap();
+            authorize(State(p.clone()), HeaderMap::new(), CookieJar::default(), RawQuery(Some(q)))
+        };
+        async fn text(r: Response) -> String {
+            String::from_utf8(axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+        }
+
+        for other in ["dcr-x", "dcr-yy", "dcr-", "DCR-Y", "dcr-y "] {
+            let stolen = authorize_as(other).await;
+            assert_eq!(stolen.status(), StatusCode::BAD_REQUEST, "{other:?}");
+            // 画面には訳した文と error code だけが出る（詳細はログ）。request_uri は在るので、
+            // invalid_request_uri になるのは発行先の不一致だけ。
+            assert!(text(stolen).await.ends_with("(error code: invalid_request_uri)"), "{other:?}");
+        }
+        let own = text(authorize_as("dcr-y").await).await;
+        assert!(!own.contains("invalid_request_uri"), "{own}");
+    }
+
+    #[tokio::test]
+    async fn end_session_redirects_only_to_the_clients_own_registered_uri() {
+        let other = crate::model::Client {
+            client_id: "dcr-y".into(),
+            post_logout_redirect_uris: vec!["https://other.example/bye".into()],
+            ..client_with_post_logout(&[])
+        };
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_client(client_with_post_logout(&["https://rp.example.com/bye"]))
+                .with_client(other),
+        );
+        let end = |client_id: Option<&str>, uri: &str| {
+            let q = EndSessionQuery {
+                id_token_hint: None,
+                post_logout_redirect_uri: Some(uri.to_string()),
+                state: Some("s1".into()),
+                client_id: client_id.map(str::to_string),
+            };
+            end_session(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(q))
+        };
+
+        let ok = end(Some("dcr-x"), "https://rp.example.com/bye").await;
+        assert!(ok.status().is_redirection());
+        assert_eq!(ok.headers().get(header::LOCATION).unwrap(), "https://rp.example.com/bye?state=s1");
+
+        for (client, uri) in [
+            (Some("dcr-x"), "https://other.example/bye"),
+            (Some("dcr-x"), "https://rp.example.com/bye/../evil"),
+            (Some("dcr-x"), "https://rp.example.com/bye?x=1"),
+            (Some("dcr-x"), "https://evil.example/#https://rp.example.com/bye"),
+            (Some("dcr-x"), "https://rp.example.co"),
+            (Some("dcr-x"), "https://rp.example.com/BYE"),
+            (Some("dcr-x"), "https://rp.example.com/bye/"),
+            (Some("unknown"), "https://rp.example.com/bye"),
+            (None, "https://rp.example.com/bye"),
+        ] {
+            let resp = end(client, uri).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{client:?} {uri}");
+            assert!(resp.headers().get(header::LOCATION).is_none());
         }
     }
 
@@ -1005,6 +1121,22 @@ mod tests {
         assert_eq!(empty["post_logout_redirect_uris"], serde_json::json!([]));
     }
 
+    #[test]
+    fn initiate_login_uri_is_read_from_the_request_and_echoed() {
+        let req = registration_request_from_json(&serde_json::json!({
+            "redirect_uris": ["https://rp.example.com/cb"],
+            "initiate_login_uri": "https://rp.example.com/auth/login",
+        }));
+        assert_eq!(req.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
+        let mut c = client_with_post_logout(&[]);
+        assert!(register_response(&c, None).get("initiate_login_uri").is_none());
+        c.initiate_login_uri = req.initiate_login_uri;
+        assert_eq!(register_response(&c, None)["initiate_login_uri"], "https://rp.example.com/auth/login");
+        // 空文字は省略と同じ（管理画面で空にすると外れるのと揃える）。
+        let empty = registration_request_from_json(&serde_json::json!({ "initiate_login_uri": "" }));
+        assert!(empty.initiate_login_uri.is_none());
+    }
+
     /// discovery で発行する独自エンドポイント＝アプリ(fido2demo)が読むキー/パスの契約。
     /// route を改名したらここも一致させる（clean-cut 運用での divergence を検出する）。
     #[test]
@@ -1017,6 +1149,59 @@ mod tests {
         assert_eq!(v["profile"], "https://op.example/oidc/me/profile");
         assert_eq!(v["fcm_token"], "https://op.example/oidc/ciba/fcm-tokens");
         assert_eq!(v["mandate_consume"], "https://op.example/oidc/oauth/mandate/consume");
+    }
+
+    #[tokio::test]
+    async fn a_par_request_uri_yields_a_code_only_once() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Provider::new("https://op.example").with_firestore(fs.clone());
+        let ru = crate::par::create(&fs, "dcr-x", "response_type=code").await.unwrap();
+        let req = crate::context::AddressedRequest {
+            params: crate::model::AuthParams {
+                client_id: Some("dcr-x".into()),
+                redirect_uri: Some("https://rp.example.com/cb".into()),
+                response_type: Some("code".into()),
+                scope: Some("openid".into()),
+                state: None,
+                nonce: None,
+                prompt: None,
+                max_age: None,
+                acr_values: None,
+                response_mode: None,
+                code_challenge: None,
+                code_challenge_method: None,
+                dpop_jkt: None,
+                resource: None,
+            },
+            client: client_with_post_logout(&[]),
+            redirect_uri: "https://rp.example.com/cb".into(),
+            request_uri: Some(ru.0),
+        };
+        let location = |r: Response| r.headers().get(header::LOCATION).unwrap().to_str().unwrap().to_string();
+        let first = location(issue_code(&p, &req, "acct".into(), None).await);
+        let second = location(issue_code(&p, &req, "acct".into(), None).await);
+        assert!(first.contains("code="), "{first}");
+        assert!(!second.contains("code=") && second.contains("error=invalid_request"), "{second}");
+    }
+
+    #[tokio::test]
+    async fn profile_put_refuses_the_values_the_registration_page_refuses() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(Provider::new("https://op.example").with_firestore(fs.clone()));
+        p.store.save_access_token(at(None)).await;
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer AT".parse().unwrap());
+        let put = |body: serde_json::Value| profile_put(State(p.clone()), headers.clone(), body.to_string());
+
+        assert_eq!(put(serde_json::json!({ "name": "山田 太郎" })).await.status(), StatusCode::OK);
+        for bad in ["\u{202E}evil", "a\nb", &"x".repeat(81)] {
+            let resp = put(serde_json::json!({ "name": bad })).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad:?}");
+        }
+        let saved = crate::registration::get_profile(&fs, "user@example.com").await.unwrap();
+        assert_eq!(saved.get("name").map(String::as_str), Some("山田 太郎"));
     }
 
     fn at(jkt: Option<&str>) -> AccessToken {
@@ -1042,6 +1227,7 @@ mod tests {
             client_secret: None,
             grant_types: vec![],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![],
             jwks_uri: None,
