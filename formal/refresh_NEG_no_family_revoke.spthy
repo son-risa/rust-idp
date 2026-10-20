@@ -1,0 +1,69 @@
+theory RefreshNoFamilyRevoke
+begin
+
+/*
+  ★ NEG 版（必要性の実験）: 本体 refresh.spthy から、系列の失効（P-RFAMILY）を外した変種。
+    使用済みの RT が出されたら、その要求は拒むが系列は 'alive' のまま残る（Revoke の action も起きない）。
+    期待: reuse_stops_the_family だけが falsified。no_rotation_after_revoke は Revoke が起きないので空虚に verified。
+    下の流れと性質の説明は本体のもの。
+
+  refresh token（RT）のローテーションと、再利用の検出による系列の失効。
+
+  流れ:
+    1. AS は新しい系列 F と最初の RT を発行する
+    2. RT を持つ者がそれを AS に出すと、AS はその RT を使用済みにして、同じ系列の新しい RT を返す（ローテーション）
+    3. 使用済みの RT がもう一度出されたら（盗難の兆し）、AS はその要求を拒む。
+       本体と違い、系列は失効させない（同じ系列の他の RT は使えるまま）
+
+  検証する性質:
+    - rt_single_use: 1 つの RT から 2 回ローテーションは起きない
+    - reuse_stops_the_family: ローテーション済みの RT がもう一度出されたら、その後その系列でローテーションは起きない
+      （盗んだ側と正規の側のどちらが先に使っても、もう一方が古い RT を出した時点で系列が止まる）
+
+  攻撃者: Dolev-Yao。盗難を最大に見るため、発行した RT はすべて攻撃者に見える（Out）。
+          つまり性質は RT の秘匿に頼らず、AS の状態の遷移だけから出る。
+  抽象: DPoP 束縛・クライアント認証・期限は外す（別のモデルと試験が見る）。
+        系列の状態は Family(F, 'alive' | 'revoked') の linear な事実 1 つで表す。
+
+  実行: tamarin-prover --prove --auto-sources formal/refresh_NEG_no_family_revoke.spthy
+*/
+
+/* ---- 1. 新しい系列と最初の RT ---- */
+rule AS_Issue:
+    [ Fr(~F), Fr(~r) ]
+  --[ Issue(~F, ~r) ]->
+    [ Family(~F, 'alive'), Fresh(~r, ~F), Out(~r) ]
+
+/* ---- 2. ローテーション。前提[P-RSINGLE]: Fresh は linear = 原子的な単回の使用済み化 ---- */
+rule AS_Rotate:
+    [ In(r), Fresh(r, F), Family(F, 'alive'), Fr(~n) ]
+  --[ Present(F, r), Rotate(F, r, ~n) ]->
+    [ !Used(r, F), Fresh(~n, F), Family(F, 'alive'), Out(~n) ]
+
+/* ---- 3. 使用済みの RT が出された。NEG: 要求を拒むだけで系列を失効させない（P-RFAMILY を外した） ---- */
+rule AS_Reuse:
+    [ In(r), !Used(r, F), Family(F, 'alive') ]
+  --[ Present(F, r) ]->
+    [ Family(F, 'alive') ]
+
+/* ======================== 性質 ======================== */
+
+lemma executable:
+  exists-trace
+    "Ex F r1 r2 r3 #i #j #k.
+        Issue(F, r1) @ #i & Rotate(F, r1, r2) @ #j & Rotate(F, r2, r3) @ #k"
+
+lemma rt_single_use:
+    "All F r n1 n2 #i #j.
+        Rotate(F, r, n1) @ #i & Rotate(F, r, n2) @ #j ==> #i = #j"
+
+/* 失効した系列でローテーションは起きない（Family が linear で、'revoked' から 'alive' へ戻る規則が無い）。 */
+lemma no_rotation_after_revoke [use_induction, reuse]:
+    "All F m n #k #r. Rotate(F, m, n) @ #k & Revoke(F) @ #r ==> #k < #r"
+
+lemma reuse_stops_the_family:
+    "All F r n #i #j.
+        Rotate(F, r, n) @ #i & Present(F, r) @ #j & #i < #j
+      ==> not (Ex m n2 #k. Rotate(F, m, n2) @ #k & #j < #k)"
+
+end

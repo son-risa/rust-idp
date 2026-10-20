@@ -447,6 +447,52 @@ AS の登録は 2 段に分けてある。先に「E がまだ登録済みでな
 
 ---
 
+## モデル #10: refresh token のローテーションと系列の失効
+
+`refresh.spthy` — RT を出すたびに使用済みにして同じ系列の新しい RT を返し（ローテーション）、使用済みの RT が
+もう一度出されたら（盗難の兆し）系列を丸ごと失効させる（OAuth Security BCP の refresh token rotation と reuse detection）。
+盗難を最大に見るため、発行した RT はすべて攻撃者に見える（`Out`）。性質は RT の秘匿に頼らず、AS の状態の遷移だけから出る。
+DPoP 束縛・クライアント認証・期限は外してある（DPoP 束縛は grants の試験、系列の walk の停止は Kani が見る）。
+
+### 検証する性質（lemma）
+| lemma | 主張 |
+|---|---|
+| `executable` | 発行 → ローテーション 2 回が起きうる |
+| `rt_single_use` | 1 つの RT から 2 回ローテーションは起きない |
+| `no_rotation_after_revoke` | 失効した系列でローテーションは起きない（補助。`reuse_stops_the_family` の証明に使う） |
+| `reuse_stops_the_family` | ローテーション済みの RT がもう一度出されたら、その後その系列でローテーションは起きない |
+
+### 検証結果（Tamarin 1.12.0 / maude 3.5.1, 2026-10-18 実測）
+| モデル | 結果 |
+|---|---|
+| `refresh.spthy` | 4 lemma すべて **verified** |
+| `refresh_NEG_no_singleuse.spthy`（`Fresh` を persistent にして単回の使用済み化を外す）| `rt_single_use` と `reuse_stops_the_family` が **falsified** |
+| `refresh_NEG_no_family_revoke.spthy`（再利用を拒むだけで系列を失効させない）| `reuse_stops_the_family` が **falsified**（`rt_single_use` は verified のまま） |
+
+→ **使用済み化の単回と、系列の失効の両方が要る**。単回が無いと、同じ RT から 2 つの系列の枝が生える。
+系列の失効が無いと、盗んだ側が先にローテーションしていた場合、正規の側が古い RT を出して再利用が見つかっても、
+盗んだ側は新しい RT で使い続けられる。
+→ `refresh_NEG_no_family_revoke.spthy` では `no_rotation_after_revoke` は空虚に verified になる（失効の action が無いため）。
+→ 筋書き（盗んだ側が先にローテーションし、正規の側が古い RT を出す）を lemma で表すと、`reuse_stops_the_family` の前件の式
+そのものになる。その表し方が正しいことは、`refresh_NEG_no_family_revoke` の反例の跡（Issue → 先に持った側の Rotate → 古い RT の
+Present → 新しい RT での Rotate の続き）が示している。
+
+### 表に出た前提 → rust-op の担保
+<!-- premises: refresh.spthy -->
+| ID | 前提（抽象） | rust-op の担保 |
+|---|---|---|
+| P-RSINGLE | RT の使用済み化は**原子的に単回**（`Fresh` が linear） | `mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS） |
+| P-RFAMILY | 使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない | 系列の失効の札（#75）: `RefreshTokenGrant::handle` の `pre.used` 分岐で `revoke_refresh_family` が `refreshFamilyRevocations/{familyId}` に札を書き、ローテーションは読んだ時と書き込みの後に `refresh_family_revoked` で札を見て断る（札を引けなければ断る）。鎖を辿って消すのは後片付けで、消し漏れがあっても札が使わせない。モデルの `Family(F, 'revoked')` が札に当たる。familyId を持たない古い RT はローテーションさせない。札が入る前の版は鎖を辿って消すだけで、上限 64・周の打ち切り・読みの誤り・書き込みの間の失効で使える RT が残った |
+<!-- /premises -->
+
+### 限界
+- 系列の失効は、コードでは系列の札（#75）で表し、モデルの系列の状態 1 つ（`Family(F, 'revoked')`）とそのまま対応する。
+  札の期限（RT の TTL ＋ 2 日）が過ぎた後の振る舞いは、モデルの外（その系列の RT はそれまでに全部切れている）。
+- 期限・DPoP 束縛・クライアントの束縛は別のモデルと試験が見る。
+
+
+---
+
 ## ロードマップ達成状況
 **#1 ✅ #2 ✅ #3 ✅ #4 ✅ #5 ✅ #6 ✅ #7 ✅ #8 ✅** — 全モデルが Tamarin 1.12.0 で verified、各前提の必要性も
 NEG 変種の falsify で実証。各モデルが「防げる攻撃 ＋ 必要前提（→ rust-op の運用要件）」を1セット産んだ。

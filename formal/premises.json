@@ -216,5 +216,22 @@
     "premise": "リンクは E のメール箱の持ち主にだけ届く",
     "assurance": "RP とメールの配送の基盤（モデルの外。漏れは `Leak_Link` で表す）",
     "outside": "メールの配送は RP とメールの基盤が担う。漏れはモデルの Leak_Link で表す"
+  },
+  {
+    "id": "P-RSINGLE",
+    "model": "refresh.spthy",
+    "premise": "RT の使用済み化は**原子的に単回**（`Fresh` が linear）",
+    "assurance": "`mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS）",
+    "guard": ["src/store.rs: MemoryStore::mark_refresh_used", "src/firestore_store.rs: FirestoreStore::mark_refresh_used"],
+    "tests": ["store::tests::mark_refresh_used_is_single_use", "grants::tests::refresh_rotates_and_reuse_rejected"]
+  },
+  {
+    "id": "P-RFAMILY",
+    "model": "refresh.spthy",
+    "premise": "使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない",
+    "assurance": "系列の失効の札（#75）: `RefreshTokenGrant::handle` の `pre.used` 分岐で `revoke_refresh_family` が `refreshFamilyRevocations/{familyId}` に札を書き、ローテーションは読んだ時と書き込みの後に `refresh_family_revoked` で札を見て断る（札を引けなければ断る）。鎖を辿って消すのは後片付けで、消し漏れがあっても札が使わせない。モデルの `Family(F, 'revoked')` が札に当たる。familyId を持たない古い RT はローテーションさせない。札が入る前の版は鎖を辿って消すだけで、上限 64・周の打ち切り・読みの誤り・書き込みの間の失効で使える RT が残った",
+    "guard": ["src/grants.rs: RefreshTokenGrant::handle", "src/store.rs: MemoryStore::revoke_refresh_family", "src/firestore_store.rs: FirestoreStore::revoke_refresh_family"],
+    "tests": ["grants::tests::refresh_reuse_detected_revokes_family", "grants::tests::refresh_reuse_revokes_family_any_length", "store::tests::revoke_family_deletes_entire_chain"],
+    "kani": ["refresh_family_walk_terminates"]
   }
 ]
