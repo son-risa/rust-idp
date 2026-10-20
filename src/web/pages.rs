@@ -57,7 +57,7 @@ pub(super) async fn demo_callback(
     headers: HeaderMap,
 ) -> Html<String> {
     let page = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>callback</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Profile]]</title>
 <style>:root{--indigo:#3f51b5}
 body{font-family:Roboto,-apple-system,'Helvetica Neue',sans-serif;max-width:420px;margin:0 auto;padding:32px 20px;color:#1a1a1a}
 h1{font-size:1.5rem;font-weight:500;margin:0}
@@ -72,6 +72,7 @@ pre{background:#f4f4f4;padding:10px;border-radius:6px;overflow:auto}
 <div id="cibaBox"></div>
 <div id="out"><div class="center">[[Signing in…]]</div></div>
 <script>
+__SERVER_ERROR_JS__
 const ISSUER="__ISSUER__";
 const GENDER={male:'[[Male]]',female:'[[Female]]',other:'[[Other]]'};
 function esc(s){return String(s).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -88,7 +89,7 @@ function renderProfile(ui,prof,tok){
     +field('[[Gender]]',GENDER[p.gender]||p.gender)+field('[[Birthday]]',p.birthdate)
     +field('[[Time zone]]',p.zoneinfo)+field('[[Locale]]',p.locale)
     +'<button class="logout" style="color:var(--indigo);border-color:var(--indigo)" onclick="editProfile()">[[Edit]]</button>'
-    +'<button class="logout" onclick="logout()">[[Log out]]</button>'
+    +'<button class="logout" onclick="logout()">[[Sign out]]</button>'
     +'<details><summary>[[Token info (debug)]]</summary><pre>'+esc(JSON.stringify({token_type:tok.token_type,scope:tok.scope,userinfo:ui,profile:p},null,2))+'</pre></details>';
 }
 function inputRow(label,name,val){return '<div class="card"><div class="lbl">'+label+'</div><input id="f_'+name+'" value="'+esc(val||'')+'" style="width:100%;font-size:1.05rem;border:none;outline:none"></div>';}
@@ -117,7 +118,7 @@ async function saveProfile(){
   const ath=await sha256u(t.access_token);
   const proof=await dpopProof('PUT',ISSUER+'/me/profile',ath);
   const r=await fetch(ISSUER+'/me/profile',{method:'PUT',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){fail('[[Failed to save]] ('+r.status+')');return;}
+  if(!r.ok){console.error('PUT /me/profile',r.status);fail('[[Failed to save. Please try again.]]');return;}
   const prof=await r.json();
   renderProfile(lastUi,prof,lastTok);
 }
@@ -147,7 +148,7 @@ async function fetchCibaPending(){
 function renderCiba(items){
   const box=document.getElementById('cibaBox');
   if(!items||!items.length){box.innerHTML='';return;}
-  box.innerHTML=items.map(it=>'<div class="card" style="border-color:var(--indigo)"><div class="lbl">[[Sign-in approval request]]</div><div class="val">'+esc(it.binding_message||'(no message)')+'</div><div style="color:#888;font-size:12px;margin-top:4px">from '+esc(it.client_id)+' / scope: '+esc(it.scope)+'</div><button class="logout" style="margin-top:10px;color:#fff;background:var(--indigo);border-color:var(--indigo)" onclick="approveCiba(\''+it.auth_req_id+'\')">[[Approve (passkey)]]</button><button class="logout" onclick="rejectCiba(\''+it.auth_req_id+'\')">[[Reject]]</button></div>').join('');
+  box.innerHTML=items.map(it=>'<div class="card" style="border-color:var(--indigo)"><div class="lbl">[[Sign-in approval request]]</div><div class="val">'+esc(it.binding_message||'[[(no message)]]')+'</div><div style="color:#888;font-size:12px;margin-top:4px">[[Requested by]] '+esc(it.client_id)+' / scope: '+esc(it.scope)+'</div><button class="logout" style="margin-top:10px;color:#fff;background:var(--indigo);border-color:var(--indigo)" onclick="approveCiba(\''+it.auth_req_id+'\')">[[Approve (passkey)]]</button><button class="logout" onclick="rejectCiba(\''+it.auth_req_id+'\')">[[Reject]]</button></div>').join('');
 }
 async function approveCiba(id){
   const t=getTokens();if(!t)return;cibaBusy=true;
@@ -155,15 +156,15 @@ async function approveCiba(id){
     let ath=await sha256u(t.access_token);
     let proof=await dpopProof('POST',ISSUER+'/ciba/'+id+'/passkey-options',ath);
     const r=await fetch(ISSUER+'/ciba/'+id+'/passkey-options',{method:'POST',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:'{}'});
-    if(!r.ok){alert(await r.text());cibaBusy=false;return;}
+    if(!r.ok){alert(await errorText(r));cibaBusy=false;return;}
     const o=await r.json();
     const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:'required',allowCredentials:(o.allowCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id),transports:c.transports}))}});
     const body={id:cred.id,response:{clientDataJSON:b64u(cred.response.clientDataJSON),authenticatorData:b64u(cred.response.authenticatorData),signature:b64u(cred.response.signature)}};
     ath=await sha256u(t.access_token);
     proof=await dpopProof('POST',ISSUER+'/ciba/'+id+'/approve',ath);
     const v=await fetch(ISSUER+'/ciba/'+id+'/approve',{method:'POST',headers:{'Authorization':'DPoP '+t.access_token,'DPoP':proof,'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!v.ok){alert(await v.text());}
-  }catch(e){alert(e.message);}
+    if(!v.ok){alert(await errorText(v));}
+  }catch(e){alert(passkeyErrorText(e));}
   cibaBusy=false;pollCiba();
 }
 async function rejectCiba(id){
@@ -225,7 +226,8 @@ async function doRefresh(){
 }
 (async()=>{
   const q=new URLSearchParams(location.search);
-  if(q.get('error')){fail('[[Error]]: '+q.get('error')+' / '+(q.get('error_description')||''));return;}
+  if(q.get('error')==='access_denied'){fail('[[Sign-in was canceled.]]');return;}
+  if(q.get('error')){if(q.get('error_description'))console.error(q.get('error_description'));fail('[[Sign-in could not be completed. (error code: {code})]]'.replace('{code}',()=>q.get('error')));return;}
   const code=q.get('code');
   if(code){
     const verifier=sessionStorage.getItem('pkce_verifier');
@@ -240,7 +242,7 @@ async function doRefresh(){
   fail('[[Your session has expired. Please sign in again.]]');
 })();
 </script></body></html>"##;
-    Html(localize(page, Lang::from_headers(&headers)).replace("__ISSUER__", &p.issuer))
+    Html(localize(&page.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), Lang::from_headers(&headers)).replace("__ISSUER__", &p.issuer))
 }
 
 #[cfg(test)]

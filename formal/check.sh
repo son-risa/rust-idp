@@ -11,7 +11,31 @@ actual=$(mktemp)
 trap 'rm -f "$actual"' EXIT
 
 status=0
+models=()
 for model in *.spthy; do
+  # model の名前は表の 1 列目と出力の行にそのまま入るので、TAB・改行などで行を偽造できない形に限る。
+  if [[ ! "$model" =~ ^[A-Za-z0-9_]+\.spthy$ ]]; then
+    echo "モデルの file 名が ^[A-Za-z0-9_]+\.spthy\$ に合わない: $(printf '%q' "$model")" >&2
+    status=1
+    continue
+  fi
+  # heuristic（oracle）・#include・configuration: は、判定の途中で任意のプログラムを走らせたり、別の file を
+  # 読ませたりできる（oracle が expected.tsv を書き換えて緑にできた）。Tamarin にかける前に断る。
+  if grep -niE 'heuristic|#include|configuration[[:space:]]*:' "$model" >&2; then
+    echo "$model: heuristic・#include・configuration: は使えない" >&2
+    status=1
+    continue
+  fi
+  models+=("$model")
+done
+
+# lemma を 1 つも持たないモデルは結果の行を出さないので、モデルの名前の集合を表と別に照らす。
+if ! diff -u <(tail -n +2 expected.tsv | cut -f1 | sort -u) <(printf '%s\n' "${models[@]}" | sort -u); then
+  echo "formal/ のモデルの集合が expected.tsv と食い違う（- が表だけ、+ が formal/ だけ）" >&2
+  status=1
+fi
+
+for model in "${models[@]}"; do
   if ! out=$(tamarin-prover --quit-on-warning --prove --auto-sources "$model" 2>&1); then
     echo "$model: tamarin-prover が失敗した（警告を含む）" >&2
     printf '%s\n' "$out" | tail -n 30 >&2

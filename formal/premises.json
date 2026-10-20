@@ -2,21 +2,24 @@
   {
     "id": "P-SINGLEUSE",
     "model": "oauth_code_pkce.spthy",
-    "premise": "認可コードは原子的に単回消費される（AS_Code が linear）",
+    "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
+    "assurance": "store の code 消費（単回）。回帰テスト `store::code_reuse_revokes_issued_tokens`",
     "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
     "tests": ["store::tests::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::code_is_taken_once"]
   },
   {
     "id": "P-CODEFRESH",
     "model": "oauth_code_pkce.spthy",
-    "premise": "認可コードは推測不能（CSPRNG = Fr）",
+    "premise": "認可コードは**推測不能**（CSPRNG = Fr）",
+    "assurance": "code 生成（乱数）",
     "guard": ["src/web/oidc.rs: issue_code"],
     "outside": "乱数源（uuid v4 = OS の CSPRNG）の性質で、試験で示せる形をしていない"
   },
   {
     "id": "P-VERIFIER",
     "model": "oauth_code_pkce.spthy",
-    "premise": "PKCE の verifier は秘密で、h(verifier)=challenge を AS が検査する",
+    "premise": "PKCE の verifier は**秘密**で、`h(verifier)=challenge` を AS が検査",
+    "assurance": "`CheckPkce`（S256 のみ受理、`auth_checks.rs`）",
     "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
     "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::auth_code_pkce_success_and_failure"],
     "kani": ["pkce_method_no_downgrade"]
@@ -24,155 +27,209 @@
   {
     "id": "P-CKEY",
     "model": "oauth_code_pkce.spthy",
-    "premise": "クライアント秘密鍵は秘匿（漏れると token_secrecy が破れる）",
+    "premise": "クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる）",
+    "assurance": "private_key_jwt（`client_auth.rs`）。rust-op は**公開鍵のみ保持**",
     "outside": "鍵はクライアントが持つ。rust-op は公開鍵だけを持つ"
   },
   {
     "id": "P-REG",
     "model": "oauth_code_pkce.spthy",
-    "premise": "クライアントは事前登録され AS が公開鍵を知る",
+    "premise": "クライアントは**事前登録**され AS が公開鍵を知る",
+    "assurance": "`with_client` / DCR（`clients` 登録、`resolve_client`）",
     "guard": ["src/provider.rs: Provider::resolve_client"],
     "tests": ["auth_checks::tests::resolve_addressee_resolves_and_rejects_unknown_client", "client_auth::tests::secret_basic_unknown_client_rejected"]
   },
   {
     "id": "P-TLS",
     "model": "oauth_code_pkce.spthy",
-    "premise": "トークン配送路は機密で正しいクライアントへ届く",
+    "premise": "トークン配送路は**機密**で正しいクライアントへ届く（モデルでは鍵への暗号化で抽象化）",
+    "assurance": "TLS（Firebase Hosting / Cloud Run）＋ token endpoint",
     "outside": "TLS は配備の基盤（Firebase Hosting / Cloud Run）が担う"
   },
   {
     "id": "P-DKEY",
     "model": "dpop_binding.spthy",
-    "premise": "DPoP 秘密鍵は秘匿",
+    "premise": "DPoP 秘密鍵は秘匿（漏れると束縛が無効）",
+    "assurance": "クライアント側保持。rust-op は proof を検証するだけで**鍵を持たない**",
     "outside": "鍵はクライアントが持つ。rust-op は proof を検証するだけで鍵を持たない"
   },
   {
     "id": "P-CNF",
     "model": "dpop_binding.spthy",
-    "premise": "RS は proof の鍵 thumbprint = token の cnf.jkt を検査する",
+    "premise": "RS は「proof の鍵 thumbprint = token の cnf.jkt」を検査",
+    "assurance": "`authenticate_token`（`at.jkt` と proof の jkt 一致）。introspection が cnf.jkt 公開",
     "guard": ["src/web/mod.rs: authenticate_token"],
     "tests": ["web::token_auth_tests::bound_token_needs_a_proof_from_the_key_it_was_bound_to", "web::oidc::tests::introspection_dpop_token_includes_cnf_jkt"]
   },
   {
     "id": "P-PROOFSIG",
     "model": "dpop_binding.spthy",
-    "premise": "DPoP proof の署名を検証する（ES256）",
+    "premise": "DPoP proof の署名検証（ES256）",
+    "assurance": "`Es256Dpop`（`dpop.rs`）",
     "guard": ["src/dpop.rs: Es256Dpop::verify"],
     "tests": ["dpop::tests::rejects_tampered_signature", "dpop::tests::rejects_proof_signed_by_different_key_than_embedded_jwk"]
   },
   {
     "id": "P-JTI",
     "model": "dpop_binding.spthy",
-    "premise": "DPoP proof の jti は単回（リプレイ防止）",
+    "premise": "DPoP proof の jti 単回（リプレイ防止）",
+    "assurance": "jti 単回ストア（`NonceStore` / Firestore 分散）",
     "guard": ["src/nonce.rs: NonceStore::claim"],
     "tests": ["dpop::tests::rejects_jti_replay", "nonce::tests::memory_claim_is_single_use", "nonce::tests::firestore_claim_is_single_use"]
   },
   {
     "id": "P-BIND",
     "model": "ciba_rar.spthy",
-    "premise": "ユーザ承認は具体的 mandate に commit し、AS は承認された mandate のみ発行する",
+    "premise": "ユーザ承認は**具体的 mandate に commit** し、AS は承認された mandate のみ発行",
+    "assurance": "binding_message + authorization_details を auth_req_id に紐付け表示・承認、token に approved mandate",
     "guard": ["src/web/ciba.rs: ciba_approve", "src/grants.rs: CibaGrant::handle"],
     "tests": ["grants::tests::ciba_token_carries_the_mandate_stored_with_the_request", "web::ciba::tests::a_challenge_issued_for_another_request_cannot_approve_this_one"]
   },
   {
     "id": "P-UREAD",
     "model": "ciba_rar.spthy",
-    "premise": "ユーザが binding_message を読む",
+    "premise": "**ユーザが binding_message を読む**（モデル外の人間前提）",
+    "assurance": "UI で binding_message/mandate を提示（\"見たものに commit\" を前提）",
     "outside": "人間の前提。モデルの外"
   },
   {
     "id": "P-MSINGLE",
     "model": "ciba_rar.spthy",
-    "premise": "マンデート（auth_req_id）は単回消費",
+    "premise": "マンデート(auth_req_id) は**単回消費**",
+    "assurance": "`mandate_consumed` CAS（/oauth/mandate/consume）+ CIBA store の単回",
     "guard": ["src/ciba.rs: MemoryCibaStore::consume_if_approved", "src/ciba.rs: FirestoreCibaStore::consume_if_approved", "src/store.rs: MemoryStore::consume_mandate_if_unused"],
     "tests": ["ciba::tests::memory_store_consume_is_single_use", "store::tests::consume_mandate_is_single_use", "grants::tests::ciba_approved_issues_tokens_once_then_rejects_reuse", "ciba::tests::firestore_store_consume_is_single_use"]
   },
   {
     "id": "P-CAUTH",
     "model": "ciba_rar.spthy",
-    "premise": "backchannel と poll でクライアント認証する",
+    "premise": "backchannel と poll で**クライアント認証**",
+    "assurance": "ciba-rp Basic（live e2e で実機確認済）",
     "guard": ["src/client_auth.rs: ClientSecretBasic::authenticate", "src/client_auth.rs: PrivateKeyJwt::authenticate"],
     "tests": ["client_auth::tests::secret_basic_wrong_secret_rejected", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch_and_bad_signature", "grants::tests::ciba_unknown_and_other_client_rejected"]
   },
   {
     "id": "P-UAUTH",
     "model": "ciba_rar.spthy",
-    "premise": "承認はユーザ認証（passkey）を経る",
+    "premise": "承認は**ユーザ認証**（passkey）",
+    "assurance": "fido2demo アプリで passkey 承認",
     "guard": ["src/web/ciba.rs: ciba_approve"],
     "tests": ["web::ciba::tests::approval_needs_the_users_passkey"]
   },
   {
     "id": "P-AKEY",
     "model": "webauthn.spthy",
-    "premise": "認証器の credential 鍵は秘匿",
+    "premise": "認証器 credential 鍵は秘匿",
+    "assurance": "secure enclave。rust-op は**公開鍵のみ保持**",
     "outside": "鍵は認証器（secure enclave）が持つ。rust-op は公開鍵だけを持つ"
   },
   {
     "id": "P-ORIGIN",
     "model": "webauthn.spthy",
-    "premise": "RP は origin/rpId == 自分 を検査する",
+    "premise": "RP は origin/rpId == 自分 を検査",
+    "assurance": "`webauthn::verify_authentication`（origin + rpIdHash）",
     "guard": ["src/fido/verify.rs: check_client_data", "src/fido/verify.rs: check_rp_id_hash"],
     "tests": ["fido::verify::tests::check_client_data_validates_all_fields", "fido::verify::tests::check_rp_id_hash_matches_and_mismatches", "webauthn::tests::registration_rejects_wrong_origin_and_challenge"]
   },
   {
     "id": "P-CHAL",
     "model": "webauthn.spthy",
-    "premise": "challenge は新鮮で単回",
-    "guard": ["src/registration.rs: create_webauthn_challenge", "src/registration.rs: consume_webauthn_challenge"],
-    "tests": ["registration::tests::webauthn_challenge_is_consumed_once"]
+    "premise": "challenge 新鮮 + 単回",
+    "assurance": "`create/consume_webauthn_challenge`（単回。updateTime の CAS 削除 `Firestore::take_doc` で、並行した 2 つの要求の片方だけが通る）",
+    "guard": ["src/registration.rs: create_webauthn_challenge", "src/registration.rs: consume_webauthn_challenge", "src/firestore.rs: Firestore::take_doc"],
+    "tests": ["registration::tests::webauthn_challenge_is_consumed_once", "registration::tests::two_concurrent_consumes_of_one_webauthn_challenge_let_only_one_through"]
   },
   {
     "id": "P-SIG",
     "model": "webauthn.spthy",
-    "premise": "登録した公開鍵で署名を検証する",
+    "premise": "登録公開鍵で署名検証",
+    "assurance": "`webauthn::verify_authentication`",
     "guard": ["src/webauthn.rs: verify_authentication"],
     "tests": ["webauthn::tests::authentication_rejects_signature_from_other_key", "fido::verify::tests::verify_assertion_accepts_valid_es256_and_rejects_tampered"]
   },
   {
     "id": "P-OPKEY",
     "model": "id_token.spthy",
-    "premise": "OP の署名鍵は秘匿",
+    "premise": "OP 署名鍵は秘匿",
+    "assurance": "ES256 / Cloud KMS（鍵をプロセスに展開しない）",
     "outside": "鍵は Cloud KMS に置き、プロセスに展開しない（配備の構成）"
   },
   {
     "id": "P-AUD",
     "model": "id_token.spthy",
-    "premise": "RP は aud == 自分の client_id を検査する（OP は aud=client_id で発行する）",
+    "premise": "RP は aud == 自分の client_id を検査",
+    "assurance": "OP 側: token に aud=client_id。RP 側(fido2demo/oidc): aud 検証",
     "guard": ["src/grants.rs: issue_access_and_id"],
     "tests": ["grants::tests::id_token_names_the_issuer_the_client_and_the_request_nonce"]
   },
   {
     "id": "P-NONCE",
     "model": "id_token.spthy",
-    "premise": "nonce は新鮮で、OP は認可要求の nonce を token へ入れ、RP が一致を検査する",
+    "premise": "nonce 新鮮 + RP が一致検査",
+    "assurance": "OP: 認可要求の nonce を token へ。RP: nonce 検証",
     "guard": ["src/grants.rs: issue_access_and_id"],
     "tests": ["grants::tests::id_token_names_the_issuer_the_client_and_the_request_nonce"]
   },
   {
     "id": "P-SIG",
     "model": "id_token.spthy",
-    "premise": "RP は OP の JWKS で署名を検証する",
+    "premise": "RP は OP の JWKS で署名検証",
+    "assurance": "discovery / JWKS 公開、RP が検証",
     "guard": ["src/jws.rs: Es256Signer::sign"],
     "tests": ["jws::tests::sign_produces_verifiable_compact_jws", "jws::tests::tampered_payload_fails_verification", "jws::tests::kid_equals_jwk_thumbprint"]
   },
   {
     "id": "P-ISS",
     "model": "id_token.spthy",
-    "premise": "iss（発行者）を確認する（IdP mix-up 防止）",
+    "premise": "iss（発行者）確認（IdP mix-up 防止）",
+    "assurance": "token の iss=OP。RP は OP の鍵で検証（モデルは OP 鍵束縛で表現）",
     "guard": ["src/grants.rs: issue_access_and_id"],
     "tests": ["grants::tests::id_token_names_the_issuer_the_client_and_the_request_nonce"]
   },
   {
+    "id": "P-ICLIENT",
+    "model": "invite.spthy",
+    "premise": "招待を頼めるのは、招待を許した confidential client だけ（クライアント認証）",
+    "assurance": "`authorize_invite_client`（`web/register.rs`、許可リストと public client の拒否）",
+    "guard": ["src/web/register.rs: authorize_invite_client"],
+    "tests": ["web::register::invite_tests::clients_outside_the_allow_list_are_refused"]
+  },
+  {
+    "id": "P-ITOKEN",
+    "model": "invite.spthy",
+    "premise": "token は推測不能（Fr）",
+    "assurance": "`random_token`（OsRng の 32 バイト）",
+    "guard": ["src/registration.rs: random_token"],
+    "outside": "乱数源（OsRng の 32 バイト）の性質で、試験で示せる形をしていない"
+  },
+  {
+    "id": "P-ISINGLE",
+    "model": "invite.spthy",
+    "premise": "招待は**原子的に単回消費**される（`Invite` が linear）",
+    "assurance": "`consume_email_challenge`（`registration.rs`）。updateTime の CAS 削除で、勝った 1 つの要求だけが通る",
+    "guard": ["src/registration.rs: consume_email_challenge", "src/firestore.rs: Firestore::take_doc"],
+    "tests": ["registration::tests::invite_token_is_consumed_once", "registration::tests::two_concurrent_consumes_of_one_invite_let_only_one_through", "web::register::invite_tests::allowed_client_gets_link_that_registers_and_returns_to_rp"]
+  },
+  {
+    "id": "P-IMAIL",
+    "model": "invite.spthy",
+    "premise": "リンクは E のメール箱の持ち主にだけ届く",
+    "assurance": "RP とメールの配送の基盤（モデルの外。漏れは `Leak_Link` で表す）",
+    "outside": "メールの配送は RP とメールの基盤が担う。漏れはモデルの Leak_Link で表す"
+  },
+  {
     "id": "P-RSINGLE",
     "model": "refresh.spthy",
-    "premise": "RT の使用済み化は原子的に単回（Fresh が linear）",
+    "premise": "RT の使用済み化は**原子的に単回**（`Fresh` が linear）",
+    "assurance": "`mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS）",
     "guard": ["src/store.rs: MemoryStore::mark_refresh_used", "src/firestore_store.rs: FirestoreStore::mark_refresh_used"],
     "tests": ["store::tests::mark_refresh_used_is_single_use", "grants::tests::refresh_rotates_and_reuse_rejected"]
   },
   {
     "id": "P-RFAMILY",
     "model": "refresh.spthy",
-    "premise": "使用済みの RT が出されたら系列を丸ごと失効させ、以後その系列のどの RT も受け付けない",
+    "premise": "使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない",
+    "assurance": "系列の失効の札（#75）: `RefreshTokenGrant::handle` の `pre.used` 分岐で `revoke_refresh_family` が `refreshFamilyRevocations/{familyId}` に札を書き、ローテーションは読んだ時と書き込みの後に `refresh_family_revoked` で札を見て断る（札を引けなければ断る）。鎖を辿って消すのは後片付けで、消し漏れがあっても札が使わせない。モデルの `Family(F, 'revoked')` が札に当たる。familyId を持たない古い RT はローテーションさせない。札が入る前の版は鎖を辿って消すだけで、上限 64・周の打ち切り・読みの誤り・書き込みの間の失効で使える RT が残った",
     "guard": ["src/grants.rs: RefreshTokenGrant::handle", "src/store.rs: MemoryStore::revoke_refresh_family", "src/firestore_store.rs: FirestoreStore::revoke_refresh_family"],
     "tests": ["grants::tests::refresh_reuse_detected_revokes_family", "grants::tests::refresh_reuse_revokes_family_any_length", "store::tests::revoke_family_deletes_entire_chain"],
     "kani": ["refresh_family_walk_terminates"]

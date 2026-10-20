@@ -4,13 +4,36 @@ use super::*;
 // 全候補を出して選ばせる。Conditional UI(autofill) は自動起動しない。
 // 理由: アプリ webview(ASWebAuthenticationSession)内では autofill が「最近使った1件」
 // だけを勝手に提示して紛らわしいため(TS 版も同方針)。userHandle でユーザー解決。
+#[derive(serde::Deserialize)]
+pub(super) struct LoginQuery {
+    client_id: Option<String>,
+}
+
+/// 期限切れなら、client に入口（initiate_login_uri）があればそこへ送り直し、
+/// 新しい state・nonce で RP にログインを始め直させる（OIDC Core §4）。古い authorize の
+/// 引数で作り直すと RP 側のセッションと state が合わず callback で弾かれる。
 pub(super) async fn login_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     Path(uid): Path<String>,
-) -> Html<String> {
+    Query(q): Query<LoginQuery>,
+) -> Response {
+    let lang = Lang::from_headers(&headers);
+    if p.store.get_interaction(&uid).await.is_none() {
+        let entry = match &q.client_id {
+            Some(id) => p.resolve_client(id).await.and_then(|c| c.initiate_login_uri),
+            None => None,
+        };
+        let Some(entry) = entry else {
+            return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang));
+        };
+        tracing::info!(event = "login_reinitiated", client_id = q.client_id.as_deref().unwrap_or(""));
+        let sep = if entry.contains('?') { '&' } else { '?' };
+        let iss = serde_urlencoded::to_string([("iss", &p.issuer)]).unwrap_or_default();
+        return Redirect::to(&format!("{entry}{sep}{iss}")).into_response();
+    }
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Log in]]</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title>
 <style>
 :root{--indigo:#3f51b5;--indigo-d:#303f9f}
 body{font-family:Roboto,-apple-system,'Helvetica Neue',sans-serif;max-width:360px;margin:0 auto;padding:56px 24px;color:#1a1a1a;text-align:center}
@@ -38,6 +61,7 @@ details input{font-size:14px;padding:8px;margin-top:8px}</style>
 <p id="msg"></p>
 <script>
 __WEBAUTHN_JS__
+__SERVER_ERROR_JS__
 const OPT="__OPT__",VER="__VER__";
 const msgEl=document.getElementById('msg');
 let cachedOpts=null;
@@ -51,43 +75,44 @@ async function pkLogin(){
  if(!window.PublicKeyCredential){msgEl.textContent='[[This browser does not support passkeys. Open this page in the standard Safari or Chrome app.]]';return;}
  try{
   let o=cachedOpts;
-  if(!o){const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!r.ok){msgEl.textContent=await r.text();return;}o=await r.json();}
+  if(!o){const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!r.ok){msgEl.textContent=await errorText(r);return;}o=await r.json();}
   const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:o.userVerification,allowCredentials:[]}});
   cachedOpts=null;prefetch();
   const body={id:cred.id,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),authenticatorData:bufToB64(cred.response.authenticatorData),signature:bufToB64(cred.response.signature),userHandle:cred.response.userHandle?bufToB64(cred.response.userHandle):null}};
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){msgEl.textContent=await v.text();return;}
+  if(!v.ok){if(await v.clone().text()==='interaction not found'){location.reload();return;}msgEl.textContent=await errorText(v);return;}
   location.href=(await v.json()).redirect;
  }catch(e){
   if(e.name==='NotAllowedError'){
    msgEl.textContent='[[Could not start the passkey. Open this page in the standard Safari or Chrome app (in-app browsers are not supported).]]';
-  }else{msgEl.textContent=(e.name||'')+': '+(e.message||String(e));}
+  }else{msgEl.textContent=passkeyErrorText(e);}
  }
 }
 </script></body></html>"##;
     Html(
-        localize(body, Lang::from_headers(&headers))
+        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), lang)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__OPT__", &p.path(&format!("/login/{uid}/passkey/options")))
             .replace("__VER__", &p.path(&format!("/login/{uid}/passkey/verify")))
             .replace("__CANCEL__", &p.path(&format!("/login/{uid}/cancel")))
             .replace("__REGISTER__", &p.path("/signup")),
     )
+    .into_response()
 }
 
-/// ログイン確定: interaction にアカウントを書き、SSO セッション cookie を張り、resume パスを返す。
+/// ログイン確定: まだ在る interaction にアカウントを書き、SSO セッション cookie を張り、resume パスを返す。
+/// interaction が無い（消費済み・期限切れ）なら None。
 async fn finalize_login(
     p: &Provider,
     jar: CookieJar,
-    mut interaction: Interaction,
+    uid: &str,
     account_sub: String,
-) -> (CookieJar, String) {
+) -> Option<(CookieJar, String)> {
     let auth_time = now();
-    let uid = interaction.uid.clone();
-    interaction.account_id = Some(account_sub.clone());
-    interaction.auth_time = Some(auth_time);
+    if !p.store.complete_interaction(uid, &account_sub, auth_time).await {
+        return None;
+    }
     tracing::info!(event = "login_success", sub = %super::pseudonymize_sub(&account_sub));
-    p.store.save_interaction(interaction).await;
     let sid = uuid::Uuid::new_v4().to_string();
     p.store
         .save_session(Session { sid: sid.clone(), account_id: account_sub, auth_time })
@@ -98,7 +123,7 @@ async fn finalize_login(
         .secure(true)
         .same_site(SameSite::Lax)
         .build();
-    (jar.add(cookie), p.path(&format!("/authorize/resume?uid={uid}")))
+    Some((jar.add(cookie), p.path(&format!("/authorize/resume?uid={uid}"))))
 }
 
 /* ===== passkey ログイン ===== */
@@ -238,11 +263,104 @@ pub(super) async fn login_passkey_verify(
         // 移行前（accountId 未発行）のアカウント。再登録が必要。
         return (StatusCode::BAD_REQUEST, "account needs re-registration").into_response();
     }
-    let interaction = match p.store.get_interaction(&uid).await {
-        Some(i) => i,
-        None => return (StatusCode::BAD_REQUEST, "interaction not found").into_response(),
-    };
     let account = p.store.find_account(&cred.account_id).await;
-    let (jar, resume) = finalize_login(&p, jar, interaction, account.sub).await;
-    (jar, Json(serde_json::json!({ "redirect": resume }))).into_response()
+    match finalize_login(&p, jar, &uid, account.sub).await {
+        Some((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
+        // 画面はこの固定文で期限切れと見て読み直す（SERVER_ERRORS・login_form の JS）。
+        None => (StatusCode::BAD_REQUEST, "interaction not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Client;
+
+    fn provider(store: Arc<dyn crate::store::Store>) -> Arc<Provider> {
+        Arc::new(Provider::new("https://op.example").with_store(store).with_client(Client {
+            client_id: "rp".into(),
+            redirect_uris: vec!["https://rp.example/cb".into()],
+            post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
+            token_endpoint_auth_method: "client_secret_basic".into(),
+            client_secret: Some("hash".into()),
+            grant_types: vec!["authorization_code".into()],
+            dpop_bound: false,
+            jwks: vec![],
+            jwks_uri: None,
+            require_par: false,
+            require_pkce: false,
+            id_token_signed_response_alg: None,
+        }))
+    }
+
+    async fn resume(p: &Arc<Provider>, uid: &str) -> Response {
+        let q = HashMap::from([("uid".to_string(), uid.to_string())]);
+        super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), Query(q)).await
+    }
+
+    fn gave_code(r: &Response) -> bool {
+        r.headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|l| l.contains("code="))
+    }
+
+    /// resume で消費した後に遅れて届いた verify が、同じ uid の interaction を作り直してはならない。
+    /// 作り直すと 2 回目の resume が 2 つ目のコードを受け取る。
+    async fn a_late_verify_cannot_revive_a_consumed_interaction(p: Arc<Provider>) {
+        p.store
+            .save_interaction(Interaction {
+                uid: "U1".into(),
+                raw_query: "client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcb&response_type=code&scope=openid".into(),
+                account_id: None,
+                auth_time: None,
+                request_uri: None,
+            })
+            .await;
+        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_some());
+        let first = resume(&p, "U1").await;
+        assert!(gave_code(&first), "1 回目の resume はコードを出す");
+
+        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_none(), "遅れた verify は書けない");
+        assert!(p.store.get_interaction("U1").await.is_none(), "消費済みの interaction は作り直されない");
+        let second = resume(&p, "U1").await;
+        assert!(!gave_code(&second));
+        assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_late_verify_cannot_revive_a_consumed_interaction_in_memory() {
+        a_late_verify_cannot_revive_a_consumed_interaction(provider(Arc::new(crate::store::MemoryStore::default()))).await;
+    }
+
+    #[tokio::test]
+    async fn a_late_verify_cannot_revive_a_consumed_interaction_in_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        a_late_verify_cannot_revive_a_consumed_interaction(provider(Arc::new(crate::firestore_store::FirestoreStore::new(fs)))).await;
+    }
+
+    /// verify の読みと書きの間に resume が消費しても、書きは消費済みの interaction を作り直さない（CAS で負ける）。
+    #[tokio::test]
+    async fn a_verify_racing_a_resume_does_not_revive_the_interaction_in_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store: Arc<dyn crate::store::Store> = Arc::new(crate::firestore_store::FirestoreStore::new(fs));
+        store
+            .save_interaction(Interaction {
+                uid: "U1".into(),
+                raw_query: String::new(),
+                account_id: Some("acct".into()),
+                auth_time: Some(1),
+                request_uri: None,
+            })
+            .await;
+        let (consumed, completed) = tokio::join!(store.consume_interaction("U1"), store.complete_interaction("U1", "acct", 2));
+        let alive = store.get_interaction("U1").await.is_some();
+        assert!(!(consumed && completed), "消費と書きの両方は通らない");
+        if consumed {
+            assert!(!alive, "消費済みの interaction が残っていない");
+        }
+    }
 }
