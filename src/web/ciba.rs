@@ -501,3 +501,90 @@ pub(super) async fn ciba_reject(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ciba::{CibaStatus, CibaStore, MemoryCibaStore};
+    use crate::fido::verify::test_support::*;
+    use crate::firestore::fake_firestore;
+    use crate::registration::ChallengeKind;
+    use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::{Signature, SigningKey};
+
+    const EMAIL: &str = "user@example.com";
+    const ACCOUNT: &str = "acct-1";
+    const CRED: &str = "cred-1";
+
+    async fn seeded(owner: &SigningKey) -> (Arc<Provider>, Arc<MemoryCibaStore>, String) {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let (x, y) = ec_xy(owner);
+        let reg = crate::webauthn::RegOutcome {
+            credential_id: CRED.into(),
+            pub_x: crate::webauthn::b64e(&x),
+            pub_y: crate::webauthn::b64e(&y),
+            sign_count: 0,
+        };
+        crate::registration::save_credential(&fs, EMAIL, ACCOUNT, &reg).await.unwrap();
+        let ciba = Arc::new(MemoryCibaStore::default());
+        let id = ciba.create("rp", ACCOUNT, "openid", "pay 100", None).await.unwrap();
+        let p = Provider::new("https://idp.example").with_firestore(fs).with_ciba(ciba.clone());
+        (Arc::new(p), ciba, id.0)
+    }
+
+    async fn approve_with(p: &Arc<Provider>, auth_req_id: &str, signer: &SigningKey) -> StatusCode {
+        approve_with_challenge_for(p, auth_req_id, auth_req_id, signer).await
+    }
+
+    async fn approve_with_challenge_for(
+        p: &Arc<Provider>,
+        auth_req_id: &str,
+        challenge_for: &str,
+        signer: &SigningKey,
+    ) -> StatusCode {
+        let fs = p.firestore.as_ref().unwrap();
+        let challenge =
+            crate::registration::create_webauthn_challenge(fs, EMAIL, ChallengeKind::CibaApprove, challenge_for, "")
+                .await
+                .unwrap();
+        let auth_data = build_auth_data(&p.rp_id(), 0x01 | 0x04, 1, None);
+        let cdj = client_data_json("webauthn.get", &challenge, &p.origin());
+        let mut signed = auth_data.clone();
+        signed.extend_from_slice(&Sha256::digest(&cdj));
+        let sig: Signature = signer.sign(&signed);
+        let req: AuthVerifyReq = serde_json::from_value(serde_json::json!({
+            "id": CRED,
+            "response": {
+                "clientDataJSON": crate::webauthn::b64e(&cdj),
+                "authenticatorData": crate::webauthn::b64e(&auth_data),
+                "signature": crate::webauthn::b64e(sig.to_der().as_bytes()),
+            },
+        }))
+        .unwrap();
+        ciba_approve(State(p.clone()), Path(auth_req_id.to_string()), Json(req)).await.status()
+    }
+
+    #[tokio::test]
+    async fn approval_needs_the_users_passkey() {
+        let owner = SigningKey::random(&mut rand_core::OsRng);
+        let (p, ciba, id) = seeded(&owner).await;
+
+        let attacker = SigningKey::random(&mut rand_core::OsRng);
+        assert_eq!(approve_with(&p, &id, &attacker).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Pending);
+
+        assert_eq!(approve_with(&p, &id, &owner).await, StatusCode::OK);
+        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Approved);
+    }
+
+    #[tokio::test]
+    async fn a_challenge_issued_for_another_request_cannot_approve_this_one() {
+        let owner = SigningKey::random(&mut rand_core::OsRng);
+        let (p, ciba, id) = seeded(&owner).await;
+        let other = ciba.create("rp", ACCOUNT, "openid", "pay 9999", None).await.unwrap();
+
+        assert_eq!(approve_with_challenge_for(&p, &id, other.as_str(), &owner).await, StatusCode::BAD_REQUEST);
+        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Pending);
+    }
+}

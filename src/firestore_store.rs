@@ -587,6 +587,31 @@ mod tests {
     use super::*;
     use crate::firestore::fake_firestore;
 
+    #[tokio::test]
+    async fn code_is_taken_once() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let s = FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)));
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        s.save_code(AuthorizationCode {
+            code: "C1".into(),
+            client_id: "cl".into(),
+            account_id: "a".into(),
+            redirect_uri: "https://rp/cb".into(),
+            scope: "openid".into(),
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            auth_time: 0,
+            acr: None,
+            dpop_jkt: None,
+            resource: None,
+            expires_at: now + 600,
+        })
+        .await;
+        assert_eq!(s.take_code("C1").await.map(|c| c.client_id), Some("cl".to_string()));
+        assert!(s.take_code("C1").await.is_none());
+    }
+
     async fn store() -> FirestoreStore {
         store_and_fake().await.0
     }

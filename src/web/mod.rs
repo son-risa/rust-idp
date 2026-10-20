@@ -480,6 +480,62 @@ async fn authenticate_token(
 }
 
 #[cfg(test)]
+mod token_auth_tests {
+    use super::*;
+    use crate::model::AccessToken;
+
+    // proof の署名検証は dpop.rs の試験が見る。ここでは「proof の鍵 = token の cnf.jkt」の照合だけを見たいので、
+    // proof の文字列をそのまま jkt として返す検証器に差し替える。
+    struct ProofIsItsJkt;
+
+    #[async_trait::async_trait]
+    impl crate::dpop::DpopVerifier for ProofIsItsJkt {
+        async fn verify(&self, proof: &str, _: &str, _: &str, _: Option<&str>) -> Result<String, String> {
+            Ok(proof.to_string())
+        }
+    }
+
+    async fn provider_with_token_bound_to(jkt: &str) -> Provider {
+        let p = Provider::new("https://op.example.com").with_dpop(Arc::new(ProofIsItsJkt));
+        p.store
+            .save_access_token(AccessToken {
+                token: "AT".into(),
+                client_id: "rp".into(),
+                account_id: "user@example.com".into(),
+                scope: "openid".into(),
+                jkt: Some(jkt.into()),
+                aud: None,
+                acr: None,
+                auth_time: None,
+                authorization_details: None,
+                mandate_consumed: false,
+            })
+            .await;
+        p
+    }
+
+    fn headers(scheme: &str, proof: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, format!("{scheme} AT").parse().unwrap());
+        if let Some(pr) = proof {
+            h.insert("dpop", pr.parse().unwrap());
+        }
+        h
+    }
+
+    #[tokio::test]
+    async fn bound_token_needs_a_proof_from_the_key_it_was_bound_to() {
+        let p = provider_with_token_bound_to("JKT-OWNER").await;
+        let ok = authenticate_token(&p, &headers("DPoP", Some("JKT-OWNER")), "GET", "/userinfo", None).await;
+        assert!(ok.is_ok());
+        let stolen = authenticate_token(&p, &headers("DPoP", Some("JKT-ATTACKER")), "GET", "/userinfo", None).await;
+        assert_eq!(stolen.unwrap_err().status(), StatusCode::UNAUTHORIZED);
+        let bearer = authenticate_token(&p, &headers("Bearer", Some("JKT-OWNER")), "GET", "/userinfo", None).await;
+        assert_eq!(bearer.unwrap_err().status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[cfg(test)]
 mod obs_tests {
     use std::io;
     use std::sync::{Arc, Mutex};

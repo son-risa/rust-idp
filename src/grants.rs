@@ -558,6 +558,23 @@ mod tests {
         assert!(r.refresh_token.is_none()); // offline_access 無し
     }
 
+    fn id_token_claims(id_token: &str) -> serde_json::Value {
+        let payload = id_token.split('.').nth(1).unwrap();
+        serde_json::from_slice(&crate::es256::b64url_decode(payload).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn id_token_names_the_issuer_the_client_and_the_request_nonce() {
+        let p = provider();
+        p.store.save_code(AuthorizationCode { nonce: Some("n-0S6".into()), ..base_code("C1", "rp") }).await;
+        let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
+        let r = AuthorizationCodeGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
+        let claims = id_token_claims(&r.id_token.unwrap());
+        assert_eq!(claims["iss"], "https://op.example.com");
+        assert_eq!(claims["aud"], "rp");
+        assert_eq!(claims["nonce"], "n-0S6");
+    }
+
     // 回帰: 盗んだ refresh token を攻撃者の DPoP 鍵に付け替える攻撃が拒否される（RFC 9449 §5）。
     // 元は PoC（攻撃成立）として書いた。jkt 束縛照合の追加により InvalidDpopProof で弾かれる。
     #[tokio::test]
@@ -1202,6 +1219,21 @@ mod tests {
             CibaGrant.handle(&p, &client("rp"), &f, None).await,
             Err(OAuthError::InvalidGrant(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn ciba_token_carries_the_mandate_stored_with_the_request() {
+        let store = std::sync::Arc::new(MemoryCibaStore::default());
+        let mandate = r#"[{"type":"payment_initiation","amount":"100"}]"#;
+        let id = store.create("rp", "user@example.com", "openid", "msg", Some(mandate)).await.unwrap();
+        store.transition_if_pending(id.as_str(), CibaStatus::Approved).await.unwrap();
+        let p = provider().with_ciba(store);
+        let f = form(&[("auth_req_id", id.as_str())]);
+        let r = CibaGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
+        let want: serde_json::Value = serde_json::from_str(mandate).unwrap();
+        assert_eq!(r.authorization_details, Some(want));
+        let at = p.store.get_access_token(&r.access_token).await.unwrap();
+        assert_eq!(at.authorization_details.as_deref(), Some(mandate));
     }
 
     #[tokio::test]

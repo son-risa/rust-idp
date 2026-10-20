@@ -16,6 +16,30 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 第一版は `sources`/`reuse` 補題が要る場合がある（open-chain や非終了が出たら追加して iterate）。
 **「Tamarin が詰まる = 足りない前提が見える」こと自体が収穫**であって、最初から完璧な証明である必要はない。
 
+## CI で回す（`.github/workflows/formal.yml`）
+
+`src/**`・`formal/**`・`Cargo.toml`・`Cargo.lock` を触る PR と main への push で、次の 2 つを回す。
+
+- **Tamarin**: `formal/check.sh` が `formal/*.spthy` を全部 `--prove --auto-sources` にかけ、lemma ごとの結果を
+  [`expected.tsv`](./expected.tsv) と突き合わせる。本体のモデルは全 lemma が verified、NEG 版は下の各節に書いた lemma が
+  falsified であることを期待する。結果が違う・表に無いモデルや lemma がある・表にあるのに走らなかった・wellformedness が
+  通らない、のどれでも赤。モデルを足したり lemma を変えたら、`expected.tsv` も同じ PR で直す。
+- **Kani**: `formal/check-kani.sh` が `cargo kani` で全ハーネスを回し、SUCCESSFUL になったハーネスの名前を
+  [`kani-harnesses.txt`](./kani-harnesses.txt) と突き合わせる（Kani 0.67.0）。ハーネスが消えた・増えた・名前が変わった・
+  失敗した、のどれでも赤。ハーネスを足したり消したりしたら、一覧も同じ PR で直す。
+
+```sh
+formal/check.sh      # 手元で Tamarin の期待表を照合
+formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
+```
+
+下の各節の「表に出た前提 → rust-op の担保」の表は、[`premises.json`](./premises.json)（担保のコード・試験・Kani ハーネス、
+または試験にできない理由を持つ台帳）から作る。`<!-- premises: {model} -->` と `<!-- /premises -->` の間は手で書かず、
+`UPDATE_PREMISE_TABLES=1 cargo test formal_ledger` で作り直す。前提の表は範囲の中だけに置き、範囲の外に前提の表を書かない（範囲の外の行は照合しない）。`cargo test` の `formal_ledger_tests` が、その範囲が台帳から
+作った表とバイト一致すること、台帳の ID の形と (id, model) の重なり、台帳が指すモデル・関数が在ること、Kani ハーネスが
+`kani-harnesses.txt` に在ることを検める。台帳の試験の名前は、CI の test の job で `formal/check-ledger-tests.sh` が
+`cargo test -- --list` の一覧と完全一致で照らし、`#[ignore]` の試験も断る。
+
 ## モデル #1: 認可コード + PKCE + クライアント認証 → トークン
 
 対象は confidential client（private_key_jwt 相当 = DCR/FAPI クライアント）。フロー:
@@ -55,7 +79,8 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 
 ## 表に出た前提 → rust-op の担保（本層の成果物）
 
-| ID | モデルが要求する前提（抽象） | rust-op の担保（具体） |
+<!-- premises: oauth_code_pkce.spthy -->
+| ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-SINGLEUSE | 認可コードは**原子的に単回消費**される（`AS_Code` が linear） | store の code 消費（単回）。回帰テスト `store::code_reuse_revokes_issued_tokens` |
 | P-CODEFRESH | 認可コードは**推測不能**（CSPRNG = Fr） | code 生成（乱数） |
@@ -63,7 +88,9 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 | P-CKEY | クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる） | private_key_jwt（`client_auth.rs`）。rust-op は**公開鍵のみ保持** |
 | P-REG | クライアントは**事前登録**され AS が公開鍵を知る | `with_client` / DCR（`clients` 登録、`resolve_client`） |
 | P-TLS | トークン配送路は**機密**で正しいクライアントへ届く（モデルでは鍵への暗号化で抽象化） | TLS（Firebase Hosting / Cloud Run）＋ token endpoint |
-| （攻撃者モデル） | In/Out を完全支配する回線攻撃者に耐える | — |
+<!-- /premises -->
+
+- （攻撃者モデル） In/Out を完全支配する回線攻撃者に耐える（担保: —）
 
 → 「**`token_secrecy` は、攻撃者X(回線支配)に対し、前提 {P-SINGLEUSE, P-VERIFIER, P-CKEY, P-REG, P-TLS} の下で成り立つ**」。
 これが目標「前提の明示」の1行。
@@ -103,12 +130,14 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
   = **cnf.jkt 束縛検査は必要**。外すと攻撃者が盗んだ token に**自分の鍵の proof** を付けて RS を通せる。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: dpop_binding.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-DKEY | DPoP 秘密鍵は秘匿（漏れると束縛が無効） | クライアント側保持。rust-op は proof を検証するだけで**鍵を持たない** |
 | P-CNF | RS は「proof の鍵 thumbprint = token の cnf.jkt」を検査 | `authenticate_token`（`at.jkt` と proof の jkt 一致）。introspection が cnf.jkt 公開 |
 | P-PROOFSIG | DPoP proof の署名検証（ES256） | `Es256Dpop`（`dpop.rs`） |
 | P-JTI | DPoP proof の jti 単回（リプレイ防止） | jti 単回ストア（`NonceStore` / Firestore 分散） |
+<!-- /premises -->
 
 → 導出された運用要件: **RS は token の cnf.jkt と DPoP proof の鍵 thumbprint の一致を検査せよ**（外すと盗難トークンが通る）。
 
@@ -138,6 +167,7 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 → **マンデート単回が必要**（外すと同一 auth_req_id から複数トークン）。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: ciba_rar.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-BIND | ユーザ承認は**具体的 mandate に commit** し、AS は承認された mandate のみ発行 | binding_message + authorization_details を auth_req_id に紐付け表示・承認、token に approved mandate |
@@ -145,7 +175,9 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 | P-MSINGLE | マンデート(auth_req_id) は**単回消費** | `mandate_consumed` CAS（/oauth/mandate/consume）+ CIBA store の単回 |
 | P-CAUTH | backchannel と poll で**クライアント認証** | ciba-rp Basic（live e2e で実機確認済） |
 | P-UAUTH | 承認は**ユーザ認証**（passkey） | fido2demo アプリで passkey 承認 |
-| （反スパム） | 無認証トリガの**レート制限** | `ciba_rate`（**記号的検証の対象外**＝量的性質） |
+<!-- /premises -->
+
+- （反スパム） 無認証トリガの**レート制限**（担保: `ciba_rate`（**記号的検証の対象外**＝量的性質））
 
 → 導出された運用要件: **ユーザ承認を具体的 mandate に暗号的に束縛し、AS は承認された mandate のみ発行せよ**（外すと表示すり替え）。**マンデートは単回消費せよ**。
 
@@ -173,13 +205,16 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 → **challenge 単回が必要**（外すとアサーション再送）。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: webauthn.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-AKEY | 認証器 credential 鍵は秘匿 | secure enclave。rust-op は**公開鍵のみ保持** |
 | P-ORIGIN | RP は origin/rpId == 自分 を検査 | `webauthn::verify_authentication`（origin + rpIdHash） |
 | P-CHAL | challenge 新鮮 + 単回 | `create/consume_webauthn_challenge`（単回） |
 | P-SIG | 登録公開鍵で署名検証 | `webauthn::verify_authentication` |
-| （anti-clone） | signCount 単調増加 | signcount 検査（**記号的モデル対象外**＝異常検知） |
+<!-- /premises -->
+
+- （anti-clone） signCount 単調増加（担保: signcount 検査（**記号的モデル対象外**＝異常検知））
 
 → 導出された運用要件: **RP は origin/rpId が自分のものか検査せよ**（外すとフィッシング）／**challenge は単回**。
 
@@ -206,6 +241,7 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 → **aud 束縛が必要**（外すと RP1 宛 token を RP2 が受理）／**nonce 新鮮が必要**（外すと古い token 再送）。
 
 ### 表に出た前提 → rust-op の担保
+<!-- premises: id_token.spthy -->
 | ID | 前提（抽象） | rust-op の担保 |
 |---|---|---|
 | P-OPKEY | OP 署名鍵は秘匿 | ES256 / Cloud KMS（鍵をプロセスに展開しない） |
@@ -213,6 +249,7 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
 | P-NONCE | nonce 新鮮 + RP が一致検査 | OP: 認可要求の nonce を token へ。RP: nonce 検証 |
 | P-SIG | RP は OP の JWKS で署名検証 | discovery / JWKS 公開、RP が検証 |
 | P-ISS | iss（発行者）確認（IdP mix-up 防止） | token の iss=OP。RP は OP の鍵で検証（モデルは OP 鍵束縛で表現） |
+<!-- /premises -->
 
 → 導出された運用要件: **RP は aud==自分・nonce==自 flow・iss==期待 OP・署名を検査せよ**（外すと audience confusion / replay / mix-up）。
 

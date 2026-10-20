@@ -1,0 +1,71 @@
+name: Formal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "formal/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/formal.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "formal/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/formal.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAMARIN_VERSION: 1.12.0
+  TAMARIN_SHA256: 201be06f469e47cff554df6ca93db8366fc2c69d70c61fcbd1370a1074b469c6
+  MAUDE_VERSION: 3.5.1
+  MAUDE_SHA256: 72ed1ca87e3b3d0dfc6ee1436baf154bf04c45ff97d521bec040c5e8dfc8f92c
+  KANI_VERSION: 0.67.0
+
+jobs:
+  tamarin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # 配布物はリリースの sha256 と照合してから展開する（タグの差し替えでは中身を変えられない）。
+      - name: Install Tamarin and Maude
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/dl"
+          cd "$RUNNER_TEMP/dl"
+          curl -fsSLO "https://github.com/tamarin-prover/tamarin-prover/releases/download/${TAMARIN_VERSION}/tamarin-prover-${TAMARIN_VERSION}-linux64-ubuntu.tar.gz"
+          curl -fsSLO "https://github.com/maude-lang/Maude/releases/download/Maude${MAUDE_VERSION}/Maude-${MAUDE_VERSION}-linux-x86_64.zip"
+          printf '%s  %s\n' \
+            "$TAMARIN_SHA256" "tamarin-prover-${TAMARIN_VERSION}-linux64-ubuntu.tar.gz" \
+            "$MAUDE_SHA256" "Maude-${MAUDE_VERSION}-linux-x86_64.zip" | sha256sum -c -
+          tar xzf "tamarin-prover-${TAMARIN_VERSION}-linux64-ubuntu.tar.gz" -C "$RUNNER_TEMP/bin"
+          unzip -q "Maude-${MAUDE_VERSION}-linux-x86_64.zip" -d "$RUNNER_TEMP/maude"
+          chmod +x "$RUNNER_TEMP/maude/maude"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/maude" >> "$GITHUB_PATH"
+      - name: Tamarin（expected.tsv と照合）
+        run: formal/check.sh
+
+  kani:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier --version "$KANI_VERSION"
+          cargo kani setup
+      - name: Kani（kani-harnesses.txt と照合）
+        run: formal/check-kani.sh

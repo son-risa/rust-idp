@@ -443,6 +443,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn webauthn_challenge_is_consumed_once() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "").await.unwrap();
+        let first = consume_webauthn_challenge(&fs, &c).await.unwrap();
+        assert_eq!(first.map(|(e, k, _, _)| (e, k)), Some(("a@example.com".to_string(), ChallengeKind::Auth)));
+        assert_eq!(consume_webauthn_challenge(&fs, &c).await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn save_profile_refuses_what_the_registration_page_refuses_and_writes_nothing() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
