@@ -48,6 +48,10 @@ fn retain_alive<K, V>(map: &mut HashMap<K, Expiring<V>>) {
 pub trait Store: Send + Sync {
     async fn save_interaction(&self, i: Interaction);
     async fn get_interaction(&self, uid: &str) -> Option<Interaction>;
+    /// ログインの完了（account_id と auth_time）を、まだ在る interaction にだけ書く。在れば true。
+    /// 消費済みの interaction を作り直さないため、無ければ書かずに false（遅れて届いた verify が
+    /// 同じ uid の interaction を蘇らせ、2 回目の resume で 2 つ目のコードが出るのを防ぐ）。
+    async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool;
     /// interaction を単回消費（削除）する。削除に成功（=この呼び出しが初回）したら true、
     /// 既に無い（消費済み/未存在）なら false。authorize_resume で「1認証=1コード」を保証する。
     async fn consume_interaction(&self, uid: &str) -> bool;
@@ -129,6 +133,16 @@ impl Store for MemoryStore {
                 None
             }
             None => None,
+        }
+    }
+    async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool {
+        match self.interactions.lock().unwrap().get_mut(uid) {
+            Some(e) if e.alive() => {
+                e.value.account_id = Some(account_id.to_string());
+                e.value.auth_time = Some(auth_time);
+                true
+            }
+            _ => false,
         }
     }
     async fn consume_interaction(&self, uid: &str) -> bool {
