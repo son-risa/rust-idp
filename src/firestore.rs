@@ -682,6 +682,8 @@ pub(crate) mod fake_firestore {
         next_version: Mutex<u64>,
         /// fcm.rs の send() が投げた message body をそのまま記録する（identifier 一貫性の検証用）。
         fcm_sent: Mutex<Vec<Value>>,
+        /// 失敗の注入: (メソッド, col, id) に合う次の要求に 1 回だけ、その状態の番号を返す。id が None なら col の全ての id に合う。
+        failures: Mutex<Vec<(&'static str, String, Option<String>, StatusCode)>>,
     }
 
     impl FakeState {
@@ -693,6 +695,22 @@ pub(crate) mod fake_firestore {
 
         pub fn fcm_sent_messages(&self) -> Vec<Value> {
             self.fcm_sent.lock().unwrap().clone()
+        }
+
+        /// method は "GET"・"PATCH"・"DELETE" のどれか。次の 1 回だけ 503 を返す。
+        pub fn fail_once(&self, method: &'static str, col: &str, id: Option<&str>) {
+            self.fail_once_with(method, col, id, StatusCode::SERVICE_UNAVAILABLE);
+        }
+
+        /// fail_once と同じだが、返す状態の番号を選べる（例えば、並行する削除に先を越された 404）。
+        pub fn fail_once_with(&self, method: &'static str, col: &str, id: Option<&str>, status: StatusCode) {
+            self.failures.lock().unwrap().push((method, col.to_string(), id.map(str::to_string), status));
+        }
+
+        fn take_failure(&self, method: &str, col: &str, id: &str) -> Option<StatusCode> {
+            let mut f = self.failures.lock().unwrap();
+            let k = f.iter().position(|(m, c, i, _)| *m == method && c == col && i.as_deref().is_none_or(|i| i == id))?;
+            Some(f.remove(k).3)
         }
     }
 
@@ -716,6 +734,9 @@ pub(crate) mod fake_firestore {
         State(st): State<Arc<FakeState>>,
         Path((_project, col, id)): Path<(String, String, String)>,
     ) -> Response {
+        if let Some(status) = st.take_failure("GET", &col, &id) {
+            return status.into_response();
+        }
         let docs = st.docs.lock().unwrap();
         match docs.get(&(col, id)) {
             Some(d) => {
@@ -732,6 +753,9 @@ pub(crate) mod fake_firestore {
         Query(pre): Query<Precondition>,
         Json(body): Json<Value>,
     ) -> Response {
+        if let Some(status) = st.take_failure("PATCH", &col, &id) {
+            return status.into_response();
+        }
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);
         if let Some(want) = &pre.exists {
@@ -773,6 +797,9 @@ pub(crate) mod fake_firestore {
         Path((_project, col, id)): Path<(String, String, String)>,
         Query(pre): Query<Precondition>,
     ) -> Response {
+        if let Some(status) = st.take_failure("DELETE", &col, &id) {
+            return status.into_response();
+        }
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);
         if let Some(want_ut) = &pre.update_time {
