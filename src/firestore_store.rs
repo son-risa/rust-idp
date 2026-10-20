@@ -97,6 +97,19 @@ impl Store for FirestoreStore {
         })
     }
 
+    async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool {
+        // 読んだ updateTime の CAS で書く。間に resume が消費（CAS 削除）していれば負けて false。
+        let Ok(Some((mut f, update_time))) = self.fs.get_doc_with_update_time("interactions", uid).await else {
+            return false;
+        };
+        if doc_expired(&f) {
+            return false;
+        }
+        f["accountId"] = fs_h::s(account_id);
+        f["authTime"] = fs_h::int(auth_time);
+        matches!(self.fs.set_doc_if_unchanged("interactions", uid, f, &update_time).await, Ok(true))
+    }
+
     async fn consume_interaction(&self, uid: &str) -> bool {
         // updateTime CAS で単回削除（並行 resume / リプレイで高々 1 回だけ成功）。
         self.cas_take("interactions", uid).await.is_some()

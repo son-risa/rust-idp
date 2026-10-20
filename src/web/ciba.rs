@@ -275,7 +275,7 @@ pub(super) async fn ciba_pending(
         None => {
             return Html(localize(
                 &format!(
-                    "<!doctype html><html lang=\"__LANG__\"><meta charset=\"utf-8\"><p>[[You need to log in to approve.]] <a href=\"{}\">[[Log in]]</a></p>",
+                    "<!doctype html><html lang=\"__LANG__\"><meta charset=\"utf-8\"><p>[[You need to sign in to approve.]] <a href=\"{}\">[[Sign in]]</a></p>",
                     p.path("/")
                 ),
                 lang,
@@ -292,7 +292,7 @@ pub(super) async fn ciba_pending(
                 "<div class=row><div><b>{}</b><br><small>scope: {}</small></div>\
 <button onclick=\"approve('{}')\">[[Approve (passkey)]]</button> \
 <button class=rej onclick=\"reject('{}')\">[[Reject]]</button></div>",
-                esc(if r.binding_message.is_empty() { "(no binding message)" } else { &r.binding_message }),
+                esc(if r.binding_message.is_empty() { "[[(no message)]]" } else { &r.binding_message }),
                 esc(&r.scope),
                 esc(r.auth_req_id.as_str()),
                 esc(r.auth_req_id.as_str()),
@@ -310,19 +310,20 @@ button.rej{background:#999}#msg{color:#c00}</style></head><body>
 __ROWS__
 <script>
 __WEBAUTHN_JS__
+__SERVER_ERROR_JS__
 const B="__BASE__";
 async function approve(id){
  const msg=document.getElementById('msg');msg.textContent='';window.__busy=true;
  try{
   const r=await fetch(B+'/ciba/'+id+'/passkey-options',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
-  if(!r.ok){msg.textContent=await r.text();window.__busy=false;return;}
+  if(!r.ok){msg.textContent=await errorText(r);window.__busy=false;return;}
   const o=await r.json();
   const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:'required',allowCredentials:(o.allowCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id),transports:c.transports}))}});
   const body={id:cred.id,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),authenticatorData:bufToB64(cred.response.authenticatorData),signature:bufToB64(cred.response.signature)}};
   const v=await fetch(B+'/ciba/'+id+'/approve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){msg.textContent=await v.text();window.__busy=false;return;}
+  if(!v.ok){msg.textContent=await errorText(v);window.__busy=false;return;}
   location.reload();
- }catch(e){msg.textContent=e.message;window.__busy=false;}
+ }catch(e){msg.textContent=passkeyErrorText(e);window.__busy=false;}
 }
 async function reject(id){
  window.__busy=true;
@@ -337,7 +338,7 @@ setInterval(()=>{if(!window.__busy)location.reload();},4000);
         rows
     };
     Html(
-        localize(body, lang)
+        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), lang)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__BASE__", &p.base_path)
             .replace("__ROWS__", &localize(&rows, lang)),

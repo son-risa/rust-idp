@@ -119,6 +119,10 @@ pub fn router(provider: Provider) -> Router {
             "/admin/clients/{client_id}/post-logout",
             post(admin::client_set_post_logout),
         )
+        .route(
+            "/admin/clients/{client_id}/initiate-login",
+            post(admin::client_set_initiate_login),
+        )
         .route("/admin/iats", get(admin::iats_pending_list))
         .route("/admin/iats/new", get(admin::iat_mint_form).post(admin::iat_mint_submit))
         .route("/admin/iats/{hash}/revoke", post(admin::iat_revoke))
@@ -175,9 +179,46 @@ pub fn router(provider: Provider) -> Router {
             .nest(&base_path, inner)
             .merge(fido)
             .merge(magic)
+            .fallback(log_unmatched)
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
-    app.layer(axum::middleware::from_fn(request_trace))
+    app.layer(axum::middleware::from_fn(localize_rejections))
+        .layer(axum::middleware::from_fn(request_trace))
+}
+
+/// axum の Query・Path・Form の取り出しの失敗は英語の説明を text/plain の本文に入れて返すので、
+/// ブラウザの言語の文に差し替える。Content-Type 違いの 415 は RP の開発者向けなので英語のまま通す。
+async fn localize_rejections(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let lang = Lang::from_headers(req.headers());
+    let resp = next.run(req).await;
+    let is_plain = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/plain"));
+    if !resp.status().is_client_error() || !is_plain {
+        return resp;
+    }
+    let (parts, body) = resp.into_parts();
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(event = "rejection_body_unreadable", status = parts.status.as_u16(), "{e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
+    let detail = String::from_utf8_lossy(&bytes);
+    let msg = if detail.starts_with("Failed to deserialize form") {
+        "[[Some of the entered values are invalid. Please check them and try again.]]"
+    } else if detail.starts_with("Failed to deserialize query string") || detail.starts_with("Invalid URL") {
+        "[[The URL of this page is not valid. Please check the link and try again.]]"
+    } else {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    };
+    // serde の説明は値を含みうるので、どの取り出しで落ちたかだけを残す。
+    let kind = detail.split(':').next().unwrap_or_default();
+    tracing::warn!(event = "request_rejected", status = parts.status.as_u16(), kind);
+    (parts.status, localize(msg, lang)).into_response()
 }
 
 /// リクエスト相関ミドルウェア（L4 Observability の Foundation 層）:
@@ -228,9 +269,9 @@ pub(crate) fn pseudonymize_sub(sub: &str) -> String {
 }
 
 /// 未マッチのリクエストをログする（MDS3 等が叩く未実装パスの特定用）。
-async fn log_unmatched(method: axum::http::Method, uri: axum::http::Uri) -> impl IntoResponse {
+async fn log_unmatched(method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> impl IntoResponse {
     tracing::info!("UNMATCHED {} {}", method, uri);
-    (StatusCode::NOT_FOUND, "not found")
+    (StatusCode::NOT_FOUND, localize("[[Page not found]]", Lang::from_headers(&headers)))
 }
 
 fn plain_error(msg: &str) -> Response {
@@ -243,6 +284,43 @@ fn plain_error(msg: &str) -> Response {
 const WEBAUTHN_JS: &str = r##"
 function b64ToBuf(b){b=b.replace(/-/g,'+').replace(/_/g,'/');while(b.length%4)b+='=';const s=atob(b);const a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a.buffer;}
 function bufToB64(buf){const a=new Uint8Array(buf);let s='';for(let i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+"##;
+
+/// passkey の API が返す失敗の文言を画面の言語に置き換える JS。API の応答はアプリも読むので
+/// 英語の固定文のまま変えず、ページの側で訳す。表に無い文言はそのまま出す。
+/// `passkeyErrorText` は passkey の操作中の例外を訳す（例外の文はブラウザの言語で出るので画面には出さない）。
+/// 印を含むので `localize` を通す前のテンプレートに差し込む。
+const SERVER_ERROR_JS: &str = r##"
+const SERVER_ERRORS={
+ 'challenge invalid/expired':'[[This took too long. Please try again.]]',
+ 'cannot resolve user':'[[This passkey is not registered.]]',
+ 'credential not found':'[[This passkey is not registered.]]',
+ 'credential id mismatch':'[[This passkey is not registered.]]',
+ 'passkey verify failed':'[[The passkey could not be verified.]]',
+ 'account disabled':'[[This account is disabled.]]',
+ 'account needs re-registration':'[[This account needs to be registered again.]]',
+ 'interaction not found':'[[This sign-in has expired. Please start again.]]',
+ 'invalid or expired token':'[[This link has expired or has already been used.]]',
+ 'already registered':'[[This email address is already registered. Please sign in.]]',
+ 'registration failed':'[[The passkey could not be created.]]',
+ 'invalid name':'[[The name is too long or contains characters that cannot be used.]]',
+ 'name required':'[[Enter your name]]',
+ 'request not found':'[[This request was not found or has expired.]]',
+ 'no passkey':'[[No passkey is registered for this account.]]',
+ 'already handled':'[[This request has already been handled.]]',
+ 'no challenge':'[[Something went wrong. Please try again.]]',
+ 'challenge context mismatch':'[[Something went wrong. Please try again.]]',
+ 'no firestore':'[[Something went wrong. Please try again.]]',
+ 'error':'[[Something went wrong. Please try again.]]',
+ 'access token required':'[[Your session has expired. Please sign in again.]]',
+ 'invalid token':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP scheme required':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP proof required':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP jkt mismatch':'[[Your session has expired. Please sign in again.]]',
+ 'DPoP':'[[Your session has expired. Please sign in again.]]'
+};
+async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));if(k)return SERVER_ERRORS[k];console.error(t);return '[[Something went wrong. Please try again.]]';}
+function passkeyErrorText(e){if(e&&e.name==='NotAllowedError')return '[[The passkey was canceled or timed out.]]';console.error(e);return '[[Something went wrong. Please try again.]]';}
 "##;
 
 #[derive(serde::Deserialize)]

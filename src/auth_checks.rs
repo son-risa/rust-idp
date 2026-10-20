@@ -129,6 +129,7 @@ mod tests {
             client_secret: if public { None } else { Some("s".into()) },
             grant_types: vec!["authorization_code".into()],
             post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
             dpop_bound: false,
             jwks: vec![],
             jwks_uri: None,

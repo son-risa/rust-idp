@@ -411,6 +411,15 @@ impl Firestore {
         Err(format!("cas delete {}", r.status()))
     }
 
+    /// updateTime CAS で単回削除し、削除直前の fields を返す。並行リクエスト/リプレイでは
+    /// 高々 1 回だけ Some を返す（未存在・CAS 負けは None、ストアのエラーは Err）。単回消費の原始操作。
+    pub async fn take_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        let Some((fields, update_time)) = self.get_doc_with_update_time(col, id).await? else {
+            return Ok(None);
+        };
+        Ok(self.delete_doc_if_unchanged(col, id, &update_time).await?.then_some(fields))
+    }
+
     /// 単一フィールド完全一致のクエリ。各ドキュメントの (id, fields) を返す。
     pub async fn query_eq(
         &self,

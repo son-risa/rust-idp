@@ -362,16 +362,52 @@ pub async fn get_profile(
     Ok(out)
 }
 
+const PROFILE_VALUE_MAX_CHARS: usize = 80;
+
+/// 表示の向きを変える書式文字（Unicode の Bidi_Control）。RP の画面で氏名などの見た目を偽れるので断る。
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// プロフィールの値を前後の空白を除いて受け取る。空なら None、長すぎる・制御文字や向きを変える文字を含むなら Err。
+pub fn normalize_profile_value(raw: &str) -> Result<Option<String>, ()> {
+    let v = raw.trim();
+    if v.is_empty() {
+        return Ok(None);
+    }
+    if v.chars().count() > PROFILE_VALUE_MAX_CHARS || v.chars().any(|c| c.is_control() || is_bidi_control(c)) {
+        return Err(());
+    }
+    Ok(Some(v.to_string()))
+}
+
+#[derive(Debug)]
+pub enum ProfileError {
+    Invalid(String),
+    Store(String),
+}
+
+impl std::fmt::Display for ProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProfileError::Invalid(k) => write!(f, "invalid {k}"),
+            ProfileError::Store(e) => f.write_str(e),
+        }
+    }
+}
+
 /// 既存値とマージして profiles/{email} を保存（EDITABLE 以外は無視）。
+/// 値は登録の画面と同じ検査（normalize_profile_value）を通し、1 つでも通らなければ何も書かない。
 pub async fn save_profile(
     fs: &Firestore,
     email: &str,
     updates: &std::collections::HashMap<String, String>,
-) -> Result<(), String> {
-    let mut current = get_profile(fs, email).await?;
+) -> Result<(), ProfileError> {
+    let mut current = get_profile(fs, email).await.map_err(ProfileError::Store)?;
     for (k, v) in updates {
         if crate::claims::EDITABLE.contains(&k.as_str()) {
-            current.insert(k.clone(), v.clone());
+            let v = normalize_profile_value(v).map_err(|()| ProfileError::Invalid(k.clone()))?;
+            current.insert(k.clone(), v.unwrap_or_default());
         }
     }
     let mut fields = serde_json::Map::new();
@@ -379,7 +415,7 @@ pub async fn save_profile(
     for (k, v) in &current {
         fields.insert(k.clone(), firestore::s(v));
     }
-    fs.set_doc("profiles", email, serde_json::Value::Object(fields)).await
+    fs.set_doc("profiles", email, serde_json::Value::Object(fields)).await.map_err(ProfileError::Store)
 }
 
 fn challenge_expired(fields: &serde_json::Value) -> bool {
@@ -404,6 +440,24 @@ mod tests {
             pub_y: "y".into(),
             sign_count: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn save_profile_refuses_what_the_registration_page_refuses_and_writes_nothing() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        let ok = std::collections::HashMap::from([("name".to_string(), "  山田 太郎 ".to_string())]);
+        save_profile(&fs, "acc", &ok).await.unwrap();
+        for bad in ["\u{202E}evil", "a\u{0007}b", &"x".repeat(81)] {
+            let upd = std::collections::HashMap::from([
+                ("nickname".to_string(), "ok".to_string()),
+                ("name".to_string(), bad.to_string()),
+            ]);
+            assert!(matches!(save_profile(&fs, "acc", &upd).await, Err(ProfileError::Invalid(k)) if k == "name"), "{bad:?}");
+        }
+        let saved = get_profile(&fs, "acc").await.unwrap();
+        assert_eq!(saved.get("name").map(String::as_str), Some("山田 太郎"));
+        assert_eq!(saved.get("nickname"), None);
     }
 
     #[tokio::test]
