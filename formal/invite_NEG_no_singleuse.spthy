@@ -1,0 +1,146 @@
+theory InviteNoSingleUse
+begin
+
+/*
+  ★ NEG 版（必要性の実験）: 本体 invite.spthy から、招待の原子的な単回消費（P-ISINGLE）を外した変種。
+    Invite を persistent（!Invite）にしたので、確認の段を通った要求は同じ token で何度でも登録できる。
+    期待: invite_single_use だけが falsified（攻撃の跡は確認と消費の間の競合）。下の流れと性質の説明は本体のもの。
+
+  招待の登録リンク（RP の管理者が発行を頼み、宛先のメールに届く token で passkey を登録する）。
+
+  流れ:
+    1. 招待を許した RP が、クライアント認証つきで AS に「E を招待」と頼む
+    2. AS は新鮮な token ~t を作って Invite(~t, E) に置き、TLS の応答で RP にだけ返す
+    3. RP は ~t を含むリンクを E のメール箱へ送る
+    4. 利用者は ~t と自分の passkey 公開鍵を AS に送る（TLS）
+    5. AS は「E がまだ登録済みでない」ことを確かめ、E の passkey を登録する（本体と違い、招待は消費しない）
+
+  検証する性質:
+    - invite_single_use: 1 つの token から登録は 1 回しか起きない
+    - invite_binding: token で E に登録された鍵は、E のメール箱の持ち主の鍵である
+      （リンクが漏れたか、招待を頼んだ RP の鍵が漏れた場合を除く）
+
+  攻撃者: Dolev-Yao。AS の登録口へ自分で要求を送れる。使い終わったリンクが後から漏れること
+          （転送・メール箱の侵害）も起こせる。
+  抽象:
+    - TLS は「AS の公開鍵への暗号化」と「要求に入れた使い捨ての鍵での応答」で表す（#1 の前提 P-TLS と同じ抽象）。
+    - メールは E の持ち主にだけ届く（Mail が linear）。漏れは Leak_Link で表す。
+    - 「E がまだ登録済みでない」の確認（refuse_invite_for_registered）と、招待の消費・保存は
+      別の段で起きる。確認の時点で E の登録が無いことを restriction で表す。
+      確認と消費の間に別の要求が割り込めるので、単回を担保するのは消費の側になる。
+      この restriction は外してもどの lemma の結果も変わらない（モデルでは効いていない）。
+      確認の段の担保は、コードの試験 leftover_invite_cannot_replace_a_registered_passkey にある。
+
+  実行: tamarin-prover --prove --auto-sources formal/invite_NEG_no_singleuse.spthy
+*/
+
+builtins: signing, asymmetric-encryption, symmetric-encryption
+
+rule Setup_AS:
+    [ Fr(~skAS) ]
+  --[ OnlyOnce('AS') ]->
+    [ !AS_Sk(~skAS), !AS_Pk(pk(~skAS)), Out(pk(~skAS)) ]
+
+/* 招待を許した RP（confidential client）。前提[P-ICLIENT]: AS は招待を許す client とその鍵を知る。 */
+rule Register_RP:
+    [ Fr(~ltkC) ]
+  --[ ]->
+    [ !Ltk($C, ~ltkC), !InviteClient($C, pk(~ltkC)), Out(pk(~ltkC)) ]
+
+rule Reveal_RP:
+    [ !Ltk($C, ~ltkC) ]
+  --[ RevealRP($C) ]->
+    [ Out(~ltkC) ]
+
+/* ---- 1. RP: 招待を頼む（クライアント認証 + TLS）---- */
+rule RP_RequestInvite:
+    [ !Ltk($C, ~ltkC), !AS_Pk(pkAS), Fr(~kr) ]
+  --[ RequestInvite($C, $E) ]->
+    [ St_RP($C, $E, ~kr)
+    , Out(aenc(<'invite', $C, $E, ~kr, sign(<'invite', $C, $E, ~kr>, ~ltkC)>, pkAS))
+    ]
+
+/* ---- 2. AS: 招待を作る。前提[P-ITOKEN]: token は推測不能（Fr）。
+   NEG: Invite を persistent にして P-ISINGLE（原子的な単回消費）を外した。 ---- */
+rule AS_CreateInvite:
+    [ In(aenc(<'invite', C, E, kr, sig>, pk(~skAS)))
+    , !AS_Sk(~skAS)
+    , !InviteClient(C, pkC)
+    , Fr(~t)
+    ]
+  --[ Eq(verify(sig, <'invite', C, E, kr>, pkC), true)
+    , CreateInvite(C, E, ~t)
+    ]->
+    [ !Invite(~t, E)
+    , Out(senc(<'invited', E, ~t>, kr))
+    ]
+
+/* ---- 3. RP: リンクを E のメール箱へ送る ---- */
+rule RP_MailInvite:
+    [ St_RP(C, E, kr), In(senc(<'invited', E, t>, kr)) ]
+  --[ MailSent(C, E, t) ]->
+    [ Mail(E, t), !Link(E, t) ]
+
+/* リンクの漏れ（転送されたメール、後から侵害されたメール箱など）。 */
+rule Leak_Link:
+    [ !Link(E, t) ]
+  --[ LeakLink(E, t) ]->
+    [ Out(t) ]
+
+/* ---- 4. 利用者: メールのリンクを開き、passkey を作って登録を送る（TLS）---- */
+rule User_Register:
+    [ Mail(E, t), Fr(~k), !AS_Pk(pkAS) ]
+  --[ UserRegisters(E, t, pk(~k)) ]->
+    [ !UserKey(E, ~k)
+    , Out(aenc(<'register', t, pk(~k)>, pkAS))
+    ]
+
+/* ---- 5a. AS: E がまだ登録済みでないことを確かめる（refuse_invite_for_registered）---- */
+rule AS_CheckNotRegistered:
+    [ In(aenc(<'register', t, cpk>, pk(~skAS))), !AS_Sk(~skAS) ]
+  --[ CheckNotRegistered(t) ]->
+    [ St_AS(t, cpk) ]
+
+/* ---- 5b. AS: 招待を読んで登録する。NEG: 招待を消費しない（!Invite）---- */
+rule AS_ConsumeAndRegister:
+    [ St_AS(t, cpk), !Invite(t, E) ]
+  --[ Registered(E, t, cpk) ]->
+    [ !Cred(E, cpk) ]
+
+restriction Equality:
+    "All x y #i. Eq(x, y) @ #i ==> x = y"
+
+restriction OnlyOnce:
+    "All x #i #j. OnlyOnce(x) @ #i & OnlyOnce(x) @ #j ==> #i = #j"
+
+/* 5a で確かめた時点で、その token の宛先 E はまだ登録されていない。
+   外してもどの lemma の結果も変わらない（確認の段の担保はコードの試験 leftover_invite_cannot_replace_a_registered_passkey）。 */
+restriction NotRegisteredAtCheck:
+    "All t E cpk #c #r. CheckNotRegistered(t) @ #c & Registered(E, t, cpk) @ #r
+      ==> not (Ex t2 cpk2 #p. Registered(E, t2, cpk2) @ #p & #p < #c)"
+
+/* ======================== 性質 ======================== */
+
+lemma executable:
+  exists-trace
+    "Ex C E t cpk #a #b #c.
+        CreateInvite(C, E, t) @ #a
+      & UserRegisters(E, t, cpk) @ #b
+      & Registered(E, t, cpk) @ #c
+      & not (Ex CC #r. RevealRP(CC) @ #r)
+      & not (Ex EE tt #l. LeakLink(EE, tt) @ #l)"
+
+lemma invite_single_use:
+    "All E t k1 k2 #i #j.
+        Registered(E, t, k1) @ #i
+      & Registered(E, t, k2) @ #j
+      ==> #i = #j"
+
+lemma invite_binding:
+    "All E t cpk #i.
+        Registered(E, t, cpk) @ #i
+      ==> (Ex #u. UserRegisters(E, t, cpk) @ #u)
+        | (Ex #l. LeakLink(E, t) @ #l)
+        | (Ex C #c #r. CreateInvite(C, E, t) @ #c & RevealRP(C) @ #r)"
+
+end

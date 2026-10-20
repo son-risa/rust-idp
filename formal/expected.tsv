@@ -39,6 +39,14 @@ id_token_NEG_no_nonce.spthy	executable	verified
 id_token_NEG_no_nonce.spthy	idtoken_integrity	falsified
 id_token.spthy	executable	verified
 id_token.spthy	idtoken_integrity	verified
+invite.spthy	executable	verified
+invite.spthy	invite_single_use	verified
+invite.spthy	invite_binding	verified
+invite.spthy	AUTO_typing	verified
+invite_NEG_no_singleuse.spthy	executable	verified
+invite_NEG_no_singleuse.spthy	invite_single_use	falsified
+invite_NEG_no_singleuse.spthy	invite_binding	verified
+invite_NEG_no_singleuse.spthy	AUTO_typing	verified
 oauth_code_NEG_no_singleuse.spthy	executable	verified
 oauth_code_NEG_no_singleuse.spthy	code_single_use	falsified
 oauth_code_NEG_no_singleuse.spthy	token_secrecy	verified

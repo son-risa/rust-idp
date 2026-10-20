@@ -73,17 +73,6 @@ impl FirestoreStore {
         let gone = matches!(self.fs.delete_doc_if_unchanged("refreshTokens", token, &update_time).await, Ok(true));
         (gone, next)
     }
-
-    /// updateTime CAS で単回削除する。削除に成功（=この呼び出しが初回）したら削除直前の
-    /// fields を返す。並行リクエスト/リプレイでは高々 1 回だけ Some を返す（未存在/負け/Err は
-    /// None）。単回消費（RT ローテーション / interaction 消費）の唯一の原始操作。
-    async fn cas_take(&self, col: &str, id: &str) -> Option<Value> {
-        let (f, update_time) = self.fs.get_doc_with_update_time(col, id).await.ok()??;
-        match self.fs.delete_doc_if_unchanged(col, id, &update_time).await {
-            Ok(true) => Some(f),
-            _ => None,
-        }
-    }
 }
 
 #[async_trait]
@@ -134,7 +123,7 @@ impl Store for FirestoreStore {
 
     async fn consume_interaction(&self, uid: &str) -> bool {
         // updateTime CAS で単回削除（並行 resume / リプレイで高々 1 回だけ成功）。
-        self.cas_take("interactions", uid).await.is_some()
+        matches!(self.fs.take_doc("interactions", uid).await, Ok(Some(_)))
     }
 
     async fn save_session(&self, s: Session) {

@@ -135,9 +135,9 @@
     "id": "P-CHAL",
     "model": "webauthn.spthy",
     "premise": "challenge 新鮮 + 単回",
-    "assurance": "`create/consume_webauthn_challenge`（単回）",
-    "guard": ["src/registration.rs: create_webauthn_challenge", "src/registration.rs: consume_webauthn_challenge"],
-    "tests": ["registration::tests::webauthn_challenge_is_consumed_once"]
+    "assurance": "`create/consume_webauthn_challenge`（単回。updateTime の CAS 削除 `Firestore::take_doc` で、並行した 2 つの要求の片方だけが通る）",
+    "guard": ["src/registration.rs: create_webauthn_challenge", "src/registration.rs: consume_webauthn_challenge", "src/firestore.rs: Firestore::take_doc"],
+    "tests": ["registration::tests::webauthn_challenge_is_consumed_once", "registration::tests::two_concurrent_consumes_of_one_webauthn_challenge_let_only_one_through"]
   },
   {
     "id": "P-SIG",
@@ -185,5 +185,36 @@
     "assurance": "token の iss=OP。RP は OP の鍵で検証（モデルは OP 鍵束縛で表現）",
     "guard": ["src/grants.rs: issue_access_and_id"],
     "tests": ["grants::tests::id_token_names_the_issuer_the_client_and_the_request_nonce"]
+  },
+  {
+    "id": "P-ICLIENT",
+    "model": "invite.spthy",
+    "premise": "招待を頼めるのは、招待を許した confidential client だけ（クライアント認証）",
+    "assurance": "`authorize_invite_client`（`web/register.rs`、許可リストと public client の拒否）",
+    "guard": ["src/web/register.rs: authorize_invite_client"],
+    "tests": ["web::register::invite_tests::clients_outside_the_allow_list_are_refused"]
+  },
+  {
+    "id": "P-ITOKEN",
+    "model": "invite.spthy",
+    "premise": "token は推測不能（Fr）",
+    "assurance": "`random_token`（OsRng の 32 バイト）",
+    "guard": ["src/registration.rs: random_token"],
+    "outside": "乱数源（OsRng の 32 バイト）の性質で、試験で示せる形をしていない"
+  },
+  {
+    "id": "P-ISINGLE",
+    "model": "invite.spthy",
+    "premise": "招待は**原子的に単回消費**される（`Invite` が linear）",
+    "assurance": "`consume_email_challenge`（`registration.rs`）。updateTime の CAS 削除で、勝った 1 つの要求だけが通る",
+    "guard": ["src/registration.rs: consume_email_challenge", "src/firestore.rs: Firestore::take_doc"],
+    "tests": ["registration::tests::invite_token_is_consumed_once", "registration::tests::two_concurrent_consumes_of_one_invite_let_only_one_through", "web::register::invite_tests::allowed_client_gets_link_that_registers_and_returns_to_rp"]
+  },
+  {
+    "id": "P-IMAIL",
+    "model": "invite.spthy",
+    "premise": "リンクは E のメール箱の持ち主にだけ届く",
+    "assurance": "RP とメールの配送の基盤（モデルの外。漏れは `Leak_Link` で表す）",
+    "outside": "メールの配送は RP とメールの基盤が担う。漏れはモデルの Leak_Link で表す"
   }
 ]
