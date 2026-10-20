@@ -1027,7 +1027,7 @@ mod tests {
         let ru = crate::par::create(&fs, "dcr-y", "client_id=dcr-y&response_type=code&scope=openid").await.unwrap();
         let authorize_as = |client: &str| {
             let q = serde_urlencoded::to_string([("client_id", client), ("request_uri", ru.0.as_str())]).unwrap();
-            authorize(State(p.clone()), CookieJar::default(), RawQuery(Some(q)))
+            authorize(State(p.clone()), HeaderMap::new(), CookieJar::default(), RawQuery(Some(q)))
         };
         async fn text(r: Response) -> String {
             String::from_utf8(axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
@@ -1036,10 +1036,12 @@ mod tests {
         for other in ["dcr-x", "dcr-yy", "dcr-", "DCR-Y", "dcr-y "] {
             let stolen = authorize_as(other).await;
             assert_eq!(stolen.status(), StatusCode::BAD_REQUEST, "{other:?}");
-            assert_eq!(text(stolen).await, "request_uri was issued to a different client", "{other:?}");
+            // 画面には訳した文と error code だけが出る（詳細はログ）。request_uri は在るので、
+            // invalid_request_uri になるのは発行先の不一致だけ。
+            assert!(text(stolen).await.ends_with("(error code: invalid_request_uri)"), "{other:?}");
         }
         let own = text(authorize_as("dcr-y").await).await;
-        assert_ne!(own, "request_uri was issued to a different client");
+        assert!(!own.contains("invalid_request_uri"), "{own}");
     }
 
     #[tokio::test]
