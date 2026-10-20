@@ -237,16 +237,15 @@ fn attested_cred_id_end_safe() {
     }
 }
 
-/// B-4 系列失効 `store::Store::revoke_refresh_family` の打ち切り付き連鎖走査の**停止性モデル**。
-/// 実コードは `replaced_by`（HashMap/Firestore）を辿るが、ここでは next を index 配列に抽象化
-/// する（モデル＝L1 寄りであり実コードそのものではない点に注意）。任意の next（自己参照・循環を
-/// 含む）でも、終端 or guard により**有界ステップで必ず停止**する（無限ループ／ハングしない）
-/// ことを全数検証する。実装の guard 定数は 64、本モデルは小定数で同一性質を示す。
+/// B-4 系列失効 `store::Store::revoke_refresh_family` の連鎖走査の**停止性と網羅性のモデル**。
+/// 実コードは `replaced_by`（HashMap/Firestore）を訪れた集合つきで辿るが、ここでは next を index 配列、
+/// 訪れた集合を bool 配列に抽象化する（モデル＝L1 寄りであり実コードそのものではない点に注意）。
+/// 任意の next（自己参照・循環を含む）で、(1) 高々 N 歩で停止し、(2) start から辿れる全ノードを訪れる
+/// （長さの上限で途中の RT を取りこぼさない）ことを全数検証する。
 #[kani::proof]
-#[kani::unwind(12)]
+#[kani::unwind(7)]
 fn refresh_family_walk_terminates() {
     const N: usize = 4; // 系列の最大ノード数（抽象）
-    const MAX: usize = 8; // guard（実コードは 64）
 
     let next: [usize; N] = kani::any();
     let mut i = 0;
@@ -255,16 +254,24 @@ fn refresh_family_walk_terminates() {
         i += 1;
     }
 
-    let mut cur: usize = kani::any();
-    kani::assume(cur < N);
+    let start: usize = kani::any();
+    kani::assume(start < N);
 
+    let mut seen = [false; N];
+    let mut cur = start;
     let mut steps: usize = 0;
-    while cur < N {
+    while cur < N && !seen[cur] {
+        seen[cur] = true;
         steps += 1;
-        if steps >= MAX {
-            break; // guard: 循環していても必ず打ち切る
-        }
         cur = next[cur];
     }
-    assert!(steps <= MAX, "guard により有界ステップで停止する（ハングしない）");
+    assert!(steps <= N, "訪れた集合により高々 N 歩で停止する（ハングしない）");
+
+    let mut reach = start;
+    let mut k = 0;
+    while k < N && reach < N {
+        assert!(seen[reach], "start から辿れるノードは全部訪れている（取りこぼさない）");
+        reach = next[reach];
+        k += 1;
+    }
 }
