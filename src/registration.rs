@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const EMAIL_TTL_SECS: u64 = 30 * 60;
 // 招待リンクは管理者が送り、受け手がいつ開くか分からないので数日もたせる。
 const INVITE_TTL_SECS: u64 = 7 * 24 * 60 * 60;
-const CEREMONY_TTL_SECS: u64 = 5 * 60;
+pub(crate) const CEREMONY_TTL_SECS: u64 = 5 * 60;
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()

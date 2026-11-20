@@ -63,18 +63,22 @@ details input{font-size:14px;padding:8px;margin-top:8px}</style>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
 const OPT="__OPT__",VER="__VER__";
+const OPT_FRESH_MS=(__CEREMONY_TTL_SECS__-60)*1000;
 const msgEl=document.getElementById('msg');
-let cachedOpts=null;
+let cachedOpts=null,cachedAt=0;
 async function prefetch(){
-  try{const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});cachedOpts=r.ok?await r.json():null;}
+  try{const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});cachedOpts=r.ok?await r.json():null;cachedAt=Date.now();}
   catch{cachedOpts=null;}
 }
+function fresh(){return cachedOpts&&Date.now()-cachedAt<OPT_FRESH_MS;}
 prefetch();
+setInterval(()=>{if(!fresh())prefetch();},30000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!fresh())prefetch();});
 async function pkLogin(){
  msgEl.textContent='';
  if(!window.PublicKeyCredential){msgEl.textContent='[[This browser does not support passkeys. Open this page in the standard Safari or Chrome app.]]';return;}
  try{
-  let o=cachedOpts;
+  let o=fresh()?cachedOpts:null;
   if(!o){const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!r.ok){msgEl.textContent=await errorText(r);return;}o=await r.json();}
   const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:o.userVerification,allowCredentials:[]}});
   cachedOpts=null;prefetch();
@@ -94,6 +98,9 @@ async function pkLogin(){
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__OPT__", &p.path(&format!("/login/{uid}/passkey/options")))
             .replace("__VER__", &p.path(&format!("/login/{uid}/passkey/verify")))
+            // 先取りした options は、サーバの challenge の期限より 1 分早く捨てて取り直す。開いたまま置いた画面が
+            // 切れた challenge で検証に行かないため。端末が眠ると setInterval も止まるので、画面に戻ったときにも取り直す。
+            .replace("__CEREMONY_TTL_SECS__", &crate::registration::CEREMONY_TTL_SECS.to_string())
             .replace("__CANCEL__", &p.path(&format!("/login/{uid}/cancel")))
             .replace("__REGISTER__", &p.path("/signup")),
     )

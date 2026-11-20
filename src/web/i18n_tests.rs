@@ -167,6 +167,17 @@ async fn login_page(h: HeaderMap) -> String {
     body_of(login::login_form(State(p), h, Path("uid-1".into()), Query(q)).await).await
 }
 
+/// 開いたまま置いたログイン画面が、切れた challenge で検証に行かないこと（10-20 に本番で 400 になった件）。
+/// 先取りの期限はサーバの challenge の期限から作り、置き換え前の印を残さない。
+#[tokio::test]
+async fn login_page_drops_prefetched_challenge_before_the_server_expires_it() {
+    let html = login_page(accept(Some("en"))).await;
+    let ttl = crate::registration::CEREMONY_TTL_SECS;
+    assert!(html.contains(&format!("const OPT_FRESH_MS=({ttl}-60)*1000;")), "{html}");
+    assert!(html.contains("let o=fresh()?cachedOpts:null;"));
+    assert!(!html.contains("__CEREMONY_TTL_SECS__"));
+}
+
 async fn with_firestore() -> (Arc<Provider>, Arc<Firestore>) {
     let (host, _state) = fake_firestore::spawn().await;
     let fs = Arc::new(Firestore::new_for_test("proj", host));
