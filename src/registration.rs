@@ -233,6 +233,7 @@ pub async fn save_credential(
             "pubX": firestore::s(&c.pub_x),
             "pubY": firestore::s(&c.pub_y),
             "signCount": { "integerValue": c.sign_count.to_string() },
+            "aaguid": firestore::s(&c.aaguid),
             "verified": firestore::b(true),
             "createdAt": firestore::ts(&firestore::rfc3339(now())),
             "disabled": firestore::b(disabled),
@@ -434,6 +435,7 @@ mod tests {
             pub_x: "x".into(),
             pub_y: "y".into(),
             sign_count: 0,
+            aaguid: String::new(),
         }
     }
 
