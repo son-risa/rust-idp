@@ -217,6 +217,7 @@ impl ClientAuthMethod for PrivateKeyJwt {
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::es256::b64url_encode;
     use crate::model::JwkPub;
@@ -310,7 +311,7 @@ mod tests {
     }
 
     fn pkjwt_client(id: &str, key: &SigningKey, kid: &str) -> Client {
-        let pt = key.verifying_key().to_encoded_point(false);
+        let pt = key.verifying_key().to_sec1_point(false);
         Client {
             client_id: id.into(),
             redirect_uris: vec![],
@@ -352,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn pkjwt_accepts_valid_assertion() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
         let a = assertion(&key, "k1", "ES256", good_claims("rp", "j1"));
         assert!(PrivateKeyJwt::default()
@@ -363,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn pkjwt_rejects_alg_aud_and_expiry() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
         let auth = PrivateKeyJwt::default();
         // alg != ES256
@@ -384,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn pkjwt_rejects_exp_too_far_in_future() {
         // exp が上限(60分)を超える assertion は拒否する（#6 回帰）。
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
         let auth = PrivateKeyJwt::default();
         let now = std::time::SystemTime::now()
@@ -399,7 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn pkjwt_rejects_jti_replay() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
         let auth = PrivateKeyJwt::default();
         let a1 = assertion(&key, "k1", "ES256", good_claims("rp", "dup"));
@@ -410,8 +411,8 @@ mod tests {
 
     #[tokio::test]
     async fn pkjwt_rejects_iss_sub_mismatch_and_bad_signature() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
-        let other = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
+        let other = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
         let auth = PrivateKeyJwt::default();
         // iss != sub

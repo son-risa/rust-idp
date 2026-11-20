@@ -4,7 +4,6 @@
 
 use crate::firestore::{self, Firestore};
 use crate::jws::b64url;
-use rand_core::{OsRng, RngCore};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,7 +22,7 @@ pub struct RequestUri(pub String);
 /// 認可リクエストを保存し request_uri を返す。params は元の urlencoded クエリ。
 pub async fn create(fs: &Firestore, client_id: &str, params: &str) -> Result<RequestUri, String> {
     let mut buf = [0u8; 32];
-    OsRng.fill_bytes(&mut buf);
+    getrandom::fill(&mut buf).expect("OS の乱数源");
     let id = b64url(buf);
     fs.set_doc(
         COL,

@@ -8,19 +8,19 @@
 //! parse_cose_key は登録時に検証鍵そのものを取り出す最重要パーサ（ここが誤れば
 //! 別人の鍵で署名検証が通る等の致命傷になりうる）なので、独立実装と一致を取る価値が高い。
 
+use p256::elliptic_curve::Generate;
 use crate::fido::verify::{self, CredKey};
 use coset::{iana, CborSerializable, CoseKeyBuilder};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::SecretKey;
-use rand_core::OsRng;
 
 /// coset がエンコードした EC2/ES256/P-256 の COSE_Key を rust-op がパースし、
 /// 取り出した (x,y) が元の鍵と完全一致することを多数のランダム鍵で確認する。
 #[test]
 fn parse_cose_key_agrees_with_coset_oracle_es256() {
     for _ in 0..500 {
-        let sk = SecretKey::random(&mut OsRng);
-        let ep = sk.public_key().to_encoded_point(false);
+        let sk = SecretKey::generate();
+        let ep = sk.public_key().to_sec1_point(false);
         let x = ep.x().expect("ec x").to_vec(); // P-256 は固定 32byte
         let y = ep.y().expect("ec y").to_vec();
 
@@ -48,10 +48,9 @@ fn parse_cose_key_agrees_with_coset_oracle_es256() {
 #[test]
 fn parse_cose_key_agrees_with_coset_oracle_ed25519() {
     use ed25519_dalek::SigningKey;
-    use rand_core::RngCore;
     for _ in 0..200 {
         let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
+        getrandom::fill(&mut seed).expect("OS の乱数源");
         let sk = SigningKey::from_bytes(&seed);
         let pk = sk.verifying_key().to_bytes().to_vec(); // 32byte
 

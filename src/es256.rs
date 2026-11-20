@@ -9,7 +9,7 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use p256::ecdsa::VerifyingKey;
-use p256::EncodedPoint;
+use p256::Sec1Point;
 use sha2::{Digest, Sha256};
 
 pub fn b64url_encode(b: impl AsRef<[u8]>) -> String {
@@ -38,12 +38,12 @@ pub fn pad32(b: &[u8]) -> Result<[u8; 32], String> {
 pub fn verifying_key_from_xy(x: &[u8], y: &[u8]) -> Result<VerifyingKey, String> {
     let xb = pad32(x)?;
     let yb = pad32(y)?;
-    let pt = EncodedPoint::from_affine_coordinates(
-        p256::FieldBytes::from_slice(&xb),
-        p256::FieldBytes::from_slice(&yb),
+    let pt = Sec1Point::from_affine_coordinates(
+        &p256::FieldBytes::from(xb),
+        &p256::FieldBytes::from(yb),
         false,
     );
-    VerifyingKey::from_encoded_point(&pt).map_err(|e| format!("bad EC point: {e}"))
+    VerifyingKey::from_sec1_point(&pt).map_err(|e| format!("bad EC point: {e}"))
 }
 
 /// RFC 7638 EC(P-256) Thumbprint。x,y は base64url 文字列のまま使う
@@ -55,6 +55,7 @@ pub fn jwk_thumbprint_p256(x_b64: &str, y_b64: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use p256::ecdsa::SigningKey;
 
@@ -83,8 +84,8 @@ mod tests {
     #[test]
     fn verifying_key_from_xy_accepts_real_point_rejects_garbage() {
         // 本物の P-256 公開鍵座標は曲線上に乗る。
-        let sk = SigningKey::random(&mut rand_core::OsRng);
-        let pt = sk.verifying_key().to_encoded_point(false);
+        let sk = SigningKey::generate();
+        let pt = sk.verifying_key().to_sec1_point(false);
         let x = pt.x().unwrap();
         let y = pt.y().unwrap();
         assert!(verifying_key_from_xy(x, y).is_ok());

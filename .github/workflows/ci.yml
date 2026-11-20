@@ -28,8 +28,7 @@ jobs:
       - name: Clippy（警告が 1 つでもあれば止める）
         env:
           CARGO_BUILD_WARNINGS: deny
-        # deprecated は暗号の crate（generic-array 0.14）由来。crate を上げたら外す。
-        run: cargo clippy --locked --all-targets -- -A deprecated
+        run: cargo clippy --locked --all-targets
       - name: Test
         run: cargo test --locked
       - name: 前提の台帳の試験が実在するか（cargo test の一覧と照合）

@@ -132,6 +132,7 @@ impl DpopVerifier for Es256Dpop {
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
     use serde_json::{json, Value};
@@ -147,7 +148,7 @@ mod tests {
 
     /// 埋め込み公開鍵 jwk を作る。
     fn pub_jwk(key: &SigningKey) -> Value {
-        let pt = key.verifying_key().to_encoded_point(false);
+        let pt = key.verifying_key().to_sec1_point(false);
         json!({
             "kty": "EC",
             "crv": "P-256",
@@ -169,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn valid_proof_returns_jkt() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
         let jkt = v.verify(&proof, HTM, HTU, None).await.unwrap();
@@ -186,7 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_wrong_typ() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let mut h = header(&key);
         h["typ"] = json!("jwt");
@@ -196,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_wrong_alg() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let mut h = header(&key);
         h["alg"] = json!("RS256");
@@ -206,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_jwk_containing_private_key() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let mut h = header(&key);
         h["jwk"]["d"] = json!("c29tZS1wcml2YXRl"); // 秘密成分混入
@@ -216,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_htm_and_htu_mismatch() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
         assert!(v.verify(&proof, "GET", HTU, None).await.is_err()); // htm 不一致
@@ -226,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_iat_out_of_window() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         // 過去側
         let past = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs() - 600));
@@ -240,7 +241,7 @@ mod tests {
     async fn htu_ignores_query_and_fragment() {
         // RFC 9449 §4.3: proof の htu に query/fragment があっても、サーバ側 htu と
         // path まで一致すれば受理する。
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let htu_with_extra = format!("{HTU}?foo=bar#frag");
         let proof = make_proof(&key, &header(&key), &payload(HTM, &htu_with_extra, now_secs()));
@@ -249,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn ath_checked_when_expected() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let token = "an-access-token";
         let mut pl = payload(HTM, HTU, now_secs());
@@ -263,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_jti_replay() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let pl = payload(HTM, HTU, now_secs()); // 同一 jti
         let proof = make_proof(&key, &header(&key), &pl);
@@ -274,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_tampered_signature() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
         // payload を別 htu に差し替え、署名はそのまま → 署名検証で落ちる。
@@ -286,8 +287,8 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_proof_signed_by_different_key_than_embedded_jwk() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
-        let other = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
+        let other = SigningKey::generate();
         let v = Es256Dpop::default();
         // 埋め込み jwk は key、署名は other → 署名検証で落ちる（鍵すり替え）。
         let h = header(&key);

@@ -101,6 +101,7 @@ pub fn verify_authentication(
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::es256::b64url_encode as b64e2;
     use crate::fido::verify::test_support::*;
@@ -131,7 +132,7 @@ mod tests {
 
     #[test]
     fn registration_none_roundtrip() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let cred_id = b"my-credential-id";
         let (att_b64, cdj_b64) = make_registration(&key, cred_id, 0);
         let out = verify_registration(&cdj_b64, &att_b64, CH, ORIGIN, RP).unwrap();
@@ -144,7 +145,7 @@ mod tests {
 
     #[test]
     fn registration_rejects_wrong_origin_and_challenge() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (att_b64, cdj_b64) = make_registration(&key, b"cid", 0);
         assert!(verify_registration(&cdj_b64, &att_b64, CH, "https://evil.com", RP).is_err());
         assert!(verify_registration(&cdj_b64, &att_b64, "wrong-challenge", ORIGIN, RP).is_err());
@@ -164,7 +165,7 @@ mod tests {
 
     #[test]
     fn authentication_roundtrip_returns_new_signcount() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let (ad, sig, cdj) = make_authentication(&key, 5);
         let new_count =
@@ -174,7 +175,7 @@ mod tests {
 
     #[test]
     fn authentication_rejects_clone_signcount_not_increasing() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let (ad, sig, cdj) = make_authentication(&key, 5);
         // stored=5、受信=5 → 増えていない → クローン疑い。
@@ -184,8 +185,8 @@ mod tests {
 
     #[test]
     fn authentication_rejects_signature_from_other_key() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
-        let other = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
+        let other = SigningKey::generate();
         let (ox, oy) = ec_xy(&other);
         let (ad, sig, cdj) = make_authentication(&key, 5);
         // 別鍵 (other) の (x,y) で検証 → 署名検証で落ちる。
@@ -195,7 +196,7 @@ mod tests {
 
     #[test]
     fn authentication_zero_signcount_is_accepted() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let (ad, sig, cdj) = make_authentication(&key, 0);
         // 受信 signCount=0 は「カウンタ非対応」として stored に関わらず許容。
@@ -205,7 +206,7 @@ mod tests {
 
     #[test]
     fn authentication_uv_required_rejects_without_uv_flag() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         // make_authentication は UP のみ（UV フラグ無し）。
         let (ad, sig, cdj) = make_authentication(&key, 5);

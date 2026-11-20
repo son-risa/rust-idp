@@ -16,7 +16,6 @@ use axum::middleware::{from_fn, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use rand_core::{OsRng, RngCore};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,7 +38,7 @@ fn now() -> u64 {
 
 fn random_b64url(len: usize) -> String {
     let mut buf = vec![0u8; len];
-    OsRng.fill_bytes(&mut buf);
+    getrandom::fill(&mut buf).expect("OS の乱数源");
     b64url_encode(&buf)
 }
 

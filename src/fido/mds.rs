@@ -97,7 +97,7 @@ const OID_RSA_SHA384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.1
 const OID_RSA_SHA1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.5");
 
 fn cert_pubkey(cert: &Certificate) -> Result<CertPubKey, String> {
-    let spki = &cert.tbs_certificate.subject_public_key_info;
+    let spki = &cert.tbs_certificate().subject_public_key_info();
     let pk = spki
         .subject_public_key
         .as_bytes()
@@ -122,8 +122,8 @@ fn cert_pubkey(cert: &Certificate) -> Result<CertPubKey, String> {
         use rsa::pkcs8::DecodePublicKey;
         use rsa::traits::PublicKeyParts;
         let der = spki.to_der().map_err(|e| format!("spki der: {e}"))?;
-        let key = rsa::RsaPublicKey::from_public_key_der(&der).map_err(|e| format!("rsa: {e}"))?;
-        Ok(CertPubKey::Rsa { n: key.n().to_bytes_be(), e: key.e().to_bytes_be() })
+        let key = rsa::PublicKey::from_public_key_der(&der).map_err(|e| format!("rsa: {e}"))?;
+        Ok(CertPubKey::Rsa { n: key.n().to_be_bytes_trimmed_vartime().into_vec(), e: key.e().to_be_bytes_trimmed_vartime().into_vec() })
     } else {
         Err(format!("unsupported cert key alg {alg}"))
     }
@@ -153,7 +153,7 @@ fn cert_verify(parent: &CertPubKey, child: &Certificate, msg: &[u8], sig: &[u8])
             let s = p384::ecdsa::Signature::from_der(sig).map_err(|e| format!("p384 sig: {e}"))?;
             p384_vk(x, y)?.verify(msg, &s).map_err(|_| "ecdsa-p384 verify failed".into())
         }
-        CertPubKey::Rsa { n, e } => match child.signature_algorithm.oid {
+        CertPubKey::Rsa { n, e } => match child.signature_algorithm().oid {
             OID_RSA_SHA256 => sig::verify_rs256(n, e, msg, sig),
             OID_RSA_SHA384 => sig::verify_rs384(n, e, msg, sig),
             OID_RSA_SHA1 => sig::verify_rs1(n, e, msg, sig),
@@ -180,7 +180,7 @@ fn jws_verify(leaf: &CertPubKey, alg: &str, signing_input: &[u8], sig: &[u8]) ->
 }
 
 fn cert_valid_now(cert: &Certificate) -> Result<(), String> {
-    let v = &cert.tbs_certificate.validity;
+    let v = &cert.tbs_certificate().validity();
     let now = now_secs();
     if now < v.not_before.to_unix_duration().as_secs() {
         return Err("mds chain cert not yet valid".into());
@@ -193,8 +193,8 @@ fn cert_valid_now(cert: &Certificate) -> Result<(), String> {
 
 fn signed_by(child: &Certificate, parent: &Certificate) -> Result<(), String> {
     let pk = cert_pubkey(parent)?;
-    let tbs = child.tbs_certificate.to_der().map_err(|e| format!("tbs der: {e}"))?;
-    let sig = child.signature.as_bytes().ok_or("cert sig not byte-aligned")?;
+    let tbs = child.tbs_certificate().to_der().map_err(|e| format!("tbs der: {e}"))?;
+    let sig = child.signature().as_bytes().ok_or("cert sig not byte-aligned")?;
     cert_verify(&pk, child, &tbs, sig)
 }
 
@@ -233,7 +233,7 @@ fn validate_chain_to_roots(
         if check_validity && cert_valid_now(root).is_err() {
             continue; // 無効な root はスキップ（他の root を試す）
         }
-        if last.tbs_certificate == root.tbs_certificate || signed_by(last, root).is_ok() {
+        if last.tbs_certificate() == root.tbs_certificate() || signed_by(last, root).is_ok() {
             anchored = true;
             break;
         }
@@ -296,7 +296,7 @@ fn crl_url(cert: &Certificate) -> Option<String> {
     use x509_cert::ext::pkix::name::{DistributionPointName, GeneralName};
     use x509_cert::ext::pkix::CrlDistributionPoints;
     let cdp_oid = ObjectIdentifier::new_unwrap("2.5.29.31");
-    let exts = cert.tbs_certificate.extensions.as_ref()?;
+    let exts = cert.tbs_certificate().extensions()?;
     for ext in exts.iter() {
         if ext.extn_id == cdp_oid {
             let cdp = CrlDistributionPoints::from_der(ext.extn_value.as_bytes()).ok()?;
@@ -329,7 +329,7 @@ async fn assert_not_revoked(cert: &Certificate) -> Result<(), String> {
         .map_err(|e| format!("crl body: {e}"))?;
     let crl = CertificateList::from_der(&bytes).map_err(|e| format!("crl parse: {e}"))?;
     if let Some(revoked) = &crl.tbs_cert_list.revoked_certificates {
-        let serial = &cert.tbs_certificate.serial_number;
+        let serial = cert.tbs_certificate().serial_number();
         if revoked.iter().any(|r| &r.serial_number == serial) {
             return Err("mds chain certificate is revoked".into());
         }
