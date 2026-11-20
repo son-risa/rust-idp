@@ -2,6 +2,7 @@
 name = "rust-op"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.100"
 license = "MIT"
 # 非公開バイナリ（crates.io へ publish しない）。cargo-deny の private 除外対象になる。
 publish = false
@@ -23,7 +24,6 @@ sha2 = { version = "0.10", features = ["oid"] }
 p256 = { version = "0.13", features = ["ecdsa", "jwk", "pkcs8", "pem"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-argon2 = "0.5"
 ciborium = "0.2"
 x509-cert = "0.2"
 rsa = "0.9"
@@ -39,3 +39,7 @@ coset = "0.4"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[lints.clippy]
+# handler の前段は Result<_, Response> で、そのまま応答にして返す（axum の慣習）。箱に入れても読みにくくなるだけ。
+result_large_err = "allow"

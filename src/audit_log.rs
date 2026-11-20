@@ -68,7 +68,7 @@ pub async fn list_recent(fs: &Firestore, limit: u32) -> Result<Vec<AuditEntry>, 
 pub async fn list_for_target(fs: &Firestore, target: &str) -> Result<Vec<AuditEntry>, String> {
     let rows = fs.query_eq("auditLog", "target", target).await?;
     let mut entries: Vec<AuditEntry> = rows.iter().map(|(_, fields)| parse_entry(fields)).collect();
-    entries.sort_by(|a, b| b.at.cmp(&a.at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.at));
     Ok(entries)
 }
 

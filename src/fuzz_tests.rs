@@ -16,7 +16,7 @@ use proptest::prelude::*;
 /// 任意バイト列を base64url(URL_SAFE_NO_PAD) に包む。b64 decode を必ず通し、
 /// 下流（CBOR / authData / COSE）パーサへランダムバイトを届けるための strategy。
 fn b64_of_bytes(max: usize) -> impl Strategy<Value = String> {
-    prop::collection::vec(any::<u8>(), 0..max).prop_map(|b| es256::b64url_encode(b))
+    prop::collection::vec(any::<u8>(), 0..max).prop_map(es256::b64url_encode)
 }
 
 /// 1 階層までの「それらしい CBOR 値」。ランダムバイトだと大半が CBOR decode 前に

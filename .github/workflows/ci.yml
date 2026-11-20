@@ -21,7 +21,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.100.0 # rust-toolchain.toml と同じ版
+          components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Clippy（警告が 1 つでもあれば止める）
+        env:
+          CARGO_BUILD_WARNINGS: deny
+        # deprecated は暗号の crate（generic-array 0.14）由来。crate を上げたら外す。
+        run: cargo clippy --locked --all-targets -- -A deprecated
       - name: Test
         run: cargo test --locked
       - name: 前提の台帳の試験が実在するか（cargo test の一覧と照合）

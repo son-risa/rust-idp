@@ -26,7 +26,7 @@ tamarin-prover interactive formal/oauth_code_pkce.spthy   # → http://127.0.0.1
   通らない、のどれでも赤。モデルを足したり lemma を変えたら、`expected.tsv` も同じ PR で直す（`--auto-sources` が
   足す `AUTO_typing` も表に入れる）。
 - **Kani**: `formal/check-kani.sh` が `cargo kani` で全ハーネスを回し、SUCCESSFUL になったハーネスの名前を
-  [`kani-harnesses.txt`](./kani-harnesses.txt) と突き合わせる（Kani 0.67.0）。ハーネスが消えた・増えた・名前が変わった・
+  [`kani-harnesses.txt`](./kani-harnesses.txt) と突き合わせる（Kani 0.68.0）。ハーネスが消えた・増えた・名前が変わった・
   失敗した、のどれでも赤。ハーネスを足したり消したりしたら、一覧も同じ PR で直す。
 
 ```sh
@@ -502,7 +502,7 @@ end-to-end の安全性が出ることを示す。#6 と #8 は形式検証が�
 
 ---
 
-## L3: コード↔モデル橋（Kani 0.67.0 / CBMC）
+## L3: コード↔モデル橋（Kani 0.68.0 / CBMC）
 
 Tamarin（L1）は記号モデル上で前提が成り立てば性質が成り立つことを示す。が、**その前提を実コードが本当に担保しているか**、また
 **記号モデルが見ない実装固有の落とし穴（整数オーバーフロー等）が無いか**は L1 では分からない。これを埋めるのが Kani による

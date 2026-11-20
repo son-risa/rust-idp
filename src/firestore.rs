@@ -683,16 +683,19 @@ pub(crate) mod fake_firestore {
         update_time: u64,
     }
 
+    type Gate = (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+    type Failure = (&'static str, String, Option<String>, StatusCode);
+
     #[derive(Default)]
     pub struct FakeState {
         /// 門: (メソッド, col, id) の要求が届いたら reached を鳴らし、release まで止める（並走の順を固定する）。
-        gates: Mutex<HashMap<(&'static str, String, String), (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+        gates: Mutex<HashMap<(&'static str, String, String), Gate>>,
         docs: Mutex<HashMap<(String, String), Doc>>,
         next_version: Mutex<u64>,
         /// fcm.rs の send() が投げた message body をそのまま記録する（identifier 一貫性の検証用）。
         fcm_sent: Mutex<Vec<Value>>,
         /// 失敗の注入: (メソッド, col, id) に合う次の要求に 1 回だけ、その状態の番号を返す。id が None なら col の全ての id に合う。
-        failures: Mutex<Vec<(&'static str, String, Option<String>, StatusCode)>>,
+        failures: Mutex<Vec<Failure>>,
     }
 
     impl FakeState {

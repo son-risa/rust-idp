@@ -310,19 +310,6 @@ pub fn validate_registration(
     }
 }
 
-/// uri が https かつ正常なら、そのホスト名(ポート除く)を返す。http / fragment 付き / 空は None。
-///
-/// セキュリティ上の要: authority に userinfo(`user:pass@host`)を含むものは拒否する。
-/// これを許すと `https://rp.example.com:x@evil.com/cb` のように、本関数は許可ホスト
-/// (`rp.example.com`)を返すのにブラウザは `@` 以降(`evil.com`)を実ホストとして解釈し、
-/// 許可リストを抜けて認可コードを攻撃者へ送れてしまう(ホスト偽装)。
-/// post_logout_redirect_uri が形として受け入れ可能か（https・fragment/userinfo なし）。
-/// 登録時（validate_registration）と管理画面からの差し替えで同じ判定を使う。
-/// 許可ホストの照合は IAT の制約側なので、ここには含めない。
-pub fn is_valid_post_logout_redirect_uri(uri: &str) -> bool {
-    https_host(uri).is_some()
-}
-
 /// 管理画面から差し替える post_logout_redirect_uris の検証。
 ///
 /// 管理画面には IAT が無く `allowed_redirect_hosts` を参照できない。代わりに
@@ -353,6 +340,12 @@ pub enum PostLogoutUriError {
     ForeignHost(String),
 }
 
+/// uri が https かつ正常なら、そのホスト名(ポート除く)を返す。http / fragment 付き / 空は None。
+///
+/// セキュリティ上の要: authority に userinfo(`user:pass@host`)を含むものは拒否する。
+/// これを許すと `https://rp.example.com:x@evil.com/cb` のように、本関数は許可ホスト
+/// (`rp.example.com`)を返すのにブラウザは `@` 以降(`evil.com`)を実ホストとして解釈し、
+/// 許可リストを抜けて認可コードを攻撃者へ送れてしまう(ホスト偽装)。
 fn https_host(uri: &str) -> Option<&str> {
     if uri.contains('#') {
         return None; // redirect_uri に fragment は不可（RFC 6749 §3.1.2）。
@@ -471,7 +464,7 @@ mod tests {
                 Ok(_) => panic!("{bad} が通ってしまった"),
             };
             assert_eq!(e, DcrError::InsecurePostLogoutRedirectUri(bad.into()), "{bad}");
-            assert!(!is_valid_post_logout_redirect_uri(bad), "{bad}");
+            assert!(https_host(bad).is_none(), "{bad}");
         }
     }
 
