@@ -1,0 +1,5 @@
+# CI・Dockerfile・手元のビルドを同じ版に揃える。上げるときは Dockerfile の FROM も同じ版にする。
+[toolchain]
+channel = "1.100.0"
+components = ["clippy"]
+profile = "minimal"

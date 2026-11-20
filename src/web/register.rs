@@ -1036,7 +1036,7 @@ mod invite_tests {
         let fs = p.firestore.as_ref().unwrap();
         let without = crate::registration::create_email_challenge(fs, "plain@example.com").await.unwrap();
         assert_eq!(register_named(&p, &without, None).await, StatusCode::CREATED, "fido2demo のように氏名を送らない登録は今までどおり");
-        assert!(claims_of(&p, "plain@example.com").await.get("name").is_none());
+        assert!(!claims_of(&p, "plain@example.com").await.contains_key("name"));
         let with = crate::registration::create_email_challenge(fs, "named@example.com").await.unwrap();
         assert_eq!(register_named(&p, &with, Some("佐藤")).await, StatusCode::CREATED);
         assert_eq!(claims_of(&p, "named@example.com").await.get("name"), Some(&serde_json::json!("佐藤")));

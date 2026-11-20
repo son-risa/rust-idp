@@ -1,0 +1,4 @@
+[registry]
+# 出て 7 日未満の版は解決に使わない（乗っ取られた版は数日で見つかって取り下げられることが多い）。
+# すぐ要るときは CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update <crate> --precise <版>。
+global-min-publish-age = "7 days"

@@ -52,7 +52,7 @@ impl Lang {
                 (q > 0).then_some((q, lang))
             })
             .collect();
-        ranges.sort_by(|a, b| b.0.cmp(&a.0));
+        ranges.sort_by_key(|r| std::cmp::Reverse(r.0));
         ranges.first().map(|r| r.1).unwrap_or(Lang::En)
     }
 }

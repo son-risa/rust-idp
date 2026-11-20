@@ -370,7 +370,7 @@ impl CibaStore for FirestoreCibaStore {
             .into_iter()
             .map(|(id, f)| CibaHistoryEntry::from_fields(id, &f))
             .collect();
-        v.sort_by(|a, b| b.resolved_at.cmp(&a.resolved_at));
+        v.sort_by_key(|a| std::cmp::Reverse(a.resolved_at));
         v.truncate(limit);
         Ok(v)
     }
@@ -479,7 +479,7 @@ impl CibaStore for MemoryCibaStore {
             .filter(|e| e.account == account)
             .cloned()
             .collect();
-        v.sort_by(|a, b| b.resolved_at.cmp(&a.resolved_at));
+        v.sort_by_key(|a| std::cmp::Reverse(a.resolved_at));
         v.truncate(limit);
         Ok(v)
     }

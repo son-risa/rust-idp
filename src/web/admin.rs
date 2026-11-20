@@ -817,7 +817,7 @@ pub(super) async fn iats_pending_list(
         Ok(i) => i,
         Err(e) => return server_error(Lang::from_headers(&headers), "iats_pending_list", &e),
     };
-    iats.sort_by(|a, b| b.expires_at.cmp(&a.expires_at));
+    iats.sort_by_key(|a| std::cmp::Reverse(a.expires_at));
     let now_secs = now();
 
     let rows: String = iats
