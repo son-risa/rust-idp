@@ -115,6 +115,8 @@ impl Provider {
             loop {
                 tick.tick().await;
                 p.store.sweep_expired().await;
+                p.ciba_rate.sweep();
+                p.register_rate.sweep();
             }
         })
     }

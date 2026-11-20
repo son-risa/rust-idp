@@ -112,7 +112,7 @@ impl DpopVerifier for Es256Dpop {
             return Err(format!("htu mismatch (got {proof_htu:?}, want {htu})"));
         }
         let iat = payload.get("iat").and_then(|v| v.as_i64()).ok_or("iat missing")?;
-        if (now_secs() - iat).abs() > IAT_SKEW_SECS {
+        if now_secs().abs_diff(iat) > IAT_SKEW_SECS as u64 {
             return Err("iat out of window".into());
         }
         if let Some(want) = expected_ath
@@ -177,6 +177,17 @@ mod tests {
         // 返る jkt は埋め込み鍵の thumbprint。
         let pj = pub_jwk(&key);
         assert_eq!(jkt, es256::jwk_thumbprint_p256(pj["x"].as_str().unwrap(), pj["y"].as_str().unwrap()));
+    }
+
+    /// iat は proof の作り手が自分の鍵で署名して決める値。端の値でもあふれずに拒否する。
+    #[tokio::test]
+    async fn rejects_an_iat_at_the_ends_of_the_range() {
+        let key = SigningKey::generate();
+        let v = Es256Dpop::default();
+        for iat in [i64::MIN, i64::MAX, now_secs() - IAT_SKEW_SECS - 1, now_secs() + IAT_SKEW_SECS + 1] {
+            let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, iat));
+            assert_eq!(v.verify(&proof, HTM, HTU, None).await.err().as_deref(), Some("iat out of window"), "{iat}");
+        }
     }
 
     #[tokio::test]

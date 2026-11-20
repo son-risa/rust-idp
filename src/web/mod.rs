@@ -303,7 +303,8 @@ pub(crate) fn pseudonymize_sub(sub: &str) -> String {
 
 /// 未マッチのリクエストをログする（MDS3 等が叩く未実装パスの特定用）。
 async fn log_unmatched(method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> impl IntoResponse {
-    tracing::info!("UNMATCHED {} {}", method, uri);
+    // query は出さない（パスが少し違うだけで、メール確認の token や code が載りうる）。
+    tracing::info!("UNMATCHED {} {}", method, uri.path());
     (StatusCode::NOT_FOUND, localize("[[Page not found]]", Lang::from_headers(&headers)))
 }
 
@@ -388,14 +389,17 @@ fn dpop_header(headers: &HeaderMap) -> Option<String> {
 /// X-Forwarded-For の先頭 IP（Cloud Run の前段が付与）。無ければ "unknown"。
 /// 注意: 先頭値はクライアント申告で詐称可能。レート制限の弱いキーにしかならない
 /// （素朴な単一 IP からの連発を抑える backstop。詐称ローテーションには無力）。
+/// レート制限に使う送り手の IP。Cloud Run は自分が見た送り手の IP を X-Forwarded-For の末尾に足し、
+/// 送り手が書いた値はその前に残る。先頭を使うと、送り手が好きな値で制限をすり抜けられる。
 pub(super) fn client_ip(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".into())
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("");
+    // 末尾が本当に送り手かを本番の前段で確かめるための数（値は出さない）。
+    tracing::info!(event = "forwarded_for_hops", hops = xff.split(',').filter(|s| !s.trim().is_empty()).count());
+    xff.rsplit(',')
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 fn parse_basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
@@ -511,6 +515,28 @@ async fn authenticate_token(
         }
     }
     Ok(at)
+}
+
+#[cfg(test)]
+mod client_ip_tests {
+    use super::*;
+
+    fn ip(xff: Option<&str>) -> String {
+        let mut h = HeaderMap::new();
+        if let Some(v) = xff {
+            h.insert("x-forwarded-for", v.parse().unwrap());
+        }
+        client_ip(&h)
+    }
+
+    /// 送り手が書いた値は先頭に残り、Cloud Run が見た送り手は末尾に足される。
+    #[test]
+    fn the_sender_cannot_choose_its_own_ip() {
+        assert_eq!(ip(Some("192.0.2.1, 198.51.100.7")), "198.51.100.7");
+        assert_eq!(ip(Some("198.51.100.7")), "198.51.100.7");
+        assert_eq!(ip(Some("198.51.100.7, ")), "198.51.100.7");
+        assert_eq!(ip(None), "unknown");
+    }
 }
 
 #[cfg(test)]

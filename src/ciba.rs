@@ -266,6 +266,16 @@ impl CibaRateLimiter {
     }
 }
 
+impl CibaRateLimiter {
+    /// 窓を過ぎた記録だけの鍵を消す。未認証の /signup は鍵（email・IP）を送り手が選べるので、
+    /// 消さないと表が伸び続ける。
+    pub fn sweep(&self) {
+        let now = std::time::Instant::now();
+        let mut map = self.map.lock().unwrap();
+        map.retain(|_, dq| dq.back().is_some_and(|&last| now.duration_since(last) <= self.window));
+    }
+}
+
 impl Default for CibaRateLimiter {
     /// 60 秒に 3 要求まで。ciba-rp の正常運用では絶対超えない値。
     fn default() -> Self {
@@ -577,6 +587,17 @@ mod tests {
         assert!(!rl.check_and_record("rp", "u"));
         std::thread::sleep(std::time::Duration::from_millis(70));
         assert!(rl.check_and_record("rp", "u"));
+    }
+
+    #[test]
+    fn sweeping_drops_only_keys_whose_window_has_passed() {
+        let rl = CibaRateLimiter::new(std::time::Duration::from_millis(50), 2);
+        assert!(rl.check_and_record("ip", "old"));
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert!(rl.check_and_record("ip", "new"));
+        rl.sweep();
+        let keys: Vec<_> = rl.map.lock().unwrap().keys().map(|(_, k)| k.clone()).collect();
+        assert_eq!(keys, vec!["new".to_string()]);
     }
 
     #[tokio::test]
