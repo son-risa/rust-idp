@@ -65,7 +65,7 @@ async fn issue_access_and_id(
             authorization_details: authorization_details.map(str::to_string),
             mandate_consumed: false,
         })
-        .await;
+        .await?;
     // 監査イベント（Cloud Logging metric/alert 用）。sub は擬似化して平文 PII をログに残さない。
     tracing::info!(event = "token_issued", client_id = %client_id, sub = %crate::web::pseudonymize_sub(account_id), scope = %scope);
 
@@ -111,15 +111,15 @@ async fn maybe_issue_refresh(
     auth_time: Option<u64>,
     jkt: Option<&str>,
     is_public: bool,
-) -> Option<String> {
+) -> Result<Option<String>, OAuthError> {
     if !has_scope(scope, "offline_access") {
-        return None;
+        return Ok(None);
     }
     // B-5: public client は DPoP 束縛(jkt)が無い限り refresh を発行しない。発行してしまうと
     // client 認証も鍵束縛も無い bearer 長命資格情報になり、#41 で refresh 時に拒否する対象を
     // そもそも作らない（発行時点で塞ぐ）。
     if jkt.is_none() && is_public {
-        return None;
+        return Ok(None);
     }
     let token = opaque();
     p.store
@@ -136,8 +136,22 @@ async fn maybe_issue_refresh(
             used: false,
             replaced_by: None,
         })
-        .await;
-    Some(token)
+        .await?;
+    Ok(Some(token))
+}
+
+/// 保存したが渡さなかったトークンを消す。消せなくても、渡していないので誰も使えない。
+async fn discard_unissued(p: &Provider, refresh: Option<&str>, access: Option<&str>) {
+    if let Some(t) = refresh
+        && let Err(e) = p.store.revoke_refresh_token(t).await
+    {
+        tracing::warn!(event = "unissued_token_not_removed", kind = "refresh", "{e}");
+    }
+    if let Some(t) = access
+        && let Err(e) = p.store.revoke_access_token(t).await
+    {
+        tracing::warn!(event = "unissued_token_not_removed", kind = "access", "{e}");
+    }
 }
 
 pub struct AuthorizationCodeGrant;
@@ -161,7 +175,7 @@ impl GrantHandler for AuthorizationCodeGrant {
         let code = p
             .store
             .take_code(code_val)
-            .await
+            .await?
             .ok_or_else(|| OAuthError::InvalidGrant("code not found or already used".into()))?;
 
         if code.client_id != client.client_id {
@@ -229,11 +243,12 @@ impl GrantHandler for AuthorizationCodeGrant {
             dpop_jkt.as_deref(),
             client.is_public(),
         )
-        .await;
-        // 再利用時に失効させるため、発行トークンをコードに紐付ける。
+        .await?;
+        // 再利用時に失効させるため、発行トークンをコードに紐付ける。紐付けを書けないまま返すと、
+        // コードの再利用を見つけても失効させる相手が分からないので、発行を誤りにする。
         p.store
             .link_issued_tokens(code_val, &access_token, refresh_token.as_deref())
-            .await;
+            .await?;
 
         Ok(TokenResponse {
             access_token,
@@ -271,7 +286,7 @@ impl GrantHandler for RefreshTokenGrant {
         let pre = p
             .store
             .get_refresh_token(rt_val)
-            .await
+            .await?
             .ok_or_else(|| OAuthError::InvalidGrant("refresh_token not found or already used".into()))?;
 
         if pre.client_id != client.client_id {
@@ -301,7 +316,7 @@ impl GrantHandler for RefreshTokenGrant {
         if pre.family_id.is_empty() {
             return Err(OAuthError::InvalidGrant("refresh token has no family; sign in again".into()));
         }
-        if p.store.refresh_family_revoked(&pre.family_id).await {
+        if p.store.refresh_family_revoked(&pre.family_id).await? {
             return Err(OAuthError::InvalidGrant("refresh token family revoked".into()));
         }
 
@@ -354,25 +369,46 @@ impl GrantHandler for RefreshTokenGrant {
                     used: false,
                     replaced_by: None,
                 })
-                .await;
+                .await?;
         }
-        let marked = p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await;
-        if !marked || p.store.refresh_family_revoked(&pre.family_id).await {
-            if let Some(new_token) = &new_refresh {
-                p.store.revoke_refresh_token(new_token).await;
+        // AT も古い RT を使用済みにする前に作る。後で作ると、AT の保存の失敗で古い RT だけが使用済みになり、
+        // RP が古い RT で試し直したときに再利用として系列ごと失効する。
+        let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
+        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
+        let (access_token, id_token) = match issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None).await {
+            Ok(x) => x,
+            Err(e) => {
+                discard_unissued(p, new_refresh.as_deref(), None).await;
+                return Err(e);
             }
+        };
+        let unissued = |p| discard_unissued(p, new_refresh.as_deref(), Some(access_token.as_str()));
+
+        let marked = match p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await {
+            Ok(m) => m,
+            Err(e) => {
+                // 古い RT が使われた印を書けたかどうか分からない。新しいトークンは誰にも渡していないので消し、
+                // 5xx を返す。RP は古い RT で試し直せる（書けていれば、そのときは再利用として断られる）。
+                unissued(p).await;
+                return Err(e.into());
+            }
+        };
+        let revoked = match p.store.refresh_family_revoked(&pre.family_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                // 札を確かめられないまま渡すと、失効した系列にトークンを出しうる。
+                unissued(p).await;
+                return Err(e.into());
+            }
+        };
+        if !marked || revoked {
+            unissued(p).await;
             return Err(OAuthError::InvalidGrant(if marked {
                 "refresh token family revoked".into()
             } else {
                 "refresh_token not found or already used".into()
             }));
         }
-
-        let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
-        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
-        let (access_token, id_token) =
-            issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None)
-                .await?;
         let refresh_token = new_refresh;
 
         Ok(TokenResponse {
@@ -545,11 +581,39 @@ mod tests {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
     }
 
+    /// ストアに書けない・読めないときは server_error。invalid_grant にすると RP はコードや RT を捨て、
+    /// 200 にすると保存されていないトークンを渡すことになる。
+    #[tokio::test]
+    async fn a_store_failure_is_a_server_error_not_a_grant_error() {
+        for (method, col) in [("PATCH", "accessTokens"), ("PATCH", "authCodes"), ("GET", "authCodes")] {
+            let (store, fake) = fake_store_and_state().await;
+            let p = provider().with_store(store);
+            p.store.save_code(base_code("C1", "rp")).await.unwrap();
+            // authCodes の PATCH は 2 回ある（used の CAS と、発行したトークンの紐付け）。後の方を落とす。
+            if (method, col) == ("PATCH", "authCodes") {
+                fake.fail_once_with("PATCH", "authCodes", Some("C1"), axum::http::StatusCode::OK);
+            }
+            fake.fail_once(method, col, None);
+            let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
+            let r = AuthorizationCodeGrant.handle(&p, &client("rp"), &f, None).await;
+            assert!(matches!(r, Err(OAuthError::ServerError(_))), "{method} {col}: {:?}", r.err());
+        }
+
+        let (store, fake) = fake_store_and_state().await;
+        let p = provider().with_store(store);
+        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
+        fake.fail_once("GET", "refreshTokens", Some("RT0"));
+        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        assert!(matches!(r, Err(OAuthError::ServerError(_))), "{:?}", r.err());
+        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        assert!(again.is_ok(), "障害が明けたら同じ RT で続けられる: {:?}", again.err());
+    }
+
     #[tokio::test]
     async fn auth_code_happy_path_issues_tokens() {
         let p = provider();
         let c = client("rp");
-        p.store.save_code(base_code("C1", "rp")).await;
+        p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await.unwrap();
         assert!(!r.access_token.is_empty());
@@ -566,7 +630,7 @@ mod tests {
     #[tokio::test]
     async fn id_token_names_the_issuer_the_client_and_the_request_nonce() {
         let p = provider();
-        p.store.save_code(AuthorizationCode { nonce: Some("n-0S6".into()), ..base_code("C1", "rp") }).await;
+        p.store.save_code(AuthorizationCode { nonce: Some("n-0S6".into()), ..base_code("C1", "rp") }).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
         let claims = id_token_claims(&r.id_token.unwrap());
@@ -587,7 +651,7 @@ mod tests {
         // 被害者の RT は発行時に被害者の鍵へ束縛済み（mobile-rp は dpop_bound ゆえ常に束縛）。
         p.store
             .save_refresh_token(rt_bound("STOLEN_RT", "mobile-rp", "openid offline_access", "VICTIM-KEY"))
-            .await;
+            .await.unwrap();
 
         // 攻撃者は自分の鍵の proof を提示（token endpoint が検証して注入する jkt は攻撃者鍵）。
         let r = RefreshTokenGrant
@@ -598,7 +662,7 @@ mod tests {
             "別鍵への付け替えは拒否されるべき"
         );
         // 被害者の RT は消費されていない（DoS 防止）。正規の鍵でなら依然使える。
-        assert!(p.store.get_refresh_token("STOLEN_RT").await.is_some());
+        assert!(p.store.get_refresh_token("STOLEN_RT").await.unwrap().is_some());
     }
 
     // 正規経路: 一致する鍵なら成功し、ローテーション後の RT も同じ鍵束縛を引き継ぐ。
@@ -609,18 +673,18 @@ mod tests {
         c.dpop_bound = true;
         p.store
             .save_refresh_token(rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A"))
-            .await;
+            .await.unwrap();
         let r = RefreshTokenGrant
             .handle(&p, &c, &form(&[("refresh_token", "RT1")]), Some("KEY-A".into()))
             .await
             .unwrap();
         assert_eq!(r.token_type, "DPoP");
         // 発行された access token が同じ鍵に cnf.jkt 束縛されている。
-        let at = p.store.get_access_token(&r.access_token).await.unwrap();
+        let at = p.store.get_access_token(&r.access_token).await.unwrap().unwrap();
         assert_eq!(at.jkt.as_deref(), Some("KEY-A"));
         // ローテーションした新 RT も KEY-A 束縛を引き継ぐ。
         let new_rt = r.refresh_token.unwrap();
-        assert_eq!(p.store.get_refresh_token(&new_rt).await.unwrap().jkt.as_deref(), Some("KEY-A"));
+        assert_eq!(p.store.get_refresh_token(&new_rt).await.unwrap().unwrap().jkt.as_deref(), Some("KEY-A"));
     }
 
     // public client の束縛なし RT は拒否（client 認証が無く bearer 長命資格情報になるため）。
@@ -628,7 +692,7 @@ mod tests {
     async fn refresh_unbound_for_public_client_rejected() {
         let p = provider();
         let c = client("mobile-rp"); // public(none)
-        p.store.save_refresh_token(rt("RT1", "mobile-rp", "openid offline_access")).await;
+        p.store.save_refresh_token(rt("RT1", "mobile-rp", "openid offline_access")).await.unwrap();
         let r = RefreshTokenGrant
             .handle(&p, &c, &form(&[("refresh_token", "RT1")]), None)
             .await;
@@ -640,7 +704,7 @@ mod tests {
     async fn refresh_unbound_for_confidential_client_allowed() {
         let p = provider();
         let c = confidential_client("conf-rp");
-        p.store.save_refresh_token(rt("RT1", "conf-rp", "openid offline_access")).await;
+        p.store.save_refresh_token(rt("RT1", "conf-rp", "openid offline_access")).await.unwrap();
         let r = RefreshTokenGrant
             .handle(&p, &c, &form(&[("refresh_token", "RT1")]), None)
             .await
@@ -655,7 +719,7 @@ mod tests {
         let c = client("mobile-rp");
         let mut code = base_code("C1", "mobile-rp");
         code.dpop_jkt = Some("VICTIM-KEY-THUMBPRINT".into());
-        p.store.save_code(code).await;
+        p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant
             .handle(&p, &c, &f, Some("ATTACKER-KEY-THUMBPRINT".into()))
@@ -667,7 +731,7 @@ mod tests {
     async fn auth_code_reuse_is_rejected() {
         let p = provider();
         let c = client("rp");
-        p.store.save_code(base_code("C1", "rp")).await;
+        p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         assert!(AuthorizationCodeGrant.handle(&p, &c, &f, None).await.is_ok());
         let again = AuthorizationCodeGrant.handle(&p, &c, &f, None).await;
@@ -677,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn auth_code_issued_to_another_client_rejected() {
         let p = provider();
-        p.store.save_code(base_code("C1", "rp")).await;
+        p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &client("evil"), &f, None).await;
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
@@ -687,7 +751,7 @@ mod tests {
     async fn auth_code_redirect_uri_mismatch_rejected() {
         let p = provider();
         let c = client("rp");
-        p.store.save_code(base_code("C1", "rp")).await;
+        p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://evil/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await;
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
@@ -702,7 +766,7 @@ mod tests {
 
         let mut code = base_code("C1", "rp");
         code.code_challenge = Some(challenge.clone());
-        p.store.save_code(code).await;
+        p.store.save_code(code).await.unwrap();
         let bad = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb"), ("code_verifier", "wrong")]);
         assert!(matches!(
             AuthorizationCodeGrant.handle(&p, &c, &bad, None).await,
@@ -711,7 +775,7 @@ mod tests {
 
         let mut code2 = base_code("C1", "rp");
         code2.code_challenge = Some(challenge);
-        p.store.save_code(code2).await;
+        p.store.save_code(code2).await.unwrap();
         let ok = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb"), ("code_verifier", verifier)]);
         assert!(AuthorizationCodeGrant.handle(&p, &c, &ok, None).await.is_ok());
     }
@@ -722,7 +786,7 @@ mod tests {
         let c = client("rp");
         let mut code = base_code("C1", "rp");
         code.dpop_jkt = Some("JKT-A".into());
-        p.store.save_code(code).await;
+        p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         // 束縛済み jkt と proof jkt 不一致は拒否。
         assert!(matches!(
@@ -732,7 +796,7 @@ mod tests {
         // 一致なら DPoP トークンを発行。
         let mut code2 = base_code("C1", "rp");
         code2.dpop_jkt = Some("JKT-A".into());
-        p.store.save_code(code2).await;
+        p.store.save_code(code2).await.unwrap();
         let r = AuthorizationCodeGrant.handle(&p, &c, &f, Some("JKT-A".into())).await.unwrap();
         assert_eq!(r.token_type, "DPoP");
     }
@@ -745,7 +809,7 @@ mod tests {
         let mut code = base_code("C1", "rp");
         code.scope = "openid offline_access".into();
         code.dpop_jkt = Some("KEY-A".into());
-        p.store.save_code(code).await;
+        p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
         assert!(r.refresh_token.is_some());
@@ -758,7 +822,7 @@ mod tests {
         let c = client("rp"); // public(none)
         let mut code = base_code("C1", "rp");
         code.scope = "openid offline_access".into();
-        p.store.save_code(code).await;
+        p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await.unwrap();
         assert!(r.refresh_token.is_none());
@@ -771,7 +835,7 @@ mod tests {
         let c = confidential_client("conf-rp");
         let mut code = base_code("C1", "conf-rp");
         code.scope = "openid offline_access".into();
-        p.store.save_code(code).await;
+        p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await.unwrap();
         assert!(r.refresh_token.is_some());
@@ -784,7 +848,7 @@ mod tests {
         let c = client("mobile-rp");
         p.store
             .save_refresh_token(rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A"))
-            .await;
+            .await.unwrap();
         let f = form(&[("refresh_token", "RT1")]);
         // 正常ローテーション: RT1 -> RT2（RT1 は used、replaced_by=RT2）。
         let r1 = RefreshTokenGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
@@ -806,7 +870,7 @@ mod tests {
             let c = client("mobile-rp");
             p.store
                 .save_refresh_token(rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A"))
-                .await;
+                .await.unwrap();
             let mut current = "RT0".to_string();
             let mut chain = vec!["RT0".to_string()];
             for _ in 0..n {
@@ -823,14 +887,14 @@ mod tests {
                 .await;
             assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))), "n={n}");
             for t in &chain {
-                assert!(p.store.get_refresh_token(t).await.is_none(), "n={n} {t} 残存");
+                assert!(p.store.get_refresh_token(t).await.unwrap().is_none(), "n={n} {t} 残存");
             }
         }
     }
 
     async fn reuse_after_many_rotations_revokes_the_whole_family(p: Provider) {
         let c = client("mobile-rp");
-        p.store.save_refresh_token(rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A")).await;
+        p.store.save_refresh_token(rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A")).await.unwrap();
         let mut chain = vec!["RT0".to_string()];
         for _ in 0..100 {
             let r = RefreshTokenGrant
@@ -842,7 +906,7 @@ mod tests {
         let reuse = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT0")]), Some("KEY-A".into())).await;
         assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
         for t in &chain {
-            assert!(p.store.get_refresh_token(t).await.is_none(), "{t} が残っている（最新は {}）", chain.last().unwrap());
+            assert!(p.store.get_refresh_token(t).await.unwrap().is_none(), "{t} が残っている（最新は {}）", chain.last().unwrap());
         }
     }
 
@@ -870,6 +934,8 @@ mod tests {
         LoseTheCas,
     }
 
+    use crate::store::StoreResult;
+
     struct Interleaving {
         inner: std::sync::Arc<dyn Store>,
         mode: Interleave,
@@ -885,33 +951,33 @@ mod tests {
         async fn save_session(&self, s: crate::model::Session) { self.inner.save_session(s).await }
         async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
         async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
-        async fn save_code(&self, c: AuthorizationCode) { self.inner.save_code(c).await }
-        async fn take_code(&self, code: &str) -> Option<AuthorizationCode> { self.inner.take_code(code).await }
-        async fn link_issued_tokens(&self, code: &str, at: &str, rt: Option<&str>) { self.inner.link_issued_tokens(code, at, rt).await }
-        async fn save_access_token(&self, t: AccessToken) { self.inner.save_access_token(t).await }
-        async fn get_access_token(&self, token: &str) -> Option<AccessToken> { self.inner.get_access_token(token).await }
-        async fn revoke_access_token(&self, token: &str) { self.inner.revoke_access_token(token).await }
+        async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> { self.inner.save_code(c).await }
+        async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> { self.inner.take_code(code).await }
+        async fn link_issued_tokens(&self, code: &str, at: &str, rt: Option<&str>) -> StoreResult<()> { self.inner.link_issued_tokens(code, at, rt).await }
+        async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> { self.inner.save_access_token(t).await }
+        async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> { self.inner.get_access_token(token).await }
+        async fn revoke_access_token(&self, token: &str) -> StoreResult<()> { self.inner.revoke_access_token(token).await }
         async fn consume_mandate_if_unused(&self, token: &str) -> Result<bool, String> { self.inner.consume_mandate_if_unused(token).await }
-        async fn save_refresh_token(&self, t: RefreshToken) {
+        async fn save_refresh_token(&self, t: RefreshToken) -> StoreResult<()> {
             self.saved.lock().unwrap().push(t.token.clone());
             self.inner.save_refresh_token(t).await
         }
-        async fn get_refresh_token(&self, token: &str) -> Option<RefreshToken> { self.inner.get_refresh_token(token).await }
-        async fn revoke_refresh_token(&self, token: &str) { self.inner.revoke_refresh_token(token).await }
-        async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool {
+        async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> { self.inner.get_refresh_token(token).await }
+        async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()> { self.inner.revoke_refresh_token(token).await }
+        async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> StoreResult<bool> {
             match self.mode {
                 Interleave::LoseTheCas => {
-                    assert!(self.inner.mark_refresh_used(token, Some("WINNER")).await);
+                    assert!(self.inner.mark_refresh_used(token, Some("WINNER")).await.unwrap());
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
                 Interleave::RevokeBeforeMark => {
-                    let family = self.inner.get_refresh_token(token).await.map_or_default(|t| t.family_id);
+                    let family = self.inner.get_refresh_token(token).await.unwrap().map_or_default(|t| t.family_id);
                     self.inner.revoke_refresh_family(&family, token).await;
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
                 Interleave::RevokeAfterMark => {
                     let won = self.inner.mark_refresh_used(token, replaced_by).await;
-                    let family = self.inner.get_refresh_token(token).await.map_or_default(|t| t.family_id);
+                    let family = self.inner.get_refresh_token(token).await.unwrap().map_or_default(|t| t.family_id);
                     self.inner.revoke_refresh_family(&family, token).await;
                     won
                 }
@@ -920,12 +986,12 @@ mod tests {
         async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
             self.inner.revoke_refresh_family(family_id, start_token).await
         }
-        async fn refresh_family_revoked(&self, family_id: &str) -> bool { self.inner.refresh_family_revoked(family_id).await }
+        async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> { self.inner.refresh_family_revoked(family_id).await }
         async fn find_account(&self, sub: &str) -> crate::model::Account { self.inner.find_account(sub).await }
     }
 
     async fn rotate_rt0_with(inner: std::sync::Arc<dyn Store>, mode: Interleave) -> (Provider, Result<TokenResponse, OAuthError>, Vec<String>) {
-        inner.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+        inner.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
         let store = std::sync::Arc::new(Interleaving { inner, mode, saved: std::sync::Mutex::new(vec![]) });
         let p = provider().with_store(store.clone());
         let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
@@ -938,7 +1004,7 @@ mod tests {
         let (p, r, saved) = rotate_rt0_with(inner, Interleave::RevokeAfterMark).await;
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))), "書き込みの後の札の確かめで断る");
         for t in saved.iter().filter(|t| t.as_str() != "RT0") {
-            assert!(p.store.get_refresh_token(t).await.is_none(), "系列の失効の後に新しい RT {t} が生き残っている");
+            assert!(p.store.get_refresh_token(t).await.unwrap().is_none(), "系列の失効の後に新しい RT {t} が生き残っている");
             let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", t.as_str())]), None).await;
             assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
         }
@@ -950,7 +1016,7 @@ mod tests {
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
         let new_rts: Vec<&String> = saved.iter().filter(|t| t.as_str() != "RT0").collect();
         assert_eq!(new_rts.len(), 1, "新しい RT は先に 1 つ保存される");
-        assert!(p.store.get_refresh_token(new_rts[0]).await.is_none(), "負けたローテーションの新しい RT が残っている");
+        assert!(p.store.get_refresh_token(new_rts[0]).await.unwrap().is_none(), "負けたローテーションの新しい RT が残っている");
     }
 
     async fn fake_store() -> std::sync::Arc<dyn Store> {
@@ -970,7 +1036,7 @@ mod tests {
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
         let new_rts: Vec<&String> = saved.iter().filter(|t| t.as_str() != "RT0").collect();
         assert_eq!(new_rts.len(), 1);
-        assert!(p.store.get_refresh_token(new_rts[0]).await.is_none());
+        assert!(p.store.get_refresh_token(new_rts[0]).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -989,7 +1055,7 @@ mod tests {
         for (method, target) in [("DELETE", "RT1"), ("GET", "RT0")] {
             let (store, fake) = fake_store_and_state().await;
             let p = provider().with_store(store);
-            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
             let r1 = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
             let rt1 = r1.unwrap().refresh_token.unwrap();
             let target = if target == "RT1" { rt1.clone() } else { target.to_string() };
@@ -998,22 +1064,49 @@ mod tests {
             }
             // 失効そのもの（札＋後片付け）を store で走らせる。grants を通すと、grants の読みが先に誤りを受け取る。
             p.store.revoke_refresh_family("fam-test", "RT0").await;
-            assert!(p.store.get_refresh_token(&rt1).await.is_some(), "{method} の誤りで後片付けが {rt1} を消せていない前提");
+            assert!(p.store.get_refresh_token(&rt1).await.unwrap().is_some(), "{method} の誤りで後片付けが {rt1} を消せていない前提");
             let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", rt1.as_str())]), None).await;
             assert!(matches!(again, Err(OAuthError::InvalidGrant(_))), "{method}: 消し残った {rt1} でローテーションできた");
         }
     }
 
-    /// 札を引けない（ストアの誤り）ときは断り、RT を使用済みにしない（閉じる側に倒す）。
+    /// 札を引けない（ストアの誤り）ときは server_error で断る。invalid_grant だと RP が RT を捨てる。
+    /// 1 回目（使用済みにする前）なら RT はそのまま、障害が明けたら同じ RT で続けられる。
     #[tokio::test]
     async fn a_failed_tombstone_lookup_refuses_the_rotation() {
         let (store, fake) = fake_store_and_state().await;
         let p = provider().with_store(store);
-        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await;
+        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
         fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
         let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
-        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-        assert!(!p.store.get_refresh_token("RT0").await.unwrap().used);
+        assert!(matches!(r, Err(OAuthError::ServerError(_))), "{:?}", r.err());
+        assert!(!p.store.get_refresh_token("RT0").await.unwrap().unwrap().used);
+        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        assert!(again.is_ok(), "{:?}", again.err());
+    }
+
+    /// 古い RT を使用済みにする書き込み、またはその後の札の確認が誤ったときは server_error。
+    /// 先に作った新しい RT と AT は渡していないので消す。
+    #[tokio::test]
+    async fn a_failure_after_minting_discards_the_unissued_tokens() {
+        for case in ["mark", "second lookup"] {
+            let (store, fake) = fake_store_and_state().await;
+            let p = provider().with_store(store);
+            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
+            match case {
+                "mark" => fake.fail_once("PATCH", "refreshTokens", Some("RT0")),
+                _ => {
+                    // 1 回目は「札は無い」（404）で通し、2 回目を落とす。
+                    fake.fail_once_with("GET", "refreshFamilyRevocations", Some("fam-test"), axum::http::StatusCode::NOT_FOUND);
+                    fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
+                }
+            }
+            let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+            assert!(matches!(r, Err(OAuthError::ServerError(_))), "{case}: {:?}", r.err());
+            let left = |col: &str| fake.doc_ids(col).into_iter().filter(|id| id != "RT0").count();
+            assert_eq!(left("refreshTokens"), 0, "{case}: 渡していない RT が残った");
+            assert_eq!(left("accessTokens"), 0, "{case}: 渡していない AT が残った");
+        }
     }
 
     /// familyId を持たない RT（2026-06-11 より前に始まった鎖）はローテーションせず、ログインし直させる。
@@ -1021,10 +1114,10 @@ mod tests {
     async fn an_rt_without_a_family_is_not_rotated() {
         for store in [std::sync::Arc::new(crate::store::MemoryStore::default()) as std::sync::Arc<dyn Store>, fake_store().await] {
             let p = provider().with_store(store);
-            p.store.save_refresh_token(RefreshToken { family_id: String::new(), ..rt("LEGACY", "rp", "openid offline_access") }).await;
+            p.store.save_refresh_token(RefreshToken { family_id: String::new(), ..rt("LEGACY", "rp", "openid offline_access") }).await.unwrap();
             let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "LEGACY")]), None).await;
             assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-            assert!(!p.store.get_refresh_token("LEGACY").await.unwrap().used);
+            assert!(!p.store.get_refresh_token("LEGACY").await.unwrap().unwrap().used);
         }
     }
 
@@ -1050,7 +1143,7 @@ mod tests {
         let p = provider().with_store(std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs)));
         let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "OLD")]), None).await;
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-        assert!(!p.store.get_refresh_token("OLD").await.unwrap().used);
+        assert!(!p.store.get_refresh_token("OLD").await.unwrap().unwrap().used);
     }
 
     /// 後片付けは 1 回の失効で扱う RT の数に上限があり（F6）、上限を超えた鎖でも必ず終わる。残った RT も札で使えない。
@@ -1064,12 +1157,12 @@ mod tests {
             let mut t = rt(&format!("C{k}"), "rp", "openid offline_access");
             t.used = next.is_some();
             t.replaced_by = next;
-            p.store.save_refresh_token(t).await;
+            p.store.save_refresh_token(t).await.unwrap();
         }
         let reuse = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "C0")]), None).await;
         assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
         let last = format!("C{}", n - 1);
-        assert!(p.store.get_refresh_token(&last).await.is_some(), "上限を超えた所は後片付けで消えていない前提");
+        assert!(p.store.get_refresh_token(&last).await.unwrap().is_some(), "上限を超えた所は後片付けで消えていない前提");
         let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", last.as_str())]), None).await;
         assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
     }
@@ -1101,21 +1194,21 @@ mod tests {
         let c = client("mobile-rp");
         p.store
             .save_refresh_token(rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A"))
-            .await;
-        let fam = p.store.get_refresh_token("RT1").await.unwrap().family_id;
+            .await.unwrap();
+        let fam = p.store.get_refresh_token("RT1").await.unwrap().unwrap().family_id;
         let r = RefreshTokenGrant
             .handle(&p, &c, &form(&[("refresh_token", "RT1")]), Some("KEY-A".into()))
             .await
             .unwrap();
         let rt2 = r.refresh_token.unwrap();
-        assert_eq!(p.store.get_refresh_token(&rt2).await.unwrap().family_id, fam);
+        assert_eq!(p.store.get_refresh_token(&rt2).await.unwrap().unwrap().family_id, fam);
     }
 
     #[tokio::test]
     async fn refresh_rotates_and_reuse_rejected() {
         let p = provider();
         let c = client("rp");
-        p.store.save_refresh_token(rt_bound("RT1", "rp", "openid offline_access", "KEY-A")).await;
+        p.store.save_refresh_token(rt_bound("RT1", "rp", "openid offline_access", "KEY-A")).await.unwrap();
         let f = form(&[("refresh_token", "RT1")]);
         let r = RefreshTokenGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
         assert!(r.refresh_token.is_some());
@@ -1129,7 +1222,7 @@ mod tests {
     #[tokio::test]
     async fn refresh_issued_to_another_client_rejected() {
         let p = provider();
-        p.store.save_refresh_token(rt("RT1", "rp", "openid")).await;
+        p.store.save_refresh_token(rt("RT1", "rp", "openid")).await.unwrap();
         let f = form(&[("refresh_token", "RT1")]);
         assert!(matches!(
             RefreshTokenGrant.handle(&p, &client("evil"), &f, None).await,
@@ -1141,13 +1234,13 @@ mod tests {
     async fn refresh_scope_widening_rejected_narrowing_ok() {
         let p = provider();
         let c = client("rp");
-        p.store.save_refresh_token(rt_bound("RT1", "rp", "openid profile", "KEY-A")).await;
+        p.store.save_refresh_token(rt_bound("RT1", "rp", "openid profile", "KEY-A")).await.unwrap();
         let widen = form(&[("refresh_token", "RT1"), ("scope", "openid profile email")]);
         assert!(matches!(
             RefreshTokenGrant.handle(&p, &c, &widen, Some("KEY-A".into())).await,
             Err(OAuthError::InvalidScope(_))
         ));
-        p.store.save_refresh_token(rt_bound("RT2", "rp", "openid profile", "KEY-A")).await;
+        p.store.save_refresh_token(rt_bound("RT2", "rp", "openid profile", "KEY-A")).await.unwrap();
         let narrow = form(&[("refresh_token", "RT2"), ("scope", "openid")]);
         let r = RefreshTokenGrant.handle(&p, &c, &narrow, Some("KEY-A".into())).await.unwrap();
         assert_eq!(r.scope, "openid");
@@ -1232,7 +1325,7 @@ mod tests {
         let r = CibaGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
         let want: serde_json::Value = serde_json::from_str(mandate).unwrap();
         assert_eq!(r.authorization_details, Some(want));
-        let at = p.store.get_access_token(&r.access_token).await.unwrap();
+        let at = p.store.get_access_token(&r.access_token).await.unwrap().unwrap();
         assert_eq!(at.authorization_details.as_deref(), Some(mandate));
     }
 

@@ -349,7 +349,8 @@ async fn issue_code(
         }
     }
     let code = uuid::Uuid::new_v4().simple().to_string();
-    p.store
+    if let Err(e) = p
+        .store
         .save_code(AuthorizationCode {
             code: code.clone(),
             client_id: req.client.client_id.clone(),
@@ -371,7 +372,10 @@ async fn issue_code(
             resource: req.params.resource.clone(),
             expires_at: now() + 60,
         })
-        .await;
+        .await
+    {
+        return authorize_error(p, req, e.into());
+    }
 
     let mut out = vec![("code".to_string(), code)];
     if let Some(state) = &req.params.state {
@@ -521,8 +525,10 @@ pub(super) async fn introspect(
     // RFC 7662 §2.2: 無効/未知/失効は active=false のみ（それ以外の情報は漏らさない）。
     // access token のみ対象。期限切れ/未知は get_access_token が None を返す。
     let body = match p.store.get_access_token(token).await {
-        Some(at) => introspection_active_body(&at),
-        None => serde_json::json!({ "active": false }),
+        Ok(Some(at)) => introspection_active_body(&at),
+        Ok(None) => serde_json::json!({ "active": false }),
+        // active=false と答えると、RS は生きているトークンを失効扱いにする。
+        Err(e) => return OAuthError::from(e).into_response(),
     };
     ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
@@ -579,19 +585,28 @@ pub(super) async fn revoke(
     };
     // token_type_hint は最適化のみ。access/refresh の両方を試す。
     // 自分(client_id 一致)のトークンだけ失効する。
-    if let Some(at) = p.store.get_access_token(token).await
-        && at.client_id == client.client_id
-    {
-        p.store.revoke_access_token(token).await;
-    }
-    if let Some(rt) = p.store.get_refresh_token(token).await
-        && rt.client_id == client.client_id
-    {
-        p.store.revoke_refresh_token(token).await;
+    // 失効できなかったのに 200 を返すと、RP はトークンが死んだと思い込む。RFC 7009 §2.2.1 の 503 で試し直させる。
+    if let Err(e) = revoke_own_token(&p, &client, token).await {
+        tracing::error!(event = "revoke_failed", "{e}");
+        return (StatusCode::SERVICE_UNAVAILABLE, [(header::RETRY_AFTER, "1")]).into_response();
     }
     // RFC 7009 §2.2: 成功・無効トークンいずれも 200。
     ([(header::CACHE_CONTROL, "no-store")], StatusCode::OK).into_response()
 }
+async fn revoke_own_token(p: &Provider, client: &crate::model::Client, token: &str) -> crate::store::StoreResult<()> {
+    if let Some(at) = p.store.get_access_token(token).await?
+        && at.client_id == client.client_id
+    {
+        p.store.revoke_access_token(token).await?;
+    }
+    if let Some(rt) = p.store.get_refresh_token(token).await?
+        && rt.client_id == client.client_id
+    {
+        p.store.revoke_refresh_token(token).await?;
+    }
+    Ok(())
+}
+
 /* ===== RP-Initiated Logout (OpenID Connect RP-Initiated Logout 1.0) ===== */
 
 #[derive(serde::Deserialize)]
@@ -1201,12 +1216,38 @@ mod tests {
         assert!(!second.contains("code=") && second.contains("error=invalid_request"), "{second}");
     }
 
+    /// 失効できなかったのに 200 を返すと、RP はトークンが死んだと思い込む。503 で試し直させる。
+    #[tokio::test]
+    async fn revoke_answers_503_when_the_token_could_not_be_removed() {
+        let (host, state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store = Arc::new(crate::firestore_store::FirestoreStore::new(fs));
+        let public = crate::model::Client {
+            client_id: "rp".into(),
+            token_endpoint_auth_method: "none".into(),
+            client_secret: None,
+            ..client_with_post_logout(&[])
+        };
+        let p = Arc::new(Provider::new("https://op.example").with_store(store).with_client(public));
+        p.store.save_access_token(at(None)).await.unwrap();
+        let form = || Form(HashMap::from([("client_id".to_string(), "rp".to_string()), ("token".to_string(), "AT".to_string())]));
+
+        state.fail_once("DELETE", "accessTokens", Some("AT"));
+        let r = revoke(State(p.clone()), HeaderMap::new(), form()).await;
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(p.store.get_access_token("AT").await.unwrap().is_some(), "消せていない");
+
+        let r = revoke(State(p.clone()), HeaderMap::new(), form()).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(p.store.get_access_token("AT").await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn profile_put_refuses_the_values_the_registration_page_refuses() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let p = Arc::new(Provider::new("https://op.example").with_firestore(fs.clone()));
-        p.store.save_access_token(at(None)).await;
+        p.store.save_access_token(at(None)).await.unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer AT".parse().unwrap());
         let put = |body: serde_json::Value| profile_put(State(p.clone()), headers.clone(), body.to_string());
