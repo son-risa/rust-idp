@@ -681,6 +681,7 @@ pub(super) async fn register_passkey_verify(
 
 #[cfg(test)]
 mod invite_tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::fido::verify::test_support::*;
     use crate::fido::verify::FLAG_AT;
@@ -763,7 +764,7 @@ mod invite_tests {
         let opts_req: RegPkOptionsReq = serde_json::from_value(serde_json::json!({ "token": token })).unwrap();
         let opts = body_json(register_passkey_options(State(p.clone()), Json(opts_req)).await).await;
         let challenge = opts["challenge"].as_str().unwrap();
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let acd = attested_cred_data(b"invite-cred", &cose_es256(&x, &y));
         let att = Cbor::Map(vec![

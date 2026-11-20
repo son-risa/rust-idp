@@ -333,8 +333,8 @@ const OID_FIDO_AAGUID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.
 
 fn ec_p256_xy_from_parsed(cert: &Certificate) -> Result<(Vec<u8>, Vec<u8>), String> {
     let pk = cert
-        .tbs_certificate
-        .subject_public_key_info
+        .tbs_certificate()
+        .subject_public_key_info()
         .subject_public_key
         .as_bytes()
         .ok_or("spki bitstring not byte-aligned")?;
@@ -364,7 +364,7 @@ fn check_cert_chain(ders: &[&[u8]]) -> Result<(), String> {
         .collect::<Result<_, _>>()?;
     let now = now_secs();
     for c in &parsed {
-        let v = &c.tbs_certificate.validity;
+        let v = &c.tbs_certificate().validity();
         let nb = v.not_before.to_unix_duration().as_secs();
         let na = v.not_after.to_unix_duration().as_secs();
         if now < nb {
@@ -375,8 +375,8 @@ fn check_cert_chain(ders: &[&[u8]]) -> Result<(), String> {
         }
         // 自己署名証明書（= 信頼アンカー）を x5c に含めてはならない。
         // 信頼ストアを持たない以上、自己署名 root は信頼できず拒否する（F-2 / F-10）。
-        let iss = c.tbs_certificate.issuer.to_der().map_err(|e| format!("issuer der: {e}"))?;
-        let sub = c.tbs_certificate.subject.to_der().map_err(|e| format!("subject der: {e}"))?;
+        let iss = c.tbs_certificate().issuer().to_der().map_err(|e| format!("issuer der: {e}"))?;
+        let sub = c.tbs_certificate().subject().to_der().map_err(|e| format!("subject der: {e}"))?;
         if iss == sub {
             return Err("attestation x5c must not contain a self-signed certificate".into());
         }
@@ -385,15 +385,15 @@ fn check_cert_chain(ders: &[&[u8]]) -> Result<(), String> {
     for i in 0..parsed.len().saturating_sub(1) {
         let child = &parsed[i];
         let parent = &parsed[i + 1];
-        if child.signature_algorithm.oid != OID_ECDSA_SHA256 {
+        if child.signature_algorithm().oid != OID_ECDSA_SHA256 {
             continue;
         }
         let tbs = child
-            .tbs_certificate
+            .tbs_certificate()
             .to_der()
             .map_err(|e| format!("tbs der: {e}"))?;
         let sig = child
-            .signature
+            .signature()
             .as_bytes()
             .ok_or("cert signature not byte-aligned")?;
         let (px, py) = ec_p256_xy_from_parsed(parent)?;
@@ -408,14 +408,12 @@ fn check_attestn_cert(der: &[u8], aaguid: &[u8]) -> Result<(), String> {
     let cert = Certificate::from_der(der).map_err(|e| format!("x5c parse: {e}"))?;
 
     // §8.2.1 Subject 要件（self 偽装 full を弾く: F-2）。
-    let subject = &cert.tbs_certificate.subject;
+    let subject = cert.tbs_certificate().subject();
     let find = |oid: ObjectIdentifier| -> Option<Vec<u8>> {
-        subject.0.iter().find_map(|rdn| {
-            rdn.0
-                .iter()
-                .find(|atv| atv.oid == oid)
-                .map(|atv| atv.value.value().to_vec())
-        })
+        subject
+            .iter()
+            .find(|atv| atv.oid == oid)
+            .map(|atv| atv.value.value().to_vec())
     };
     let ou = find(ObjectIdentifier::new_unwrap("2.5.4.11"));
     if ou.as_deref() != Some(b"Authenticator Attestation".as_slice()) {
@@ -430,11 +428,11 @@ fn check_attestn_cert(der: &[u8], aaguid: &[u8]) -> Result<(), String> {
     if !matches!(find(ObjectIdentifier::new_unwrap("2.5.4.6")), Some(v) if v.len() == 2) {
         return Err("attestn cert Subject-C not a 2-char ISO 3166 code".into());
     }
-    if cert.tbs_certificate.version != x509_cert::Version::V3 {
+    if cert.tbs_certificate().version() != x509_cert::Version::V3 {
         return Err("attestn cert version != 3".into());
     }
 
-    if let Some(exts) = &cert.tbs_certificate.extensions {
+    if let Some(exts) = &cert.tbs_certificate().extensions() {
         for ext in exts.iter() {
             if ext.extn_id == OID_BASIC_CONSTRAINTS {
                 let bc = BasicConstraints::from_der(ext.extn_value.as_bytes())
@@ -556,7 +554,7 @@ pub(crate) mod test_support {
     }
 
     pub fn ec_xy(key: &SigningKey) -> (Vec<u8>, Vec<u8>) {
-        let pt = key.verifying_key().to_encoded_point(false);
+        let pt = key.verifying_key().to_sec1_point(false);
         (pt.x().unwrap().to_vec(), pt.y().unwrap().to_vec())
     }
 
@@ -601,6 +599,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::test_support::*;
     use super::*;
     use p256::ecdsa::signature::Signer;
@@ -669,7 +668,7 @@ mod tests {
 
     #[test]
     fn parse_cose_key_es256_roundtrips() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let bytes = cbor_to_vec(&cose_es256(&x, &y));
         let (ck, consumed) = parse_cose_key(&bytes).unwrap();
@@ -685,7 +684,7 @@ mod tests {
 
     #[test]
     fn parse_cose_key_rejects_ec_with_wrong_alg() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let mut m = match cose_es256(&x, &y) {
             Cbor::Map(m) => m,
@@ -741,7 +740,7 @@ mod tests {
 
     #[test]
     fn verify_assertion_accepts_valid_es256_and_rejects_tampered() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let cred = CredKey::Es256 { x: x.clone(), y: y.clone() };
         let auth_data = build_auth_data(RP, FLAG_UP, 1, None);
@@ -759,7 +758,7 @@ mod tests {
     #[test]
     fn verify_packed_self_attestation_roundtrip() {
         use ciborium::value::Integer;
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let cred = CredKey::Es256 { x, y };
         let auth_data = build_auth_data(RP, FLAG_UP | FLAG_AT, 0, None);
@@ -778,7 +777,7 @@ mod tests {
     #[test]
     fn verify_packed_self_rejects_alg_mismatch() {
         use ciborium::value::Integer;
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let cred = CredKey::Es256 { x, y };
         let auth_data = build_auth_data(RP, FLAG_UP | FLAG_AT, 0, None);

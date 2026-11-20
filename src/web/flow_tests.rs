@@ -2,6 +2,7 @@
 //! 一貫して使われ、email が sub/user.id/CIBA account に漏れないことを検証する。
 //! 以前は実 Firestore エミュレータを前提に `#[ignore]` で、CI では走っていなかった。
 
+use p256::elliptic_curve::Generate;
 use super::*;
 use crate::ciba::CibaStatus;
 use crate::fido::verify::test_support::*;
@@ -110,7 +111,7 @@ async fn register_test_account(p: &Arc<Provider>, email: &str) -> (SigningKey, V
         "user.id is not a uuid: {account_id_from_options}"
     );
 
-    let key = SigningKey::random(&mut rand_core::OsRng);
+    let key = SigningKey::generate();
     let cred_id = b"probe-credential-id".to_vec();
     let (att_b64, cdj_b64) = make_reg_ceremony(&key, &cred_id, &challenge, &p.origin(), &p.rp_id());
 
@@ -534,7 +535,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
     let p = test_provider().await;
     let victim = format!("victim-{}@example.com", uuid::Uuid::new_v4());
     let (_victim_key, _cred, victim_id) = register_test_account(&p, &victim).await;
-    let attacker = SigningKey::random(&mut rand_core::OsRng);
+    let attacker = SigningKey::generate();
 
     let (_uid, by_email) = email_login_response(&p, &victim, &attacker, 0).await;
     assert_eq!(by_email.status(), StatusCode::UNAUTHORIZED);

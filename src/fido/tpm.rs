@@ -141,21 +141,20 @@ fn aik_rsa_ne(cert: &Certificate) -> Result<(Vec<u8>, Vec<u8>), String> {
     use rsa::pkcs8::DecodePublicKey;
     use rsa::traits::PublicKeyParts;
     let spki = cert
-        .tbs_certificate
-        .subject_public_key_info
+        .tbs_certificate()
+        .subject_public_key_info()
         .to_der()
         .map_err(|e| format!("aik spki der: {e}"))?;
-    let key = rsa::RsaPublicKey::from_public_key_der(&spki)
+    let key = rsa::PublicKey::from_public_key_der(&spki)
         .map_err(|e| format!("aik rsa key: {e}"))?;
-    Ok((key.n().to_bytes_be(), key.e().to_bytes_be()))
+    Ok((key.n().to_be_bytes_trimmed_vartime().into_vec(), key.e().to_be_bytes_trimmed_vartime().into_vec()))
 }
 
 /// §8.3.1: AIK 証明書は tcg-kp-AIKCertificate EKU を持ち basicConstraints CA=false。
 fn check_aik_cert(cert: &Certificate) -> Result<(), String> {
     let exts = cert
-        .tbs_certificate
-        .extensions
-        .as_ref()
+        .tbs_certificate()
+        .extensions()
         .ok_or("aik cert has no extensions")?;
     let mut eku_ok = false;
     for ext in exts.iter() {

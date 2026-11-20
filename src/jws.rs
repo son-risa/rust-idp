@@ -1,6 +1,7 @@
 //! JWS 署名の概念トレイトと、ES256(P-256) のピュア Rust 実装。
 //! 後で RS256/PS256/EdDSA を足す時はこのトレイトに impl を増やすだけ。
 
+use p256::elliptic_curve::Generate;
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -31,7 +32,7 @@ pub struct Es256Signer {
 
 impl Es256Signer {
     pub fn generate() -> Self {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         Self::from_key(key)
     }
 
@@ -47,7 +48,7 @@ impl Es256Signer {
 
     fn from_key(key: SigningKey) -> Self {
         let vk = key.verifying_key();
-        let point = vk.to_encoded_point(false);
+        let point = vk.to_sec1_point(false);
         let x = b64url(point.x().expect("P-256 has x"));
         let y = b64url(point.y().expect("P-256 has y"));
         let kid = thumbprint(&x, &y);
@@ -89,7 +90,7 @@ impl JwsSigner for Es256Signer {
 
 /// RS256 (RSASSA-PKCS1-v1.5 / SHA-256)。OIDC Core §15.1 は OP に RS256 を要求する。
 pub struct Rs256Signer {
-    key: rsa::RsaPrivateKey,
+    key: rsa::PrivateKey,
     kid: String,
     n: String,
     e: String,
@@ -99,22 +100,22 @@ impl Rs256Signer {
     /// テスト専用の一時鍵生成。本番経路から参照できないよう cfg(test) で隔離する。
     #[cfg(test)]
     pub fn generate() -> Self {
-        let key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).expect("rsa keygen");
+        let key = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048).expect("rsa keygen");
         Self::from_key(key)
     }
 
     /// PKCS#8 PEM から読み込む（Secret Manager 保存鍵の読込に使う）。
     pub fn from_pkcs8_pem(pem: &str) -> Result<Self, String> {
         use rsa::pkcs8::DecodePrivateKey;
-        let key = rsa::RsaPrivateKey::from_pkcs8_pem(pem.trim())
+        let key = rsa::PrivateKey::from_pkcs8_pem(pem.trim())
             .map_err(|e| format!("rsa pkcs8 pem: {e}"))?;
         Ok(Self::from_key(key))
     }
 
-    fn from_key(key: rsa::RsaPrivateKey) -> Self {
+    fn from_key(key: rsa::PrivateKey) -> Self {
         use rsa::traits::PublicKeyParts;
-        let n = b64url(key.n().to_bytes_be());
-        let e = b64url(key.e().to_bytes_be());
+        let n = b64url(key.n().to_be_bytes_trimmed_vartime().into_vec());
+        let e = b64url(key.e().to_be_bytes_trimmed_vartime().into_vec());
         // RFC 7638 RSA Thumbprint: canonical JSON はキー昇順 e,kty,n。
         let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
         let kid = b64url(<sha2::Sha256 as sha2::Digest>::digest(canonical.as_bytes()));
@@ -229,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn rs256_sign_produces_verifiable_jws() {
         use rsa::traits::PublicKeyParts;
-        use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
+        use rsa::{BoxedUint, Pkcs1v15Sign, PublicKey as RsaPublicKey};
         use sha2::Digest;
         let signer = Rs256Signer::generate();
         let jwt = signer.sign(&serde_json::json!({"sub": "alice"})).await;
@@ -240,8 +241,8 @@ mod tests {
         assert_eq!(header["kid"], signer.kid);
         // 公開 JWK の n,e で署名検証できる。
         let jwk = signer.public_jwk();
-        let n = BigUint::from_bytes_be(&b64d(jwk["n"].as_str().unwrap()));
-        let e = BigUint::from_bytes_be(&b64d(jwk["e"].as_str().unwrap()));
+        let n = BoxedUint::from_be_slice_vartime(&b64d(jwk["n"].as_str().unwrap()));
+        let e = BoxedUint::from_be_slice_vartime(&b64d(jwk["e"].as_str().unwrap()));
         let pk = RsaPublicKey::new(n, e).unwrap();
         let signing_input = format!("{}.{}", parts[0], parts[1]);
         let hashed = sha2::Sha256::digest(signing_input.as_bytes());
@@ -249,6 +250,6 @@ mod tests {
             .verify(Pkcs1v15Sign::new::<sha2::Sha256>(), &hashed, &b64d(parts[2]))
             .is_ok());
         // public_jwk の e は本物の指数（PublicKeyParts と一致）。
-        assert_eq!(b64d(jwk["e"].as_str().unwrap()), signer.key.e().to_bytes_be());
+        assert_eq!(b64d(jwk["e"].as_str().unwrap()), signer.key.e().to_be_bytes_trimmed_vartime().into_vec());
     }
 }

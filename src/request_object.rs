@@ -139,6 +139,7 @@ pub async fn verify(
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::es256::b64url_encode as b64e;
     use crate::model::JwkPub;
@@ -148,7 +149,7 @@ mod tests {
     const ISS: &str = "https://op.example/oidc";
 
     fn client_with_key(key: &SigningKey) -> Client {
-        let pt = key.verifying_key().to_encoded_point(false);
+        let pt = key.verifying_key().to_sec1_point(false);
         Client {
             client_id: "cli-1".into(),
             redirect_uris: vec!["https://rp/cb".into()],
@@ -203,7 +204,7 @@ mod tests {
 
     #[test]
     fn valid_request_object_returns_params() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let jwt = sign(&key, &good_header(), &good_payload());
         let p = verify_t(&c, &jwt, ISS).unwrap();
@@ -218,7 +219,7 @@ mod tests {
     fn preserves_non_string_claims_as_json() {
         // authorization_details(RAR=配列) / claims(オブジェクト) / max_age(数値) が
         // 署名経路でも欠落せず、JSON 文字列として保持されることを確認する（#5 回帰）。
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl["authorization_details"] = json!([{"type": "payment_initiation", "amount": 100}]);
@@ -242,7 +243,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_jti_replay() {
         // 同一 jti の request object を同じストアで2回検証 → 2回目はリプレイ拒否（#7 回帰）。
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let store = NonceStore::memory();
         let jwt = sign(&key, &good_header(), &good_payload());
@@ -253,7 +254,7 @@ mod tests {
 
     #[test]
     fn rejects_alg_none() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut h = good_header();
         h["alg"] = json!("none");
@@ -263,7 +264,7 @@ mod tests {
 
     #[test]
     fn rejects_tampered_payload() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let jwt = sign(&key, &good_header(), &good_payload());
         let parts: Vec<&str> = jwt.split('.').collect();
@@ -274,7 +275,7 @@ mod tests {
 
     #[test]
     fn rejects_iss_mismatch() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl["iss"] = json!("other-client");
@@ -283,7 +284,7 @@ mod tests {
 
     #[test]
     fn rejects_aud_mismatch() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl["aud"] = json!("https://evil.example");
@@ -292,7 +293,7 @@ mod tests {
 
     #[test]
     fn rejects_expired() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl["exp"] = json!(now() - 10);
@@ -301,7 +302,7 @@ mod tests {
 
     #[test]
     fn rejects_exp_more_than_60min_future() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl["exp"] = json!(now() + 3700); // > 60分
@@ -310,7 +311,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_future_or_old_nbf() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         // 欠落
         let mut pl = good_payload();
@@ -328,7 +329,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_iat_and_jti() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl.as_object_mut().unwrap().remove("iat");
@@ -340,7 +341,7 @@ mod tests {
 
     #[test]
     fn accepts_aud_as_array_containing_issuer() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut pl = good_payload();
         pl["aud"] = json!(["https://other", ISS]);
@@ -349,7 +350,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_kid() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
         let c = client_with_key(&key);
         let mut h = good_header();
         h["kid"] = json!("unknown");
@@ -358,8 +359,8 @@ mod tests {
 
     #[test]
     fn rejects_signature_from_other_key() {
-        let key = SigningKey::random(&mut rand_core::OsRng);
-        let other = SigningKey::random(&mut rand_core::OsRng);
+        let key = SigningKey::generate();
+        let other = SigningKey::generate();
         let c = client_with_key(&key);
         // 署名は other 鍵、kid は登録鍵 k1 → 検証失敗。
         assert!(verify_t(&c, &sign(&other, &good_header(), &good_payload()), ISS).is_err());

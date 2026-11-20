@@ -9,7 +9,6 @@
 use crate::firestore::{self, Firestore};
 use crate::jws::b64url;
 use crate::webauthn::RegOutcome;
-use rand_core::{OsRng, RngCore};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,7 +25,7 @@ fn now() -> u64 {
 
 fn random_token() -> String {
     let mut buf = [0u8; 32];
-    OsRng.fill_bytes(&mut buf);
+    getrandom::fill(&mut buf).expect("OS の乱数源");
     b64url(buf)
 }
 

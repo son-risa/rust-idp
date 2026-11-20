@@ -5,12 +5,12 @@
 //! DPoP / private_key_jwt も将来ここを呼べるが、今は ES256 のまま（配線しない）。
 
 use ed25519_dalek::{Signature as EdSignature, Verifier as EdVerifier, VerifyingKey as EdKey};
-use rsa::{BigUint, Pkcs1v15Sign, RsaPublicKey};
+use rsa::{BoxedUint, Pkcs1v15Sign, PublicKey as RsaPublicKey};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
 fn rsa_key(n: &[u8], e: &[u8]) -> Result<RsaPublicKey, String> {
-    RsaPublicKey::new(BigUint::from_bytes_be(n), BigUint::from_bytes_be(e))
+    RsaPublicKey::new(BoxedUint::from_be_slice_vartime(n), BoxedUint::from_be_slice_vartime(e))
         .map_err(|e| format!("rsa key: {e}"))
 }
 
@@ -52,13 +52,13 @@ pub fn verify_ed25519(public_key: &[u8], message: &[u8], signature: &[u8]) -> Re
 mod tests {
     use super::*;
     use rsa::traits::PublicKeyParts;
-    use rsa::RsaPrivateKey;
+    use rsa::PrivateKey as RsaPrivateKey;
 
     fn rsa_keypair() -> (RsaPrivateKey, Vec<u8>, Vec<u8>) {
         // 1024bit: テスト高速化用（本番鍵長の検証ではなくロジック検証が目的）。
-        let sk = RsaPrivateKey::new(&mut rand_core::OsRng, 1024).unwrap();
+        let sk = RsaPrivateKey::new(&mut getrandom::SysRng, 1024).unwrap();
         let pk = sk.to_public_key();
-        (sk, pk.n().to_bytes_be(), pk.e().to_bytes_be())
+        (sk, pk.n().to_be_bytes_trimmed_vartime().into_vec(), pk.e().to_be_bytes_trimmed_vartime().into_vec())
     }
 
     #[test]
@@ -113,9 +113,8 @@ mod tests {
     #[test]
     fn ed25519_accepts_valid_rejects_tampered() {
         use ed25519_dalek::{Signer, SigningKey};
-        use rand_core::RngCore;
         let mut seed = [0u8; 32];
-        rand_core::OsRng.fill_bytes(&mut seed);
+        getrandom::fill(&mut seed).expect("OS の乱数源");
         let sk = SigningKey::from_bytes(&seed);
         let pk = sk.verifying_key().to_bytes();
         let msg = b"ed25519 message";

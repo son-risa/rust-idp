@@ -174,9 +174,8 @@ pub fn jwks_from_jwk_set(jwks: Option<&serde_json::Value>) -> Vec<JwkPub> {
 /// Initial Access Token の発行と、ConfidentialSecret プロファイルの client_secret 生成の
 /// 両方から使う汎用プリミティブ（トークンの性質はどちらも同じ: ランダム・単回表示・ハッシュ保存）。
 pub fn gen_random_token() -> (String, String) {
-    use rand_core::RngCore;
     let mut b = [0u8; 32];
-    rand_core::OsRng.fill_bytes(&mut b);
+    getrandom::fill(&mut b).expect("OS の乱数源");
     let token = crate::es256::b64url_encode(b);
     let hash = hash_token(&token);
     (token, hash)
@@ -365,6 +364,7 @@ fn https_host(uri: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
 
     fn jwk() -> JwkPub {
@@ -686,8 +686,8 @@ mod tests {
     fn valid_ec_xy() -> (String, String) {
         use crate::es256::b64url_encode;
         use p256::ecdsa::SigningKey;
-        let key = SigningKey::random(&mut rand_core::OsRng);
-        let pt = key.verifying_key().to_encoded_point(false);
+        let key = SigningKey::generate();
+        let pt = key.verifying_key().to_sec1_point(false);
         (b64url_encode(pt.x().unwrap()), b64url_encode(pt.y().unwrap()))
     }
 

@@ -504,6 +504,7 @@ pub(super) async fn ciba_reject(
 
 #[cfg(test)]
 mod tests {
+    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::ciba::{CibaStatus, CibaStore, MemoryCibaStore};
     use crate::fido::verify::test_support::*;
@@ -567,10 +568,10 @@ mod tests {
 
     #[tokio::test]
     async fn approval_needs_the_users_passkey() {
-        let owner = SigningKey::random(&mut rand_core::OsRng);
+        let owner = SigningKey::generate();
         let (p, ciba, id) = seeded(&owner).await;
 
-        let attacker = SigningKey::random(&mut rand_core::OsRng);
+        let attacker = SigningKey::generate();
         assert_eq!(approve_with(&p, &id, &attacker).await, StatusCode::UNAUTHORIZED);
         assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Pending);
 
@@ -580,7 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_challenge_issued_for_another_request_cannot_approve_this_one() {
-        let owner = SigningKey::random(&mut rand_core::OsRng);
+        let owner = SigningKey::generate();
         let (p, ciba, id) = seeded(&owner).await;
         let other = ciba.create("rp", ACCOUNT, "openid", "pay 9999", None).await.unwrap();
 

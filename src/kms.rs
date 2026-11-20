@@ -56,11 +56,11 @@ impl KmsSigner {
         let pem = j.get("pem").and_then(|v| v.as_str()).ok_or("kms publicKey: no pem")?;
         let (jwk, kid) = match kind {
             KmsKind::Es256 => {
-                use p256::elliptic_curve::sec1::ToEncodedPoint;
+                use p256::elliptic_curve::sec1::ToSec1Point;
                 use p256::pkcs8::DecodePublicKey;
                 let pk = p256::PublicKey::from_public_key_pem(pem)
                     .map_err(|e| format!("es256 spki: {e}"))?;
-                let pt = pk.to_encoded_point(false);
+                let pt = pk.to_sec1_point(false);
                 let x = b64url(pt.x().ok_or("no x")?);
                 let y = b64url(pt.y().ok_or("no y")?);
                 let kid = crate::es256::jwk_thumbprint_p256(&x, &y);
@@ -72,10 +72,10 @@ impl KmsSigner {
             KmsKind::Rs256 => {
                 use rsa::pkcs8::DecodePublicKey;
                 use rsa::traits::PublicKeyParts;
-                let pk = rsa::RsaPublicKey::from_public_key_pem(pem)
+                let pk = rsa::PublicKey::from_public_key_pem(pem)
                     .map_err(|e| format!("rs256 spki: {e}"))?;
-                let n = b64url(pk.n().to_bytes_be());
-                let e = b64url(pk.e().to_bytes_be());
+                let n = b64url(pk.n().to_be_bytes_trimmed_vartime().into_vec());
+                let e = b64url(pk.e().to_be_bytes_trimmed_vartime().into_vec());
                 let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
                 let kid = b64url(sha2::Sha256::digest(canonical.as_bytes()));
                 let jwk = serde_json::json!({
