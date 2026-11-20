@@ -402,7 +402,7 @@ async fn authorize_invite_client(
         tracing::warn!(event = denied_event, client_id = %client.client_id);
         return Err((StatusCode::FORBIDDEN, "client not allowed").into_response());
     }
-    let email = form.get("email").map(|e| e.trim().to_lowercase()).unwrap_or_default();
+    let email = form.get("email").map_or_default(|e| e.trim().to_lowercase());
     if !email.contains('@') || email.len() > 254 {
         return Err(plain_error("invalid email"));
     }

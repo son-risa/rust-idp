@@ -1017,6 +1017,7 @@ pub(crate) mod fake_firestore {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use super::*;
 
     #[test]
@@ -1225,6 +1226,6 @@ mod tests {
         let fs = Firestore::new_for_test("proj", host);
         let (_reached, _release) = state.gate("GET", "refreshTokens", "HANG");
         let r = tokio::time::timeout(HTTP_TIMEOUT * 3, fs.get_doc("refreshTokens", "HANG")).await;
-        assert!(matches!(r, Ok(Err(_))), "時間の上限で誤りにならなかった");
+        assert_matches!(r, Ok(Err(_)), "時間の上限で誤りにならなかった");
     }
 }

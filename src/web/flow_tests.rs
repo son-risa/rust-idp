@@ -2,6 +2,7 @@
 //! 一貫して使われ、email が sub/user.id/CIBA account に漏れないことを検証する。
 //! 以前は実 Firestore エミュレータを前提に `#[ignore]` で、CI では走っていなかった。
 
+use std::assert_matches;
 use p256::elliptic_curve::Generate;
 use super::*;
 use crate::ciba::CibaStatus;
@@ -285,7 +286,7 @@ async fn disabled_account_cannot_login() {
 
     let fs = p.firestore.as_ref().unwrap();
     let out = crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
-    assert!(matches!(out, crate::account_admin::DisableOutcome::Disabled { .. }));
+    assert_matches!(out, crate::account_admin::DisableOutcome::Disabled { .. });
 
     let uid = uuid::Uuid::new_v4().to_string();
     p.store

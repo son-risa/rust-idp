@@ -905,13 +905,13 @@ mod tests {
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
                 Interleave::RevokeBeforeMark => {
-                    let family = self.inner.get_refresh_token(token).await.map(|t| t.family_id).unwrap_or_default();
+                    let family = self.inner.get_refresh_token(token).await.map_or_default(|t| t.family_id);
                     self.inner.revoke_refresh_family(&family, token).await;
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
                 Interleave::RevokeAfterMark => {
                     let won = self.inner.mark_refresh_used(token, replaced_by).await;
-                    let family = self.inner.get_refresh_token(token).await.map(|t| t.family_id).unwrap_or_default();
+                    let family = self.inner.get_refresh_token(token).await.map_or_default(|t| t.family_id);
                     self.inner.revoke_refresh_family(&family, token).await;
                     won
                 }

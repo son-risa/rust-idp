@@ -32,6 +32,7 @@ impl Prompt {
 }
 
 /// authorize がログイン段階で取りうる結果。
+#[derive(Debug)]
 pub enum AuthDecision {
     /// 既存セッションで認証済みとして進む。
     UseSession { account_id: String, auth_time: u64 },
@@ -90,6 +91,7 @@ pub fn decide(params: &AuthParams, session: Option<&Session>, now: u64) -> AuthD
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use super::*;
 
     fn params(prompt: Option<&str>, max_age: Option<&str>) -> AuthParams {
@@ -131,7 +133,7 @@ mod tests {
 
     #[test]
     fn no_session_no_prompt_shows_login() {
-        assert!(matches!(decide(&params(None, None), None, 1000), AuthDecision::Login));
+        assert_matches!(decide(&params(None, None), None, 1000), AuthDecision::Login);
     }
 
     #[test]
@@ -149,7 +151,7 @@ mod tests {
     #[test]
     fn prompt_login_forces_reauth_even_with_session() {
         let s = session(1000);
-        assert!(matches!(decide(&params(Some("login"), None), Some(&s), 1001), AuthDecision::Login));
+        assert_matches!(decide(&params(Some("login"), None), Some(&s), 1001), AuthDecision::Login);
     }
 
     #[test]
@@ -163,10 +165,10 @@ mod tests {
     #[test]
     fn prompt_none_with_fresh_session_uses_it() {
         let s = session(1000);
-        assert!(matches!(
+        assert_matches!(
             decide(&params(Some("none"), None), Some(&s), 1100),
             AuthDecision::UseSession { .. }
-        ));
+        );
     }
 
     #[test]
@@ -181,16 +183,16 @@ mod tests {
     fn max_age_exceeded_forces_login() {
         let s = session(1000);
         // now - auth_time = 200 > max_age 100
-        assert!(matches!(decide(&params(None, Some("100")), Some(&s), 1200), AuthDecision::Login));
+        assert_matches!(decide(&params(None, Some("100")), Some(&s), 1200), AuthDecision::Login);
     }
 
     #[test]
     fn max_age_within_window_reuses_session() {
         let s = session(1000);
-        assert!(matches!(
+        assert_matches!(
             decide(&params(None, Some("100")), Some(&s), 1050),
             AuthDecision::UseSession { .. }
-        ));
+        );
     }
 
     #[test]
