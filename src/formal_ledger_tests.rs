@@ -146,10 +146,10 @@ fn guard_exists(guard: &str) -> Result<(), String> {
     if !text.contains(&format!("fn {f}(")) && !text.contains(&format!("fn {f}<")) {
         return Err(format!("{guard}: fn {f} が無い"));
     }
-    if let Some(t) = ty {
-        if !text.contains(&format!("for {t} {{")) && !text.contains(&format!("impl {t} {{")) {
-            return Err(format!("{guard}: impl {t} が無い"));
-        }
+    if let Some(t) = ty
+        && !text.contains(&format!("for {t} {{")) && !text.contains(&format!("impl {t} {{"))
+    {
+        return Err(format!("{guard}: impl {t} が無い"));
     }
     Ok(())
 }

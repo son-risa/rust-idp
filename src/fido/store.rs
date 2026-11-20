@@ -85,10 +85,10 @@ impl FidoStore for MemFidoStore {
     }
     async fn update_sign_count(&self, user: &str, cred_id: &str, new_count: u32) {
         let mut g = self.inner.lock().unwrap();
-        if let Some(list) = g.credentials.get_mut(user) {
-            if let Some(c) = list.iter_mut().find(|c| c.id == cred_id) {
-                c.sign_count = new_count;
-            }
+        if let Some(list) = g.credentials.get_mut(user)
+            && let Some(c) = list.iter_mut().find(|c| c.id == cred_id)
+        {
+            c.sign_count = new_count;
         }
     }
 }
@@ -177,14 +177,14 @@ impl FidoStore for FirestoreFidoStore {
     }
     async fn update_sign_count(&self, user: &str, cred_id: &str, new_count: u32) {
         // credId(=doc id) で取り直し、signCount を更新して再保存。
-        if let Ok(Some(f)) = self.fs.get_doc(COL_CREDENTIALS, cred_id).await {
-            if let Some(mut cred) = cred_from_fields(&f) {
-                cred.sign_count = new_count;
-                let _ = self
-                    .fs
-                    .set_doc(COL_CREDENTIALS, cred_id, cred_to_fields(user, &cred))
-                    .await;
-            }
+        if let Ok(Some(f)) = self.fs.get_doc(COL_CREDENTIALS, cred_id).await
+            && let Some(mut cred) = cred_from_fields(&f)
+        {
+            cred.sign_count = new_count;
+            let _ = self
+                .fs
+                .set_doc(COL_CREDENTIALS, cred_id, cred_to_fields(user, &cred))
+                .await;
         }
     }
 }

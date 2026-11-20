@@ -748,22 +748,22 @@ pub(super) async fn client_set_initiate_login(
         Ok(None) => return text(StatusCode::NOT_FOUND, lang, "[[Client not found]]"),
         Err(e) => return server_error(lang, "client_set_initiate_login load", &e),
     };
-    if let Some(u) = &uri {
-        if let Err(e) = crate::dcr::check_admin_post_logout_uris(std::slice::from_ref(u), &client.redirect_uris) {
-            let msg = match e {
-                crate::dcr::PostLogoutUriError::BadForm(uri) => localize(
-                    "[[A sign-in start address must use https and must not contain a fragment or user info: {uri}]]",
-                    lang,
-                )
-                .replace("{uri}", &uri),
-                crate::dcr::PostLogoutUriError::ForeignHost(host) => localize(
-                    "[[A sign-in start address must be on the host of a redirect_uri of this client: {host}]]",
-                    lang,
-                )
-                .replace("{host}", &host),
-            };
-            return (StatusCode::BAD_REQUEST, msg).into_response();
-        }
+    if let Some(u) = &uri
+        && let Err(e) = crate::dcr::check_admin_post_logout_uris(std::slice::from_ref(u), &client.redirect_uris)
+    {
+        let msg = match e {
+            crate::dcr::PostLogoutUriError::BadForm(uri) => localize(
+                "[[A sign-in start address must use https and must not contain a fragment or user info: {uri}]]",
+                lang,
+            )
+            .replace("{uri}", &uri),
+            crate::dcr::PostLogoutUriError::ForeignHost(host) => localize(
+                "[[A sign-in start address must be on the host of a redirect_uri of this client: {host}]]",
+                lang,
+            )
+            .replace("{host}", &host),
+        };
+        return (StatusCode::BAD_REQUEST, msg).into_response();
     }
     client.initiate_login_uri = uri.clone();
     match crate::dcr_store::put_client_if_unchanged(fs, &client, &update_time).await {

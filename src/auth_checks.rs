@@ -118,6 +118,7 @@ impl AuthorizationCheck for CheckPkce {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use super::*;
     use crate::model::{AuthParams, Client};
 
@@ -211,10 +212,10 @@ mod tests {
         let ok = addressed(params(), client(true, false));
         assert!(CheckResponseType.check(&p, &ok).await.is_ok());
         let tok = addressed(AuthParams { response_type: Some("token".into()), ..params() }, client(true, false));
-        assert!(matches!(
+        assert_matches!(
             CheckResponseType.check(&p, &tok).await,
             Err(OAuthError::UnsupportedResponseType(_))
-        ));
+        );
         let none = addressed(AuthParams { response_type: None, ..params() }, client(true, false));
         assert!(CheckResponseType.check(&p, &none).await.is_err());
     }
@@ -224,10 +225,10 @@ mod tests {
         let p = Provider::new("https://op");
         assert!(CheckScope.check(&p, &addressed(params(), client(true, false))).await.is_ok());
         let no = addressed(AuthParams { scope: Some("profile email".into()), ..params() }, client(true, false));
-        assert!(matches!(
+        assert_matches!(
             CheckScope.check(&p, &no).await,
             Err(OAuthError::InvalidScope(_))
-        ));
+        );
     }
 
     #[tokio::test]

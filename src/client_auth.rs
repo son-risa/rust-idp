@@ -193,10 +193,10 @@ impl ClientAuthMethod for PrivateKeyJwt {
             return Err(bad("assertion expired or exp too far in the future"));
         }
         // nbf 検証: 大きく未来の nbf は拒否（FAPI2: 60 秒超の clock skew は不可）。
-        if let Some(nbf) = payload.get("nbf").and_then(|v| v.as_i64()) {
-            if nbf > now.saturating_add(60) {
-                return Err(bad("assertion nbf too far in the future"));
-            }
+        if let Some(nbf) = payload.get("nbf").and_then(|v| v.as_i64())
+            && nbf > now.saturating_add(60)
+        {
+            return Err(bad("assertion nbf too far in the future"));
         }
 
         // jti 単回（リプレイ防止）。

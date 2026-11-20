@@ -135,10 +135,10 @@ pub(super) async fn authorize(
     };
     // RFC 9126: request_uri は発行先クライアントに束縛される。authorize の client_id が
     // PAR 作成クライアントと異なる場合は拒否する（別クライアントによる request_uri 流用防止）。
-    if let (Some(creator), Some(req_cid)) = (&par_creator, q0.get("client_id")) {
-        if req_cid != creator {
-            return app_error(lang, "invalid_request_uri", "request_uri was issued to a different client");
-        }
+    if let (Some(creator), Some(req_cid)) = (&par_creator, q0.get("client_id"))
+        && req_cid != creator
+    {
+        return app_error(lang, "invalid_request_uri", "request_uri was issued to a different client");
     }
     let params: AuthParams = match serde_urlencoded::from_str(&raw) {
         Ok(p) => p,
@@ -325,14 +325,14 @@ async fn issue_code(
     auth_time: Option<u64>,
 ) -> Response {
     let redirect_uri = req.redirect_uri.clone();
-    if let Some(r) = &req.params.resource {
-        if !valid_resource(r) {
-            return authorize_error(
-                p,
-                req,
-                OAuthError::InvalidTarget("resource must be an absolute URI without fragment".into()),
-            );
-        }
+    if let Some(r) = &req.params.resource
+        && !valid_resource(r)
+    {
+        return authorize_error(
+            p,
+            req,
+            OAuthError::InvalidTarget("resource must be an absolute URI without fragment".into()),
+        );
     }
     // 認可完了: PAR の request_uri をコードを作る前に単回消費する（RFC 9126）。
     // 並行した完了のうち消費に勝った 1 つだけがコードを受け取る。
@@ -490,10 +490,10 @@ fn introspection_active_body(at: &crate::model::AccessToken) -> serde_json::Valu
         body["auth_time"] = serde_json::json!(t);
     }
     // RFC 9396: 承認済み mandate を RS に伝える。RS は request body と照合する。
-    if let Some(ad) = at.authorization_details.as_deref() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(ad) {
-            body["authorization_details"] = v;
-        }
+    if let Some(ad) = at.authorization_details.as_deref()
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(ad)
+    {
+        body["authorization_details"] = v;
     }
     body
 }
@@ -579,15 +579,15 @@ pub(super) async fn revoke(
     };
     // token_type_hint は最適化のみ。access/refresh の両方を試す。
     // 自分(client_id 一致)のトークンだけ失効する。
-    if let Some(at) = p.store.get_access_token(token).await {
-        if at.client_id == client.client_id {
-            p.store.revoke_access_token(token).await;
-        }
+    if let Some(at) = p.store.get_access_token(token).await
+        && at.client_id == client.client_id
+    {
+        p.store.revoke_access_token(token).await;
     }
-    if let Some(rt) = p.store.get_refresh_token(token).await {
-        if rt.client_id == client.client_id {
-            p.store.revoke_refresh_token(token).await;
-        }
+    if let Some(rt) = p.store.get_refresh_token(token).await
+        && rt.client_id == client.client_id
+    {
+        p.store.revoke_refresh_token(token).await;
     }
     // RFC 7009 §2.2: 成功・無効トークンいずれも 200。
     ([(header::CACHE_CONTROL, "no-store")], StatusCode::OK).into_response()
@@ -698,10 +698,10 @@ pub(super) async fn par(State(p): State<Arc<Provider>>, headers: HeaderMap, body
     };
     let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
     // PAR 本体の client_id は認証済みクライアントと一致すること。
-    if let Some(cid) = form.get("client_id") {
-        if cid != &client.client_id {
-            return OAuthError::InvalidRequest("client_id mismatch".into()).into_response();
-        }
+    if let Some(cid) = form.get("client_id")
+        && cid != &client.client_id
+    {
+        return OAuthError::InvalidRequest("client_id mismatch".into()).into_response();
     }
     // DPoP at PAR (RFC 9449 §10): PAR が DPoP 署名されていれば、その proof の jkt に
     // 認可を束縛する。dpop_jkt パラメータがあれば proof と一致必須。proof のみなら

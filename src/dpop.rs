@@ -115,10 +115,10 @@ impl DpopVerifier for Es256Dpop {
         if (now_secs() - iat).abs() > IAT_SKEW_SECS {
             return Err("iat out of window".into());
         }
-        if let Some(want) = expected_ath {
-            if payload.get("ath").and_then(|v| v.as_str()) != Some(want) {
-                return Err("ath mismatch".into());
-            }
+        if let Some(want) = expected_ath
+            && payload.get("ath").and_then(|v| v.as_str()) != Some(want)
+        {
+            return Err("ath mismatch".into());
         }
         let jti = payload.get("jti").and_then(|v| v.as_str()).ok_or("jti missing")?;
         // DPoP と client_assertion で名前空間を分け、jti 文字列の偶発衝突を避ける。
