@@ -126,17 +126,8 @@ async fn finalize_login(
         return Err("interaction not found");
     }
     tracing::info!(event = "login_success", sub = %super::pseudonymize_sub(&account_sub));
-    let sid = uuid::Uuid::new_v4().to_string();
-    p.store
-        .save_session(Session { sid: sid.clone(), account_id: account_sub, auth_time })
-        .await;
-    let cookie = Cookie::build((SID_COOKIE, sid))
-        .path("/")
-        .http_only(true)
-        .secure(true)
-        .same_site(SameSite::Lax)
-        .build();
-    Ok((jar.add(cookie), p.path(&format!("/authorize/resume?uid={uid}"))))
+    let jar = start_session(p, jar, account_sub, auth_time).await;
+    Ok((jar, p.path(&format!("/authorize/resume?uid={uid}"))))
 }
 
 /* ===== passkey ログイン ===== */
@@ -204,20 +195,40 @@ pub(super) async fn login_passkey_verify(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
+    let account = match verify_assertion(&p, fs, &req, &uid).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let account = p.store.find_account(&account.account_id).await;
+    match finalize_login(&p, jar, &uid, account.sub).await {
+        Ok((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
+        // "interaction not found" のとき、画面は期限切れと見て読み直す（login_form の JS）。
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+/// passkey の assertion を検証し、持ち主のアカウントを返す。challenge はログイン用で uid が合うものに限る。
+/// 凍結したアカウントと accountId の無いアカウントは断る。誤りは画面が訳す固定文（SERVER_ERRORS）。
+pub(super) async fn verify_assertion(
+    p: &Provider,
+    fs: &crate::firestore::Firestore,
+    req: &AuthVerifyReq,
+    expected_uid: &str,
+) -> Result<crate::registration::Account, Response> {
     let challenge = match crate::webauthn::extract_challenge(&req.response.client_data_json) {
         Some(c) => c,
-        None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
+        None => return Err((StatusCode::BAD_REQUEST, "no challenge").into_response()),
     };
     let (email, kind, uid2, _) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
         Ok(Some(t)) => t,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
+        Ok(None) => return Err((StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response()),
         Err(e) => {
             tracing::error!("consume challenge: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response());
         }
     };
-    if kind != crate::registration::ChallengeKind::Auth || uid2 != uid {
-        return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
+    if kind != crate::registration::ChallengeKind::Auth || uid2 != expected_uid {
+        return Err((StatusCode::BAD_REQUEST, "challenge context mismatch").into_response());
     }
     // discoverable（challenge の email が空）なら assertion の userHandle で解決。
     // userHandle = registration 時の user.id = account_id(UUID)。account_id → email を逆引きする。
@@ -234,35 +245,33 @@ pub(super) async fn login_passkey_verify(
                 .unwrap_or_default();
             match crate::registration::find_email_by_account_id(fs, &account_id).await {
                 Ok(Some(e)) => e,
-                _ => return (StatusCode::BAD_REQUEST, "cannot resolve user").into_response(),
+                _ => return Err((StatusCode::BAD_REQUEST, "cannot resolve user").into_response()),
             }
         }
         None => email,
     };
     if email.is_empty() {
-        return (StatusCode::BAD_REQUEST, "cannot resolve user").into_response();
+        return Err((StatusCode::BAD_REQUEST, "cannot resolve user").into_response());
     }
     let account = match crate::registration::get_account(fs, &email).await {
         Ok(Some(a)) => a,
-        _ => return (StatusCode::BAD_REQUEST, "credential not found").into_response(),
+        _ => return Err((StatusCode::BAD_REQUEST, "credential not found").into_response()),
     };
     let cred = match crate::registration::find_credential(fs, &account, &req.id).await {
         Ok(Some(c)) => c,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "credential id mismatch").into_response(),
+        Ok(None) => return Err((StatusCode::BAD_REQUEST, "credential id mismatch").into_response()),
         Err(e) => {
             tracing::error!("find_credential: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response());
         }
     };
-    let origin = p.origin();
-    let rp_id = p.rp_id();
     match crate::webauthn::verify_authentication(
         &req.response.client_data_json,
         &req.response.authenticator_data,
         &req.response.signature,
         &challenge,
-        &origin,
-        &rp_id,
+        &p.origin(),
+        &p.rp_id(),
         &cred.pub_x,
         &cred.pub_y,
         cred.sign_count,
@@ -275,7 +284,7 @@ pub(super) async fn login_passkey_verify(
         }
         Err(e) => {
             tracing::warn!(event = "login_failed", method = "passkey", "webauthn auth failed: {e}");
-            return (StatusCode::UNAUTHORIZED, format!("passkey verify failed: {e}")).into_response();
+            return Err((StatusCode::UNAUTHORIZED, format!("passkey verify failed: {e}")).into_response());
         }
     }
     // disabled チェックは署名検証の後: これより前に判定を分岐させると、実 passkey を
@@ -283,18 +292,13 @@ pub(super) async fn login_passkey_verify(
     // 署名を検証し終えた=正規の所有者だと確認できてから初めて拒否理由を返す。
     if account.disabled {
         tracing::warn!(event = "login_blocked_disabled", sub = %super::pseudonymize_sub(&account.account_id));
-        return (StatusCode::FORBIDDEN, "account disabled").into_response();
+        return Err((StatusCode::FORBIDDEN, "account disabled").into_response());
     }
     if account.account_id.is_empty() {
         // 移行前（accountId 未発行）のアカウント。再登録が必要。
-        return (StatusCode::BAD_REQUEST, "account needs re-registration").into_response();
+        return Err((StatusCode::BAD_REQUEST, "account needs re-registration").into_response());
     }
-    let account = p.store.find_account(&account.account_id).await;
-    match finalize_login(&p, jar, &uid, account.sub).await {
-        Ok((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
-        // "interaction not found" のとき、画面は期限切れと見て読み直す（login_form の JS）。
-        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
-    }
+    Ok(account)
 }
 
 #[cfg(test)]

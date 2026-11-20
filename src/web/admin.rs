@@ -44,7 +44,7 @@ pub(super) async fn whoami(State(p): State<Arc<Provider>>, headers: HeaderMap, j
 
 /// HTML本文・属性値の両方で安全なエスケープ（&<>"'）。
 /// mailer.rs::escape は &<> のみで引用符を含まないため属性値には不十分——ここでは別に持つ。
-fn esc(s: &str) -> String {
+pub(super) fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -249,6 +249,15 @@ pub(super) async fn user_detail(
         Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: is_admin", &e),
     };
     let is_self = account_id == viewer;
+    // 自分の passkey は消させない（セッションも失効し、すぐ締め出される）。
+    let passkey_table = if passkeys.is_empty() || is_self {
+        passkey_table
+    } else {
+        format!(
+            r#"{passkey_table}<form class="inline" method="post" action="{action}" onsubmit="return confirm('[[Remove all passkeys of this user? The account and profile are kept, and the user can register again as the same person. Sessions and tokens are also revoked.]]')"><button class="btn btn-danger" type="submit">[[Remove passkeys only]]</button></form>"#,
+            action = esc(&p.path(&format!("/admin/users/{account_id}/delete-passkeys"))),
+        )
+    };
 
     let disable_control = if cred.disabled {
         let delete_control = if is_admin_user {
@@ -390,6 +399,33 @@ pub(super) async fn user_enable(
         return server_error(Lang::from_headers(&headers), "user_enable", &e);
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
+}
+
+/// passkey だけを全部消す（アカウントと sub は残る）。
+pub(super) async fn user_delete_passkeys(
+    State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Path(account_id): Path<String>,
+) -> Response {
+    let lang = Lang::from_headers(&headers);
+    let (viewer, fs) = match require_admin_fs(&p, &jar, lang).await {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
+    if account_id == viewer {
+        return text(StatusCode::CONFLICT, lang, "[[You cannot remove your own passkeys here.]]");
+    }
+    let email = match crate::registration::find_email_by_account_id(fs, &account_id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return text(StatusCode::NOT_FOUND, lang, "[[User not found]]"),
+        Err(e) => return server_error(lang, "user_delete_passkeys: find_email", &e),
+    };
+    match crate::account_admin::delete_passkeys(fs, &viewer, &email).await {
+        Ok(Some(_)) => redirect(&p, &format!("/admin/users/{account_id}")),
+        Ok(None) => text(StatusCode::NOT_FOUND, lang, "[[User not found]]"),
+        Err(e) => server_error(lang, "user_delete_passkeys", &e),
+    }
 }
 
 pub(super) async fn user_delete(

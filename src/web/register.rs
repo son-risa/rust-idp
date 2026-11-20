@@ -212,7 +212,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
+const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
@@ -241,6 +241,11 @@ async function reg(){
   if(nm)body.name=nm;
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   if(!v.ok){msg.textContent=await errorText(v);return;}
+  const res=await v.json();
+  if(isIOS&&res.gpm){
+   msg.innerHTML='[[Registration complete. This passkey was saved in Google Password Manager, which may ask for a PIN at sign-in. We recommend also saving a passkey in Passwords (iCloud).]] <a href="'+ACCOUNT+'">[[Add a passkey in Passwords]]</a><br><a href="'+(AFTER||LOGIN)+'">'+(AFTER?'[[Continue]]':'[[Go to sign in]]')+'</a>';
+   return;
+  }
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
   msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to sign in]]</a>';
  }catch(e){msg.textContent=passkeyErrorText(e);}
@@ -253,6 +258,7 @@ async function reg(){
             .replace("__OPT__", &p.path("/signup/passkey/options"))
             .replace("__VER__", &p.path("/signup/passkey/verify"))
             .replace("__LOGIN__", &p.path("/"))
+            .replace("__ACCOUNT__", &p.path("/account"))
             .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or(""))),
     )
 }
@@ -591,11 +597,23 @@ pub(super) async fn register_passkey_options(
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
-    let exclude: Vec<serde_json::Value> = existing_creds
+    Json(creation_options(&p, &challenge, &account_id, &email, &existing_creds)).into_response()
+}
+
+/// navigator.credentials.create に渡す options。登録と、ログイン後の passkey の追加で同じものを使う。
+/// WebAuthn user.id は sub と同じ不透明な account_id にする（email を含めない）。
+pub(super) fn creation_options(
+    p: &Provider,
+    challenge: &str,
+    account_id: &str,
+    email: &str,
+    existing: &[crate::registration::Credential],
+) -> serde_json::Value {
+    let exclude: Vec<serde_json::Value> = existing
         .iter()
         .map(|c| serde_json::json!({"type":"public-key","id":c.credential_id}))
         .collect();
-    Json(serde_json::json!({
+    serde_json::json!({
         "challenge": challenge,
         "rp": { "id": p.rp_id(), "name": "rust-op" },
         "user": {
@@ -611,16 +629,15 @@ pub(super) async fn register_passkey_options(
         "attestation": "none",
         "timeout": 60000,
         "excludeCredentials": exclude,
-    }))
-    .into_response()
+    })
 }
 
 #[derive(serde::Deserialize)]
-struct RegResponse {
+pub(super) struct RegResponse {
     #[serde(rename = "clientDataJSON")]
-    client_data_json: String,
+    pub(super) client_data_json: String,
     #[serde(rename = "attestationObject")]
-    attestation_object: String,
+    pub(super) attestation_object: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -634,6 +651,7 @@ pub(super) struct RegVerifyReq {
 
 pub(super) async fn register_passkey_verify(
     State(p): State<Arc<Provider>>,
+    jar: CookieJar,
     Json(req): Json<RegVerifyReq>,
 ) -> Response {
     let fs = match &p.firestore {
@@ -669,7 +687,7 @@ pub(super) async fn register_passkey_verify(
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
     };
-    let (email2, kind, _, account_id) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
+    let (email2, kind, ceremony_uid, account_id) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
         Err(e) => {
@@ -677,7 +695,7 @@ pub(super) async fn register_passkey_verify(
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
-    if kind != crate::registration::ChallengeKind::Reg || email2 != email1 || account_id.is_empty() {
+    if kind != crate::registration::ChallengeKind::Reg || !ceremony_uid.is_empty() || email2 != email1 || account_id.is_empty() {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
     let outcome = match crate::webauthn::verify_registration(
@@ -703,9 +721,18 @@ pub(super) async fn register_passkey_verify(
             tracing::error!("save_profile after registration: {e}");
         }
     }
+    // 登録できたらログイン済みにする（メールの確認と passkey の作成で本人と確かめている）。
+    // 戻った先の RP で passkey をもう一度押さずに済み、すぐ別の passkey を足せる。
+    let disabled = matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if a.disabled);
+    let jar = if disabled { jar } else { start_session(&p, jar, account_id, now()).await };
     (
         StatusCode::CREATED,
-        Json(serde_json::json!({ "ok": true, "redirect": p.path("/") })),
+        jar,
+        Json(serde_json::json!({
+            "ok": true,
+            "redirect": p.path("/"),
+            "gpm": outcome.aaguid == crate::webauthn::GOOGLE_PASSWORD_MANAGER,
+        })),
     )
         .into_response()
 }
@@ -817,7 +844,7 @@ mod invite_tests {
             body["name"] = serde_json::json!(n);
         }
         let verify_req: RegVerifyReq = serde_json::from_value(body).unwrap();
-        register_passkey_verify(State(p.clone()), Json(verify_req)).await.status()
+        register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await.status()
     }
 
     #[tokio::test]
@@ -898,7 +925,7 @@ mod invite_tests {
             "response": { "clientDataJSON": "", "attestationObject": "" },
         }))
         .unwrap();
-        let verify = register_passkey_verify(State(p.clone()), Json(verify_req)).await;
+        let verify = register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await;
         assert_eq!(verify.status(), StatusCode::CONFLICT, "登録の前に取った options があっても、verify で断る");
         assert!(second_opts["challenge"].is_string());
 

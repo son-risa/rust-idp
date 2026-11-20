@@ -121,7 +121,7 @@ async fn register_test_account(p: &Arc<Provider>, email: &str) -> (SigningKey, V
         "response": { "clientDataJSON": cdj_b64, "attestationObject": att_b64 },
     }))
     .unwrap();
-    let verify = register::register_passkey_verify(State(p.clone()), Json(verify_req)).await;
+    let verify = register::register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await;
     let verify_status = verify.status();
     let verify_body = body_json(verify).await;
     assert_eq!(verify_status, StatusCode::CREATED, "register_passkey_verify failed: {verify_body:?}");
@@ -607,7 +607,7 @@ async fn a_passkey_signature_that_is_not_der_is_refused() {
     assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
 }
 
-/// 2 本目の passkey を、登録の検証を通さずに直に足す（足す口は別の PR で作る）。
+/// 2 本目の passkey を、登録の検証を通さずに直に足す。
 async fn add_passkey(p: &Arc<Provider>, email: &str, account_id: &str, cred_id: &[u8]) -> SigningKey {
     let key = SigningKey::generate();
     let (x, y) = ec_xy(&key);
@@ -718,4 +718,246 @@ async fn ciba_is_approved_with_either_passkey_but_not_anothers() {
     };
     assert_eq!(approve(b"other-credential", other_key).await, StatusCode::BAD_REQUEST);
     assert_eq!(approve(b"second-credential", key2).await, StatusCode::OK);
+}
+
+/* ===== 本人の passkey の画面（/account） ===== */
+
+async fn session_jar(p: &Arc<Provider>, account_id: &str, auth_time: u64) -> CookieJar {
+    let sid = uuid::Uuid::new_v4().to_string();
+    p.store.save_session(Session { sid: sid.clone(), account_id: account_id.into(), auth_time }).await;
+    CookieJar::default().add(Cookie::new(SID_COOKIE, sid))
+}
+
+/// 応答が張った sid cookie を、次のリクエストの cookie にする。
+fn jar_after(resp: &Response) -> CookieJar {
+    let set = resp.headers().get(header::SET_COOKIE).expect("cookie を張る").to_str().unwrap();
+    let c = Cookie::parse(set.to_string()).unwrap();
+    assert_eq!(c.name(), SID_COOKIE);
+    CookieJar::default().add(Cookie::new(SID_COOKIE, c.value().to_string()))
+}
+
+/// /account から passkey を 1 本足す。options か verify が断ったら、その応答を返す。
+async fn account_add(p: &Arc<Provider>, jar: &CookieJar, cred_id: &[u8]) -> Result<SigningKey, Response> {
+    let opts = account::add_options(State(p.clone()), jar.clone()).await;
+    if opts.status() != StatusCode::OK {
+        return Err(opts);
+    }
+    let challenge = body_json(opts).await["challenge"].as_str().unwrap().to_string();
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(&key, cred_id, &challenge, &p.origin(), &p.rp_id());
+    let req: account::AddVerifyReq =
+        serde_json::from_value(json!({ "response": { "clientDataJSON": cdj, "attestationObject": att } })).unwrap();
+    let v = account::add_verify(State(p.clone()), jar.clone(), Json(req)).await;
+    if v.status() != StatusCode::CREATED {
+        return Err(v);
+    }
+    Ok(key)
+}
+
+/// /account で passkey により本人と確かめる。
+async fn account_signin(p: &Arc<Provider>, jar: &CookieJar, cred_id: &[u8], key: &SigningKey, count: u32, account_id: &str) -> Response {
+    let opts = body_json(account::signin_options(State(p.clone()), jar.clone()).await).await;
+    let challenge = opts["challenge"].as_str().unwrap().to_string();
+    let (ad, sig, cdj) = make_auth_ceremony(key, count, &challenge, &p.origin(), &p.rp_id(), false);
+    let req: AuthVerifyReq = serde_json::from_value(json!({
+        "id": crate::webauthn::b64e(cred_id),
+        "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig, "userHandle": crate::webauthn::b64e(account_id.as_bytes()) },
+    }))
+    .unwrap();
+    account::signin_verify(State(p.clone()), jar.clone(), Json(req)).await
+}
+
+async fn delete_via_account(p: &Arc<Provider>, jar: &CookieJar, cred_id: &[u8]) -> Response {
+    let req: account::DeleteReq = serde_json::from_value(json!({ "id": crate::webauthn::b64e(cred_id) })).unwrap();
+    account::delete_passkey(State(p.clone()), jar.clone(), Json(req)).await
+}
+
+async fn error_body(r: Response) -> (StatusCode, String) {
+    let s = r.status();
+    (s, body_text(r).await)
+}
+
+/// 登録の直後はログイン済み。そのまま /account で 2 本目を足せ、足した passkey でログインできる。
+#[tokio::test]
+async fn a_passkey_added_on_the_account_page_signs_in() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+
+    let key2 = account_add(&p, &jar, b"added-on-account-page").await.unwrap_or_else(|r| panic!("{}", r.status()));
+    let (uid, r) = email_login_with_credential(&p, &email, b"added-on-account-page", &key2, 1, |s| s).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id.as_deref(), Some(account_id.as_str()));
+
+    let fs = p.firestore.as_ref().unwrap();
+    let audit = fs.query_eq("auditLog", "action", "add_passkey").await.unwrap();
+    assert_eq!(audit.len(), 1);
+
+    // 同じ passkey は 2 度足せない（excludeCredentials に入る）。
+    let opts = body_json(account::add_options(State(p.clone()), jar.clone()).await).await;
+    assert_eq!(opts["excludeCredentials"].as_array().unwrap().len(), 2);
+}
+
+/// 登録の検証が成功すると sid cookie を張る（そのまま /account で足せる）。
+#[tokio::test]
+async fn registration_signs_the_user_in() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let token = crate::registration::create_email_challenge(fs, &email).await.unwrap();
+    let opts_req: register::RegPkOptionsReq = serde_json::from_value(json!({ "token": token })).unwrap();
+    let opts = body_json(register::register_passkey_options(State(p.clone()), Json(opts_req)).await).await;
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(&key, b"first", opts["challenge"].as_str().unwrap(), &p.origin(), &p.rp_id());
+    let req: register::RegVerifyReq = serde_json::from_value(json!({
+        "token": token, "response": { "clientDataJSON": cdj, "attestationObject": att },
+    }))
+    .unwrap();
+    let r = register::register_passkey_verify(State(p.clone()), CookieJar::default(), Json(req)).await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let jar = jar_after(&r);
+    assert_eq!(body_json(r).await["gpm"], json!(false));
+    assert!(account_add(&p, &jar, b"second").await.is_ok());
+}
+
+/// ログインしていなければ足せない。本人と確かめてから時間が経っていれば、もう一度確かめるまで足せない。
+#[tokio::test]
+async fn adding_needs_a_recent_confirmation() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key, cred, account_id) = register_test_account(&p, &email).await;
+
+    let (s, b) = error_body(account_add(&p, &CookieJar::default(), b"x").await.err().unwrap()).await;
+    assert_eq!((s, b.as_str()), (StatusCode::UNAUTHORIZED, "sign-in required"));
+
+    let stale = session_jar(&p, &account_id, now() - 11 * 60).await;
+    let (s, b) = error_body(account_add(&p, &stale, b"x").await.err().unwrap()).await;
+    assert_eq!((s, b.as_str()), (StatusCode::UNAUTHORIZED, "confirmation required"));
+
+    // 確かめた後は新しいセッションで足せる。前のセッションは消える。
+    let r = account_signin(&p, &stale, &cred, &key, 1, &account_id).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let fresh = jar_after(&r);
+    let old_sid = stale.get(SID_COOKIE).unwrap().value().to_string();
+    assert!(p.store.get_session(&old_sid).await.is_none(), "前のセッションが残った");
+    assert!(account_add(&p, &fresh, b"after-confirm").await.is_ok());
+}
+
+/// 他人の passkey では本人の確かめにならない（ログインしている人の passkey に絞り、持ち主を確かめる）。
+#[tokio::test]
+async fn confirmation_with_another_accounts_passkey_fails() {
+    let p = test_provider().await;
+    let me = format!("me-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, my_id) = register_test_account(&p, &me).await;
+    let other = format!("other-{}@example.com", uuid::Uuid::new_v4());
+    let fs = p.firestore.as_ref().unwrap();
+    let other_id = uuid::Uuid::new_v4().to_string();
+    let other_key = SigningKey::generate();
+    let (x, y) = ec_xy(&other_key);
+    let outcome = crate::webauthn::RegOutcome {
+        credential_id: crate::webauthn::b64e(b"others"),
+        pub_x: crate::webauthn::b64e(&x),
+        pub_y: crate::webauthn::b64e(&y),
+        sign_count: 0,
+        aaguid: String::new(),
+    };
+    crate::registration::save_credential(fs, &other, &other_id, &outcome).await.unwrap();
+
+    let stale = session_jar(&p, &my_id, now() - 11 * 60).await;
+    // 他人の passkey の id を名乗り、自分の account_id を userHandle に入れる。
+    let r = account_signin(&p, &stale, b"others", &other_key, 1, &my_id).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    // 他人の passkey で確かめると、その他人のセッションになる（自分のアカウントに足す権限は得ない）。
+    let r = account_signin(&p, &stale, b"others", &other_key, 1, &other_id).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let jar = jar_after(&r);
+    account_add(&p, &jar, b"added-by-other").await.unwrap();
+    let mine = crate::registration::get_account(fs, &me).await.unwrap().unwrap();
+    assert_eq!(crate::registration::list_credentials(fs, &mine).await.unwrap().len(), 1);
+}
+
+/// 本人は passkey を消せる。最後の 1 本と、他人の passkey は消せない。
+#[tokio::test]
+async fn removing_passkeys_on_the_account_page() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key1, cred1, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+    let key2 = account_add(&p, &jar, b"second").await.unwrap_or_else(|r| panic!("{}", r.status()));
+
+    let other = format!("other-{}@example.com", uuid::Uuid::new_v4());
+    add_passkey(&p, &other, &uuid::Uuid::new_v4().to_string(), b"others-second").await;
+    let (s, _) = error_body(delete_via_account(&p, &jar, b"others-second").await).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    assert_eq!(delete_via_account(&p, &jar, &cred1).await.status(), StatusCode::OK);
+    let (_, r) = email_login_with_credential(&p, &email, &cred1, &key1, 1, |s| s).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST, "消した passkey で入れた");
+    let (_, r) = email_login_with_credential(&p, &email, b"second", &key2, 1, |s| s).await;
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let (s, b) = error_body(delete_via_account(&p, &jar, b"second").await).await;
+    assert_eq!((s, b.as_str()), (StatusCode::CONFLICT, "last passkey"));
+
+    // 前の版が読む古いフィールドは、残った passkey を指す。
+    let fs = p.firestore.as_ref().unwrap();
+    let f = fs.get_doc("accounts", &email).await.unwrap().unwrap();
+    assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(crate::webauthn::b64e(b"second").as_str()));
+}
+
+/// 登録の challenge では /account に足せず、/account の challenge では登録できない。
+#[tokio::test]
+async fn signup_and_account_challenges_are_not_interchangeable() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+
+    let signup_challenge =
+        crate::registration::create_webauthn_challenge(fs, &email, crate::registration::ChallengeKind::Reg, "", &account_id).await.unwrap();
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(&key, b"via-signup", &signup_challenge, &p.origin(), &p.rp_id());
+    let req: account::AddVerifyReq =
+        serde_json::from_value(json!({ "response": { "clientDataJSON": cdj, "attestationObject": att } })).unwrap();
+    let (s, b) = error_body(account::add_verify(State(p.clone()), jar.clone(), Json(req)).await).await;
+    assert_eq!((s, b.as_str()), (StatusCode::BAD_REQUEST, "challenge context mismatch"));
+
+    let token = crate::registration::create_email_challenge(fs, &email).await.unwrap();
+    let account_challenge = body_json(account::add_options(State(p.clone()), jar.clone()).await).await["challenge"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (att, cdj) = make_reg_ceremony(&key, b"via-account", &account_challenge, &p.origin(), &p.rp_id());
+    let req: register::RegVerifyReq = serde_json::from_value(json!({
+        "token": token, "response": { "clientDataJSON": cdj, "attestationObject": att },
+    }))
+    .unwrap();
+    let r = register::register_passkey_verify(State(p.clone()), CookieJar::default(), Json(req)).await;
+    assert_ne!(r.status(), StatusCode::CREATED);
+}
+
+/// 管理画面の「パスキーだけ削除」: passkey とセッションは消え、アカウントは残り、同じ account_id で登録し直せる。
+#[tokio::test]
+async fn admin_removes_passkeys_only_and_the_user_registers_again_as_the_same_person() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key1, cred1, account_id) = register_test_account(&p, &email).await;
+    add_passkey(&p, &email, &account_id, b"second").await;
+    let jar = session_jar(&p, &account_id, now()).await;
+
+    assert_eq!(crate::account_admin::delete_passkeys(fs, "acc-admin", &email).await.unwrap(), Some(2));
+    let sid = jar.get(SID_COOKIE).unwrap().value().to_string();
+    assert!(p.store.get_session(&sid).await.is_none(), "セッションが残った");
+    let (_, r) = email_login_with_credential(&p, &email, &cred1, &key1, 1, |s| s).await;
+    assert_ne!(r.status(), StatusCode::OK);
+    let a = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
+    assert_eq!(a.account_id, account_id);
+    let f = fs.get_doc("accounts", &email).await.unwrap().unwrap();
+    assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(""), "前の版が読むフィールドも空にする");
+
+    let (_, _, again) = register_test_account(&p, &email).await;
+    assert_eq!(again, account_id);
 }

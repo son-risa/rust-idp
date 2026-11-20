@@ -393,15 +393,6 @@ pub async fn save_credential(fs: &Firestore, email: &str, account_id: &str, c: &
         created_at: now(),
         last_used_at: None,
     };
-    // 古いフィールド（前の版が読む形）。新しい版は印を見て読まない。
-    let mirror = |extra: serde_json::Value| {
-        let mut f = credential_fields(email, account_id, &cred);
-        f["credentialId"] = firestore::s(&cred.credential_id);
-        for (k, v) in extra.as_object().unwrap() {
-            f[k] = v.clone();
-        }
-        f
-    };
     match get_account(fs, email).await? {
         Some(a) => {
             if a.account_id != account_id {
@@ -415,15 +406,17 @@ pub async fn save_credential(fs: &Firestore, email: &str, account_id: &str, c: &
             if had_none {
                 // passkey を全部消して登録し直したとき。古いフィールドを新しい 1 本に向ける
                 // （前の版へ戻したとき、消した passkey が生き返らず、新しい passkey で入れるように）。
-                // createdAt はアカウントの登録日時なので書き換えない。
-                let mut f = mirror(json!({}));
-                f.as_object_mut().unwrap().retain(|k, _| ["credentialId", "pubX", "pubY", "signCount", "aaguid"].contains(&k.as_str()));
-                fs.update_fields("accounts", email, f).await?;
+                point_mirror(fs, email, Some(&cred)).await?;
             }
         }
         None => {
             // アカウントを先に作る（同じ email の登録が重なったら、負けた側は何も残さない）。
-            let f = mirror(json!({ "verified": firestore::b(true), "disabled": firestore::b(false), MIGRATED: firestore::b(true) }));
+            // 古いフィールド（前の版が読む形）も持たせる。新しい版は印を見て読まない。
+            let mut f = credential_fields(email, account_id, &cred);
+            f["credentialId"] = firestore::s(&cred.credential_id);
+            f["verified"] = firestore::b(true);
+            f["disabled"] = firestore::b(false);
+            f[MIGRATED] = firestore::b(true);
             if !fs.create_if_absent("accounts", email, f).await? {
                 return Err("account created concurrently".into());
             }
@@ -442,6 +435,68 @@ pub async fn save_credential(fs: &Firestore, email: &str, account_id: &str, c: &
         tracing::error!("accountsByUuid index write failed for account_id={account_id}: {e}");
     }
     Ok(())
+}
+
+/// 古いフィールド（前の版が読む 1 本）を c に向ける。None なら空にする（前の版へ戻しても、
+/// 消した passkey で入れないように）。createdAt はアカウントの登録日時なので書き換えない。
+async fn point_mirror(fs: &Firestore, email: &str, c: Option<&Credential>) -> Result<(), String> {
+    let (id, x, y, count, aaguid) = match c {
+        Some(c) => (c.credential_id.as_str(), c.pub_x.as_str(), c.pub_y.as_str(), c.sign_count, c.aaguid.as_str()),
+        None => ("", "", "", 0, ""),
+    };
+    fs.update_fields(
+        "accounts",
+        email,
+        json!({
+            "credentialId": firestore::s(id),
+            "pubX": firestore::s(x),
+            "pubY": firestore::s(y),
+            "signCount": firestore::int(count as u64),
+            "aaguid": firestore::s(aaguid),
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RemoveOutcome {
+    Removed,
+    NotFound,
+    /// 最後の 1 本は本人の操作では消さない（入る手段が無くなる）。
+    LastOne,
+}
+
+/// 本人が passkey を 1 本消す。
+pub async fn remove_credential(fs: &Firestore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
+    migrate_account(fs, email).await?;
+    let Some(a) = get_account(fs, email).await? else {
+        return Ok(RemoveOutcome::NotFound);
+    };
+    let creds = list_credentials(fs, &a).await?;
+    if !creds.iter().any(|c| c.credential_id == credential_id) {
+        return Ok(RemoveOutcome::NotFound);
+    }
+    if creds.len() == 1 {
+        return Ok(RemoveOutcome::LastOne);
+    }
+    fs.delete_doc("credentials", credential_id).await?;
+    let mirrored = fs.get_doc("accounts", email).await?;
+    if mirrored.as_ref().and_then(|f| firestore::field_str(f, "credentialId")) == Some(credential_id) {
+        point_mirror(fs, email, creds.iter().find(|c| c.credential_id != credential_id)).await?;
+    }
+    Ok(RemoveOutcome::Removed)
+}
+
+/// passkey を全部消し、アカウントは残す（同じ accountId のまま登録し直せる）。消した本数を返す。
+/// アカウントが無ければ None。
+pub async fn remove_all_credentials(fs: &Firestore, email: &str) -> Result<Option<usize>, String> {
+    migrate_account(fs, email).await?;
+    let Some(a) = get_account(fs, email).await? else {
+        return Ok(None);
+    };
+    let n = delete_all_credentials(fs, &a).await?;
+    point_mirror(fs, email, None).await?;
+    Ok(Some(n))
 }
 
 /// ログインで使った passkey の signCount と lastUsedAt を書く。文書が在るときだけ書く
@@ -503,14 +558,15 @@ pub async fn sole_credential(fs: &Firestore, email: &str) -> Option<Credential> 
 
 /// アカウントの passkey を全部消す（アカウントを消すとき）。
 /// 印の有無に関わらず accountId で引く（写し終えて印を付ける前に止まったアカウントの分も消す）。
-pub async fn delete_all_credentials(fs: &Firestore, account: &Account) -> Result<(), String> {
+pub async fn delete_all_credentials(fs: &Firestore, account: &Account) -> Result<usize, String> {
     if account.account_id.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
-    for (id, _) in fs.query_eq("credentials", "accountId", &account.account_id).await? {
-        fs.delete_doc("credentials", &id).await?;
+    let rows = fs.query_eq("credentials", "accountId", &account.account_id).await?;
+    for (id, _) in &rows {
+        fs.delete_doc("credentials", id).await?;
     }
-    Ok(())
+    Ok(rows.len())
 }
 
 /// disabled フラグだけを部分更新する（全体置換にしない。並行するログインの signCount の書き込みと
@@ -938,4 +994,20 @@ mod tests {
         assert!(has_passkey(&fs, "broken@example.com").await.unwrap());
     }
 
+    /// 移す前のアカウントでも、本人の削除は最後の 1 本を残し、管理者の「パスキーだけ削除」は古いフィールドの
+    /// 1 本まで消す（印を付けないまま消すと、古いフィールドから生き返る）。
+    #[tokio::test]
+    async fn removing_passkeys_of_an_old_shape_account() {
+        let fs = fs().await;
+        legacy_account(&fs, "old@example.com", "acc-old", "C-OLD").await;
+        assert_eq!(remove_credential(&fs, "old@example.com", "C-OLD").await.unwrap(), RemoveOutcome::LastOne);
+        assert_eq!(remove_credential(&fs, "old@example.com", "C-NONE").await.unwrap(), RemoveOutcome::NotFound);
+        assert_eq!(ids(&fs, "old@example.com").await, ["C-OLD"]);
+
+        legacy_account(&fs, "old2@example.com", "acc-old2", "C-OLD2").await;
+        assert_eq!(remove_all_credentials(&fs, "old2@example.com").await.unwrap(), Some(1));
+        assert!(ids(&fs, "old2@example.com").await.is_empty());
+        assert!(!has_passkey(&fs, "old2@example.com").await.unwrap());
+        assert_eq!(remove_all_credentials(&fs, "none@example.com").await.unwrap(), None);
+    }
 }

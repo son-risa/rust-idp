@@ -128,6 +128,34 @@ pub async fn delete_account(fs: &Firestore, actor: &str, email: &str) -> Result<
     Ok(DeleteOutcome::Deleted(counts))
 }
 
+/// passkey だけを全部消す。アカウント（accountId＝sub）とプロフィールは残すので、登録し直しても
+/// 同じ人のまま。端末をなくしたときなどに使うので、セッションとトークンも失効させる。
+/// アカウントが無ければ None。
+pub async fn delete_passkeys(fs: &Firestore, actor: &str, email: &str) -> Result<Option<usize>, String> {
+    let Some(a) = registration::get_account(fs, email).await? else {
+        return Ok(None);
+    };
+    if a.account_id.is_empty() {
+        return Err(format!("{email}: accountId missing"));
+    }
+    let Some(n) = registration::remove_all_credentials(fs, email).await? else {
+        return Ok(None);
+    };
+    let counts = revoke_all(fs, &a.account_id).await;
+    audit_log::record(
+        fs,
+        actor,
+        "delete_passkeys",
+        &a.account_id,
+        &format!(
+            "email={email} passkeys={n} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
+            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors
+        ),
+    )
+    .await;
+    Ok(Some(n))
+}
+
 /// account_id に紐づく sessions/accessTokens/refreshTokens を検索し削除する。
 /// コレクション単位で query_eq 自体が失敗しても他のコレクションの失効は続ける
 /// （1種類の障害で残りを諦めない）。失敗したコレクションは query_errors に記録し、
