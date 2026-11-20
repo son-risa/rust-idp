@@ -610,10 +610,10 @@ async fn assertion_result(State(st): State<Arc<FidoState>>, body: String) -> Res
         return failed("type must be 'public-key'");
     }
     // userHandle は任意。存在するなら null か文字列のみ（F-21）。
-    if let Some(uh) = m.get("response").and_then(|r| r.as_object()).and_then(|r| r.get("userHandle")) {
-        if !uh.is_null() && !uh.is_string() {
-            return failed("userHandle must be a string or null");
-        }
+    if let Some(uh) = m.get("response").and_then(|r| r.as_object()).and_then(|r| r.get("userHandle"))
+        && !uh.is_null() && !uh.is_string()
+    {
+        return failed("userHandle must be a string or null");
     }
     let client_data_b64 = match resp_string(&m, "clientDataJSON") {
         Ok(s) => s,
