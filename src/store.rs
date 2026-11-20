@@ -517,6 +517,7 @@ mod tests {
             account_id: None,
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
         let inter_exp = s.interactions.lock().unwrap().get("U1").unwrap().expires_at;
@@ -591,6 +592,7 @@ mod tests {
                     account_id: Some("a".into()),
                     auth_time: None,
                     request_uri: None,
+                    browser_binding: String::new(),
                 },
                 now_secs().saturating_sub(1),
             ),
@@ -607,6 +609,7 @@ mod tests {
             account_id: Some("a".into()),
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
         assert!(s.consume_interaction("U1").await); // 初回: 消費成功

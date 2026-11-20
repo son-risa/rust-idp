@@ -36,6 +36,39 @@ mod flow_tests;
 
 const SID_COOKIE: &str = "sid";
 
+/// ログインを始めたブラウザの印。`/authorize` が interaction ごとに張り、login の完了と resume で照合する。
+/// 照合が無いと、攻撃者が自分で始めた `/login/{uid}` を被害者に踏ませ、被害者の認証の直後に resume を取って
+/// 被害者として RP に入れる。名前を uid ごとに分けるのは、別のタブで並行して始めたログインを上書きしないため。
+fn browser_cookie_name(uid: &str) -> String {
+    format!("ix_{uid}")
+}
+
+/// cookie に入れる値と、interaction に残すそのハッシュ。
+fn new_browser_binding() -> (String, String) {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).expect("OS の乱数源");
+    let secret = crate::es256::b64url_encode(buf);
+    let hash = browser_binding_hash(&secret);
+    (secret, hash)
+}
+
+fn browser_binding_hash(secret: &str) -> String {
+    use sha2::Digest;
+    crate::es256::b64url_encode(sha2::Sha256::digest(secret.as_bytes()))
+}
+
+/// このブラウザがその interaction を始めたブラウザか。
+fn started_in_this_browser(jar: &CookieJar, i: &crate::model::Interaction) -> bool {
+    // この照合を入れる前に作られた interaction は印を持たない。最大 1 時間（INTERACTION_TTL_SECS）で消えるので通す。
+    if i.browser_binding.is_empty() {
+        return true;
+    }
+    jar.get(&browser_cookie_name(&i.uid)).is_some_and(|c| {
+        use subtle::ConstantTimeEq;
+        bool::from(browser_binding_hash(c.value()).as_bytes().ct_eq(i.browser_binding.as_bytes()))
+    })
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
@@ -300,6 +333,7 @@ const SERVER_ERRORS={
  'account disabled':'[[This account is disabled.]]',
  'account needs re-registration':'[[This account needs to be registered again.]]',
  'interaction not found':'[[This sign-in has expired. Please start again.]]',
+ 'started in another browser':'[[This sign-in was started in another browser. Please start again from the app.]]',
  'invalid or expired token':'[[This link has expired or has already been used.]]',
  'already registered':'[[This email address is already registered. Please sign in.]]',
  'registration failed':'[[The passkey could not be created.]]',

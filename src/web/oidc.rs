@@ -192,6 +192,7 @@ pub(super) async fn authorize(
 
     // 未ログイン or 再認証要求 → interaction を作って login 画面へ。
     let uid = uuid::Uuid::new_v4().to_string();
+    let (browser_secret, browser_binding) = new_browser_binding();
     p.store
         .save_interaction(Interaction {
             uid: uid.clone(),
@@ -199,17 +200,27 @@ pub(super) async fn authorize(
             account_id: None,
             auth_time: None,
             request_uri: par_request_uri,
+            browser_binding,
         })
         .await;
+    let browser_cookie = Cookie::build((browser_cookie_name(&uid), browser_secret))
+        .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        // 途中でやめたログインの cookie が溜まらないよう、interaction と同じだけで消える。
+        .max_age(time::Duration::seconds(crate::store::INTERACTION_TTL_SECS as i64))
+        .build();
     // client_id を URL に残す: 期限切れの後は interaction が掃除されて client を引けないが、
     // ログイン画面はその client の入口（initiate_login_uri）へ送り直したい。
     let q = serde_urlencoded::to_string([("client_id", &req.client.client_id)]).unwrap_or_default();
-    Redirect::to(&p.path(&format!("/login/{uid}?{q}"))).into_response()
+    (jar.add(browser_cookie), Redirect::to(&p.path(&format!("/login/{uid}?{q}")))).into_response()
 }
 
 pub(super) async fn authorize_resume(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
@@ -222,6 +233,10 @@ pub(super) async fn authorize_resume(
         Some(i) => i,
         None => return expired(),
     };
+    if !started_in_this_browser(&jar, &interaction) {
+        tracing::warn!(event = "resume_from_another_browser");
+        return plain_error(&localize("[[This sign-in was started in another browser. Please start again from the app.]]", lang));
+    }
     let account_id = match interaction.account_id {
         Some(a) => a,
         None => return expired(),
@@ -248,7 +263,8 @@ pub(super) async fn authorize_resume(
     if !p.store.consume_interaction(uid).await {
         return expired();
     }
-    issue_code(&p, &req, account_id, interaction.auth_time).await
+    let done = Cookie::build(browser_cookie_name(uid)).path("/").build();
+    (jar.remove(done), issue_code(&p, &req, account_id, interaction.auth_time).await).into_response()
 }
 
 /// ユーザーがログイン画面で「キャンセル」した場合に、登録済み redirect_uri へ

@@ -10,6 +10,8 @@ publish = false
 [dependencies]
 axum = "0.8"
 axum-extra = { version = "0.12", features = ["cookie"] }
+# Cookie の寿命（max_age）を書くため。axum-extra の cookie が引いているのと同じ版。
+time = { version = "0.3", default-features = false }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

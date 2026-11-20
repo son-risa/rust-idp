@@ -161,6 +161,7 @@ async fn login_page(h: HeaderMap) -> String {
             account_id: None,
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
     let q: login::LoginQuery = serde_urlencoded::from_str("").unwrap();
@@ -746,7 +747,7 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
         "最初からやり直してください",
         |h| async move {
             let q = HashMap::from([("uid".to_string(), "missing".to_string())]);
-            body_of(oidc::authorize_resume(State(plain()), h, Query(q)).await).await
+            body_of(oidc::authorize_resume(State(plain()), h, CookieJar::default(), Query(q)).await).await
         },
     )
     .await;

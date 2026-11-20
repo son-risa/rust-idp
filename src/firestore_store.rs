@@ -80,6 +80,7 @@ impl Store for FirestoreStore {
     async fn save_interaction(&self, i: Interaction) {
         let mut f = json!({
             "rawQuery": fs_h::s(&i.raw_query),
+            "browserBinding": fs_h::s(&i.browser_binding),
             "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + INTERACTION_TTL)),
         });
         if let Some(a) = &i.account_id {
@@ -105,6 +106,7 @@ impl Store for FirestoreStore {
             account_id: fs_h::field_str(&f, "accountId").map(str::to_string),
             auth_time: fs_h::field_u64(&f, "authTime"),
             request_uri: fs_h::field_str(&f, "requestUri").map(str::to_string),
+            browser_binding: fs_h::field_str(&f, "browserBinding").unwrap_or("").to_string(),
         })
     }
 
@@ -672,7 +674,7 @@ mod tests {
     #[tokio::test]
     async fn an_interaction_is_consumed_once_even_when_two_resumes_race() {
         let s = store().await;
-        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None, browser_binding: String::new() };
         s.save_interaction(i).await;
         let (a, b) = tokio::join!(s.consume_interaction("U1"), s.consume_interaction("U1"));
         assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
@@ -700,7 +702,7 @@ mod tests {
     async fn consuming_an_interaction_fails_closed_when_the_store_errs() {
         for method in ["GET", "DELETE"] {
             let (s, fake) = store_and_fake().await;
-            let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+            let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None, browser_binding: String::new() };
             s.save_interaction(i).await;
             fake.fail_once(method, "interactions", Some("U1"));
             assert!(!s.consume_interaction("U1").await, "{method} の 503 で消費が通ってしまった");
@@ -712,7 +714,7 @@ mod tests {
     #[tokio::test]
     async fn consuming_an_interaction_that_another_request_deleted_first_fails() {
         let (s, fake) = store_and_fake().await;
-        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None };
+        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None, browser_binding: String::new() };
         s.save_interaction(i).await;
         fake.fail_once_with("DELETE", "interactions", Some("U1"), axum::http::StatusCode::NOT_FOUND);
         assert!(!s.consume_interaction("U1").await, "削除の 404 で消費が通ってしまった");
