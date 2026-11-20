@@ -19,6 +19,20 @@ pub struct RegOutcome {
     pub aaguid: String,
 }
 
+/// よく使われる保存先の AAGUID と名前（管理画面の表示用）。attestation が none の認証器は全部 0 で、名前は出ない。
+pub const GOOGLE_PASSWORD_MANAGER: &str = "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4";
+
+pub fn authenticator_name(aaguid: &str) -> Option<&'static str> {
+    Some(match aaguid {
+        GOOGLE_PASSWORD_MANAGER => "Google Password Manager",
+        "fbfc3007-154e-4ecc-8c0b-6e020557d7bd" => "iCloud Keychain",
+        "adce0002-35bc-c60a-648b-0b25f1f05503" => "Chrome on Mac",
+        "08987058-cadc-4b81-b6e1-30de50dcbe96" | "9ddd1817-af5a-4672-a2b9-3e3dd95000a9" | "6028b017-b1d4-4c02-b4b3-afcdafc96bb2" => "Windows Hello",
+        "bada5566-a7aa-401f-bd96-45619a55120d" => "1Password",
+        _ => return None,
+    })
+}
+
 pub fn b64e(b: &[u8]) -> String {
     b64url_encode(b)
 }

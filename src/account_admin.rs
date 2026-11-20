@@ -41,8 +41,8 @@ pub enum EnableOutcome {
 
 /// actor は監査ログへ記録する呼び出し主体（CLI実行なら"cli"）。
 pub async fn disable_account(fs: &Firestore, actor: &str, email: &str) -> Result<DisableOutcome, String> {
-    let cred = match registration::get_credential(fs, email).await? {
-        Some(c) => c,
+    let cred = match registration::get_account(fs, email).await? {
+        Some(a) => a,
         None => return Ok(DisableOutcome::NotFound),
     };
     let already_disabled = cred.disabled;
@@ -71,8 +71,8 @@ pub async fn disable_account(fs: &Firestore, actor: &str, email: &str) -> Result
 /// AlreadyEnabled(no-op)でも disable_account 同様に必ず監査ログを残す
 /// （「べき等な管理操作の再実行」を disable/enable で対称に扱う）。
 pub async fn enable_account(fs: &Firestore, actor: &str, email: &str) -> Result<EnableOutcome, String> {
-    let cred = match registration::get_credential(fs, email).await? {
-        Some(c) => c,
+    let cred = match registration::get_account(fs, email).await? {
+        Some(a) => a,
         None => return Ok(EnableOutcome::NotFound),
     };
     let already_enabled = !cred.disabled;
@@ -98,17 +98,18 @@ pub enum DeleteOutcome {
     NotFound,
 }
 
-/// 凍結済みのアカウントを完全に消す。accounts・accountsByUuid・profiles と、
+/// 凍結済みのアカウントを完全に消す。accounts・credentials・accountsByUuid・profiles と、
 /// セッション・トークンを消し、監査ログを残す。
 pub async fn delete_account(fs: &Firestore, actor: &str, email: &str) -> Result<DeleteOutcome, String> {
-    let cred = match registration::get_credential(fs, email).await? {
-        Some(c) => c,
+    let cred = match registration::get_account(fs, email).await? {
+        Some(a) => a,
         None => return Ok(DeleteOutcome::NotFound),
     };
     if !cred.disabled {
         return Ok(DeleteOutcome::NotDisabled);
     }
     let counts = revoke_all(fs, &cred.account_id).await;
+    registration::delete_all_credentials(fs, &cred).await?;
     fs.delete_doc("fcmTokens", &cred.account_id).await?;
     fs.delete_doc("profiles", &cred.account_id).await?;
     fs.delete_doc("accountsByUuid", &cred.account_id).await?;
@@ -188,7 +189,7 @@ mod tests {
 
     async fn register(fs: &Firestore, email: &str, account_id: &str) {
         let outcome = crate::webauthn::RegOutcome {
-            credential_id: format!("cred-{account_id}"),
+            credential_id: format!("cred-{}", uuid::Uuid::new_v4().simple()),
             pub_x: "x".into(),
             pub_y: "y".into(),
             sign_count: 0,
@@ -260,7 +261,7 @@ mod tests {
             })
         );
 
-        let cred = registration::get_credential(&fs, "victim@example.com").await.unwrap().unwrap();
+        let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
         assert!(cred.disabled);
         assert!(store.get_session("sid-1").await.is_none());
         assert!(store.get_access_token("at-victim").await.unwrap().is_none());
@@ -287,7 +288,7 @@ mod tests {
 
         // 機種変更等で passkey を作り直しても凍結は解除されない。
         register(&fs, "victim@example.com", "acc-victim").await;
-        let cred = registration::get_credential(&fs, "victim@example.com").await.unwrap().unwrap();
+        let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
         assert!(cred.disabled, "再登録で凍結が解除されてはならない");
     }
 
@@ -303,7 +304,7 @@ mod tests {
 
         disable_account(&fs, "cli", "victim@example.com").await.unwrap();
         assert_eq!(enable_account(&fs, "cli", "victim@example.com").await.unwrap(), EnableOutcome::Enabled);
-        let cred = registration::get_credential(&fs, "victim@example.com").await.unwrap().unwrap();
+        let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
         assert!(!cred.disabled);
 
         // AlreadyEnabled の no-op でも監査ログは記録される(disable側との対称性)。
@@ -317,7 +318,7 @@ mod tests {
         register(&fs, "victim@example.com", "acc-victim").await;
         let out = delete_account(&fs, "cli", "victim@example.com").await.unwrap();
         assert_eq!(out, DeleteOutcome::NotDisabled);
-        assert!(registration::get_credential(&fs, "victim@example.com").await.unwrap().is_some());
+        assert!(registration::get_account(&fs, "victim@example.com").await.unwrap().is_some());
     }
 
     #[tokio::test]

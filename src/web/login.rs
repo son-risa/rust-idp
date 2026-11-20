@@ -163,12 +163,18 @@ pub(super) async fn login_passkey_options(
     let (allow, chal_email) = if email.is_empty() {
         (serde_json::json!([]), String::new())
     } else {
-        match crate::registration::get_credential(fs, &email).await {
-            Ok(Some(c)) => (
-                serde_json::json!([{ "type": "public-key", "id": c.credential_id, "transports": ["internal", "hybrid"] }]),
-                email.clone(),
-            ),
-            _ => (serde_json::json!([]), String::new()),
+        let creds = match crate::registration::get_account(fs, &email).await {
+            Ok(Some(a)) => crate::registration::list_credentials(fs, &a).await.unwrap_or_default(),
+            _ => vec![],
+        };
+        if creds.is_empty() {
+            (serde_json::json!([]), String::new())
+        } else {
+            let allow: Vec<_> = creds
+                .iter()
+                .map(|c| serde_json::json!({ "type": "public-key", "id": c.credential_id, "transports": ["internal", "hybrid"] }))
+                .collect();
+            (serde_json::json!(allow), email.clone())
         }
     };
     let challenge = match crate::registration::create_webauthn_challenge(fs, &chal_email, crate::registration::ChallengeKind::Auth, &uid, "").await {
@@ -236,13 +242,18 @@ pub(super) async fn login_passkey_verify(
     if email.is_empty() {
         return (StatusCode::BAD_REQUEST, "cannot resolve user").into_response();
     }
-    let cred = match crate::registration::get_credential(fs, &email).await {
-        Ok(Some(c)) => c,
+    let account = match crate::registration::get_account(fs, &email).await {
+        Ok(Some(a)) => a,
         _ => return (StatusCode::BAD_REQUEST, "credential not found").into_response(),
     };
-    if cred.credential_id != req.id {
-        return (StatusCode::BAD_REQUEST, "credential id mismatch").into_response();
-    }
+    let cred = match crate::registration::find_credential(fs, &account, &req.id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return (StatusCode::BAD_REQUEST, "credential id mismatch").into_response(),
+        Err(e) => {
+            tracing::error!("find_credential: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
     let origin = p.origin();
     let rp_id = p.rp_id();
     match crate::webauthn::verify_authentication(
@@ -258,7 +269,9 @@ pub(super) async fn login_passkey_verify(
         false, // 通常ログインは UP のみ（従来通り）
     ) {
         Ok(new_count) => {
-            let _ = crate::registration::update_sign_count(fs, &email, new_count).await;
+            if let Err(e) = crate::registration::record_use(fs, &account, &cred, new_count).await {
+                tracing::warn!(event = "passkey_use_not_recorded", "{e}");
+            }
         }
         Err(e) => {
             tracing::warn!(event = "login_failed", method = "passkey", "webauthn auth failed: {e}");
@@ -268,15 +281,15 @@ pub(super) async fn login_passkey_verify(
     // disabled チェックは署名検証の後: これより前に判定を分岐させると、実 passkey を
     // 持たない第三者でも「このアカウントは凍結されているか」を判別できるオラクルになる。
     // 署名を検証し終えた=正規の所有者だと確認できてから初めて拒否理由を返す。
-    if cred.disabled {
-        tracing::warn!(event = "login_blocked_disabled", sub = %super::pseudonymize_sub(&cred.account_id));
+    if account.disabled {
+        tracing::warn!(event = "login_blocked_disabled", sub = %super::pseudonymize_sub(&account.account_id));
         return (StatusCode::FORBIDDEN, "account disabled").into_response();
     }
-    if cred.account_id.is_empty() {
+    if account.account_id.is_empty() {
         // 移行前（accountId 未発行）のアカウント。再登録が必要。
         return (StatusCode::BAD_REQUEST, "account needs re-registration").into_response();
     }
-    let account = p.store.find_account(&cred.account_id).await;
+    let account = p.store.find_account(&account.account_id).await;
     match finalize_login(&p, jar, &uid, account.sub).await {
         Ok((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
         // "interaction not found" のとき、画面は期限切れと見て読み直す（login_form の JS）。

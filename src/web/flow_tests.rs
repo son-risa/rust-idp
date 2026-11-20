@@ -126,7 +126,7 @@ async fn register_test_account(p: &Arc<Provider>, email: &str) -> (SigningKey, V
     let verify_body = body_json(verify).await;
     assert_eq!(verify_status, StatusCode::CREATED, "register_passkey_verify failed: {verify_body:?}");
 
-    let cred = crate::registration::get_credential(fs, email).await.unwrap().unwrap();
+    let cred = crate::registration::get_account(fs, email).await.unwrap().unwrap();
     assert_eq!(cred.account_id, account_id_from_options, "options 時点の account_id と保存後の accountId が食い違う");
 
     // 逆引きインデックスも書けている。
@@ -161,6 +161,17 @@ async fn email_login_response_with(
     sign_count: u32,
     tamper: impl Fn(String) -> String,
 ) -> (String, Response) {
+    email_login_with_credential(p, email, b"probe-credential-id", key, sign_count, tamper).await
+}
+
+async fn email_login_with_credential(
+    p: &Arc<Provider>,
+    email: &str,
+    cred_id: &[u8],
+    key: &SigningKey,
+    sign_count: u32,
+    tamper: impl Fn(String) -> String,
+) -> (String, Response) {
     let uid = uuid::Uuid::new_v4().to_string();
     p.store
         .save_interaction(Interaction {
@@ -181,7 +192,7 @@ async fn email_login_response_with(
 
     let (ad, sig, cdj) = make_auth_ceremony(key, sign_count, &challenge, &p.origin(), &p.rp_id(), false);
     let verify_req: AuthVerifyReq = serde_json::from_value(json!({
-        "id": crate::webauthn::b64e(b"probe-credential-id"),
+        "id": crate::webauthn::b64e(cred_id),
         "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": tamper(sig), "userHandle": null },
     }))
     .unwrap();
@@ -433,14 +444,16 @@ async fn sign_count_update_preserves_account_id() {
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key, _cred_id, account_id) = register_test_account(&p, &email).await;
 
-    // 複数回ログインして update_sign_count がドキュメント全体を書き直す経路を通す。
+    // 複数回ログインして signCount を書く経路を通す。
     login_with_email(&p, &email, &key, 1).await;
     login_with_email(&p, &email, &key, 2).await;
 
     let fs = p.firestore.as_ref().unwrap();
-    let cred = crate::registration::get_credential(fs, &email).await.unwrap().unwrap();
-    assert_eq!(cred.account_id, account_id, "signCount 更新のたびに accountId が消えていないこと");
+    let account = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
+    assert_eq!(account.account_id, account_id, "signCount 更新のたびに accountId が消えていないこと");
+    let cred = crate::registration::sole_credential(fs, &email).await.unwrap();
     assert_eq!(cred.sign_count, 2);
+    assert!(cred.last_used_at.is_some());
 }
 
 #[tokio::test]
@@ -592,4 +605,77 @@ async fn a_passkey_signature_that_is_not_der_is_refused() {
     let (uid, resp) = email_login_response_with(&p, &email, &key, 0, to_raw).await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
+}
+
+/// 2 本目の passkey を、登録の検証を通さずに直に足す（足す口は別の PR で作る）。
+async fn add_passkey(p: &Arc<Provider>, email: &str, account_id: &str, cred_id: &[u8]) -> SigningKey {
+    let key = SigningKey::generate();
+    let (x, y) = ec_xy(&key);
+    let outcome = crate::webauthn::RegOutcome {
+        credential_id: crate::webauthn::b64e(cred_id),
+        pub_x: crate::webauthn::b64e(&x),
+        pub_y: crate::webauthn::b64e(&y),
+        sign_count: 0,
+        aaguid: String::new(),
+    };
+    crate::registration::save_credential(p.firestore.as_ref().unwrap(), email, account_id, &outcome).await.unwrap();
+    key
+}
+
+#[tokio::test]
+async fn either_of_two_passkeys_signs_in_as_the_same_account() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key1, cred1, account_id) = register_test_account(&p, &email).await;
+    let key2 = add_passkey(&p, &email, &account_id, b"second-credential").await;
+
+    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({ "email": email })).unwrap();
+    let opts = body_json(login::login_passkey_options(State(p.clone()), Path("u".into()), Json(opts_req)).await).await;
+    let mut allowed: Vec<String> = opts["allowCredentials"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect();
+    let mut want = vec![crate::webauthn::b64e(&cred1), crate::webauthn::b64e(b"second-credential")];
+    allowed.sort();
+    want.sort();
+    assert_eq!(allowed, want);
+
+    let (_, r) = email_login_with_credential(&p, &email, &cred1, &key1, 1, |s| s).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let (uid, r) = email_login_with_credential(&p, &email, b"second-credential", &key2, 1, |s| s).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id.as_deref(), Some(account_id.as_str()));
+
+    // 名乗った passkey と違う鍵の署名は通らない。
+    let (_, r) = email_login_with_credential(&p, &email, b"second-credential", &key1, 2, |s| s).await;
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// 他人の passkey の id を名乗っても、その人として入れない（id で直に引いて持ち主を確かめる）。
+#[tokio::test]
+async fn another_accounts_passkey_id_is_not_accepted() {
+    let p = test_provider().await;
+    let victim = format!("victim-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, victim_id) = register_test_account(&p, &victim).await;
+    let victim_key = add_passkey(&p, &victim, &victim_id, b"victim-second").await;
+    let me = format!("me-{}@example.com", uuid::Uuid::new_v4());
+    let fs = p.firestore.as_ref().unwrap();
+    let my_id = uuid::Uuid::new_v4().to_string();
+    let outcome = crate::webauthn::RegOutcome { credential_id: "mine".into(), pub_x: "x".into(), pub_y: "y".into(), sign_count: 0, aaguid: String::new() };
+    crate::registration::save_credential(fs, &me, &my_id, &outcome).await.unwrap();
+
+    // 自分の email で options を取り、相手の passkey で答える。
+    let (_, r) = email_login_with_credential(&p, &me, b"victim-second", &victim_key, 1, |s| s).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn deleting_an_account_removes_its_passkeys() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, cred1, account_id) = register_test_account(&p, &email).await;
+    add_passkey(&p, &email, &account_id, b"second-credential").await;
+    let fs = p.firestore.as_ref().unwrap();
+    crate::account_admin::disable_account(fs, "cli", &email).await.unwrap();
+    crate::account_admin::delete_account(fs, "cli", &email).await.unwrap();
+    for id in [crate::webauthn::b64e(&cred1), crate::webauthn::b64e(b"second-credential")] {
+        assert!(fs.get_doc("credentials", &id).await.unwrap().is_none(), "{id} が残った");
+    }
 }

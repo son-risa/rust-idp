@@ -267,6 +267,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Clients ({n})", "クライアント（{n}）"),
     ("Unused IATs ({n})", "未消費のIAT（{n}）"),
     ("Signature counter", "署名カウンタ"),
+    ("Passkeys", "パスキー"),
+    ("Authenticator", "保存先"),
+    ("Last used", "最後の利用"),
+    ("No passkeys. The user can register again with the same account.", "パスキーはありません。同じアカウントのまま登録し直せます。"),
     ("Client ID", "クライアント ID"),
     (
         "A return address must use https and must not contain a fragment or user info: {uri}",

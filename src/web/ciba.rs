@@ -195,11 +195,20 @@ pub(super) async fn backchannel_auth(
     // （login_hint = email は RP 起点のヒントとして dedup/レート制限のキーにのみ残す）。
     // disabled なアカウントは unknown と同じ扱いにする(別分岐にしない): 凍結先へ push を
     // 送って pending 要求を作る無駄を避けつつ、認証済みRPへも「unknown」以上の情報は返さない。
-    let account_id = match crate::registration::get_credential(fs, &login_hint).await {
-        Ok(Some(c)) if !c.account_id.is_empty() && !c.disabled => c.account_id,
+    // passkey が 0 本のアカウントも unknown と同じ（承認できる人がいない）。
+    let account = match crate::registration::get_account(fs, &login_hint).await {
+        Ok(Some(a)) if !a.account_id.is_empty() && !a.disabled => a,
         Ok(_) => return OAuthError::InvalidRequest("unknown user_id".into()).into_response(),
         Err(e) => {
-            tracing::error!("get_credential: {e}");
+            tracing::error!("get_account: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
+    let account_id = match crate::registration::list_credentials(fs, &account).await {
+        Ok(c) if !c.is_empty() => account.account_id,
+        Ok(_) => return OAuthError::InvalidRequest("unknown user_id".into()).into_response(),
+        Err(e) => {
+            tracing::error!("list_credentials: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
@@ -365,10 +374,17 @@ pub(super) async fn ciba_approve_options(
         Ok(Some(e)) => e,
         _ => return (StatusCode::BAD_REQUEST, "no passkey").into_response(),
     };
-    let cred = match crate::registration::get_credential(fs, &email).await {
-        Ok(Some(c)) => c,
-        _ => return (StatusCode::BAD_REQUEST, "no passkey").into_response(),
+    let creds = match crate::registration::get_account(fs, &email).await {
+        Ok(Some(a)) => crate::registration::list_credentials(fs, &a).await.unwrap_or_default(),
+        _ => vec![],
     };
+    if creds.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no passkey").into_response();
+    }
+    let allow: Vec<_> = creds
+        .iter()
+        .map(|c| serde_json::json!({ "type": "public-key", "id": c.credential_id, "transports": ["internal", "hybrid"] }))
+        .collect();
     let challenge = match crate::registration::create_webauthn_challenge(
         fs,
         &email,
@@ -389,7 +405,7 @@ pub(super) async fn ciba_approve_options(
         "rpId": p.rp_id(),
         "timeout": 60000,
         "userVerification": "required",
-        "allowCredentials": [{ "type": "public-key", "id": cred.credential_id, "transports": ["internal", "hybrid"] }],
+        "allowCredentials": allow,
     }))
     .into_response()
 }
@@ -418,18 +434,22 @@ pub(super) async fn ciba_approve(
     }
     // チャレンジ発行時に束縛されたユーザー（email）= 承認主体。CIBA 要求側は account_id(UUID)
     // で管理しているため、email → account_id に変換してから照合する。
-    let cred = match crate::registration::get_credential(fs, &email).await {
-        Ok(Some(c)) if !c.account_id.is_empty() => c,
+    let account = match crate::registration::get_account(fs, &email).await {
+        Ok(Some(a)) if !a.account_id.is_empty() => a,
         _ => return (StatusCode::BAD_REQUEST, "no passkey").into_response(),
     };
-    let account = cred.account_id.clone();
     let ciba_req = match p.ciba.get(&auth_req_id).await {
-        Ok(Some(r)) if r.account == account && !r.expired() => r,
+        Ok(Some(r)) if r.account == account.account_id && !r.expired() => r,
         _ => return (StatusCode::NOT_FOUND, "request not found").into_response(),
     };
-    if cred.credential_id != req.id {
-        return (StatusCode::BAD_REQUEST, "credential id mismatch").into_response();
-    }
+    let cred = match crate::registration::find_credential(fs, &account, &req.id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return (StatusCode::BAD_REQUEST, "credential id mismatch").into_response(),
+        Err(e) => {
+            tracing::error!("find_credential: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
     match crate::webauthn::verify_authentication(
         &req.response.client_data_json,
         &req.response.authenticator_data,
@@ -443,15 +463,17 @@ pub(super) async fn ciba_approve(
         true, // CIBA 承認は UV(生体/PIN) 必須
     ) {
         Ok(n) => {
-            let _ = crate::registration::update_sign_count(fs, &email, n).await;
+            if let Err(e) = crate::registration::record_use(fs, &account, &cred, n).await {
+                tracing::warn!(event = "passkey_use_not_recorded", "{e}");
+            }
         }
         Err(e) => return (StatusCode::UNAUTHORIZED, format!("passkey verify failed: {e}")).into_response(),
     }
     // disabled チェックは署名検証の後: login.rs と同じ理由で、実 passkey を持たない
     // 第三者に凍結状態を判別させるオラクルにしないため、正規の所有者だと確認できてから
     // 初めて拒否理由を返す。
-    if cred.disabled {
-        tracing::warn!(event = "ciba_approve_blocked_disabled", sub = %super::pseudonymize_sub(&cred.account_id));
+    if account.disabled {
+        tracing::warn!(event = "ciba_approve_blocked_disabled", sub = %super::pseudonymize_sub(&account.account_id));
         return (StatusCode::FORBIDDEN, "account disabled").into_response();
     }
     let _ = ciba_req; // 検証済み。承認に進む。
