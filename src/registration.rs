@@ -350,6 +350,13 @@ async fn create_credential(fs: &Firestore, email: &str, account_id: &str, c: &Cr
 /// 途中で止まっても古い形のまま読める。既に写してあれば（前回の途中で止まった）その文書を使う。
 /// 返り値は、このときに移したか。
 pub async fn migrate_account(fs: &Firestore, email: &str) -> Result<bool, String> {
+    let lock = lock_account(fs, email).await?;
+    let r = migrate_locked(fs, email).await;
+    lock.release().await;
+    r
+}
+
+async fn migrate_locked(fs: &Firestore, email: &str) -> Result<bool, String> {
     let Some(a) = get_account(fs, email).await? else {
         return Ok(false);
     };
@@ -384,6 +391,13 @@ pub async fn migrate_account(fs: &Firestore, email: &str) -> Result<bool, String
 /// accountsByUuid の逆引きの書き込みが失敗しても登録自体は失敗させない（email 入力でのログインは
 /// 影響を受けない、discoverable ログインのみ縮退する）。
 pub async fn save_credential(fs: &Firestore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
+    let lock = lock_account(fs, email).await?;
+    let r = save_locked(fs, email, account_id, c).await;
+    lock.release().await;
+    r
+}
+
+async fn save_locked(fs: &Firestore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
     let cred = Credential {
         credential_id: c.credential_id.clone(),
         pub_x: c.pub_x.clone(),
@@ -399,7 +413,7 @@ pub async fn save_credential(fs: &Firestore, email: &str, account_id: &str, c: &
                 return Err(format!("account_id mismatch for existing account ({} vs {account_id})", a.account_id));
             }
             if !a.migrated {
-                migrate_account(fs, email).await?;
+                migrate_locked(fs, email).await?;
             }
             let had_none = list_credentials(fs, &get_account(fs, email).await?.ok_or("account vanished")?).await?.is_empty();
             create_credential(fs, email, account_id, &cred).await?;
@@ -468,35 +482,119 @@ pub enum RemoveOutcome {
 
 /// 本人が passkey を 1 本消す。
 pub async fn remove_credential(fs: &Firestore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
-    migrate_account(fs, email).await?;
+    let lock = lock_account(fs, email).await?;
+    let r = remove_locked(fs, email, credential_id).await;
+    lock.release().await;
+    r
+}
+
+async fn remove_locked(fs: &Firestore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
+    migrate_locked(fs, email).await?;
     let Some(a) = get_account(fs, email).await? else {
         return Ok(RemoveOutcome::NotFound);
     };
     let creds = list_credentials(fs, &a).await?;
-    if !creds.iter().any(|c| c.credential_id == credential_id) {
+    let rest: Vec<&Credential> = creds.iter().filter(|c| c.credential_id != credential_id).collect();
+    // 古いフィールドが一覧に無い passkey を指していたら（前回の向け直しが途中で失敗した）、ここで直す。
+    // 消すときは、消す前に向け直す（向け直しが失敗したら消さない）。
+    let mirrored = fs
+        .get_doc("accounts", email)
+        .await?
+        .and_then(|f| firestore::field_str(&f, "credentialId").map(str::to_string))
+        .unwrap_or_default();
+    if !mirrored.is_empty()
+        && (mirrored == credential_id || !creds.iter().any(|c| c.credential_id == mirrored))
+        && let Some(first) = rest.first()
+    {
+        point_mirror(fs, email, Some(first)).await?;
+    }
+    if rest.len() == creds.len() {
         return Ok(RemoveOutcome::NotFound);
     }
-    if creds.len() == 1 {
+    if rest.is_empty() {
         return Ok(RemoveOutcome::LastOne);
     }
     fs.delete_doc("credentials", credential_id).await?;
-    let mirrored = fs.get_doc("accounts", email).await?;
-    if mirrored.as_ref().and_then(|f| firestore::field_str(f, "credentialId")) == Some(credential_id) {
-        point_mirror(fs, email, creds.iter().find(|c| c.credential_id != credential_id)).await?;
-    }
     Ok(RemoveOutcome::Removed)
+}
+
+/// 足したばかりの passkey を取り消す（足している間にセッションが失効していたとき）。最後の 1 本でも消し、
+/// 古いフィールドが指していれば、残りの 1 本へ向け直す（無ければ空にする）。
+pub async fn discard_credential(fs: &Firestore, email: &str, credential_id: &str) -> Result<(), String> {
+    let lock = lock_account(fs, email).await?;
+    let r = async {
+        let Some(a) = get_account(fs, email).await? else {
+            return Ok(());
+        };
+        let rest: Vec<Credential> =
+            list_credentials(fs, &a).await?.into_iter().filter(|c| c.credential_id != credential_id).collect();
+        let mirrored = fs.get_doc("accounts", email).await?;
+        if mirrored.as_ref().and_then(|f| firestore::field_str(f, "credentialId")) == Some(credential_id) {
+            point_mirror(fs, email, rest.first()).await?;
+        }
+        fs.delete_doc("credentials", credential_id).await
+    }
+    .await;
+    lock.release().await;
+    r
 }
 
 /// passkey を全部消し、アカウントは残す（同じ accountId のまま登録し直せる）。消した本数を返す。
 /// アカウントが無ければ None。
 pub async fn remove_all_credentials(fs: &Firestore, email: &str) -> Result<Option<usize>, String> {
-    migrate_account(fs, email).await?;
+    let lock = lock_account(fs, email).await?;
+    let r = remove_all_locked(fs, email).await;
+    lock.release().await;
+    r
+}
+
+async fn remove_all_locked(fs: &Firestore, email: &str) -> Result<Option<usize>, String> {
+    migrate_locked(fs, email).await?;
     let Some(a) = get_account(fs, email).await? else {
         return Ok(None);
     };
-    let n = delete_all_credentials(fs, &a).await?;
     point_mirror(fs, email, None).await?;
-    Ok(Some(n))
+    Ok(Some(delete_all_credentials(fs, &a).await?))
+}
+
+/* ===== アカウントごとの鍵 ===== */
+//
+// passkey を足す・消す・移す操作は、本数を読んでから書くまでが別々の要求になる。同じアカウントで重なると、
+// 2 本を同時に消して 0 本になったり、全部消した直後に足した 1 本が残ったりする。accountLocks/{email} を
+// 作れた操作だけを通し、終わったら消す。落ちた操作が残した鍵は期限で外す。
+
+const LOCKS: &str = "accountLocks";
+const LOCK_TTL_SECS: u64 = 30;
+
+#[must_use]
+struct AccountLock<'a> {
+    fs: &'a Firestore,
+    email: String,
+}
+
+impl AccountLock<'_> {
+    async fn release(self) {
+        if let Err(e) = self.fs.delete_doc(LOCKS, &self.email).await {
+            tracing::warn!("account lock not released (expires in {LOCK_TTL_SECS}s): {e}");
+        }
+    }
+}
+
+async fn lock_account<'a>(fs: &'a Firestore, email: &str) -> Result<AccountLock<'a>, String> {
+    for _ in 0..30 {
+        let f = json!({ "expiresAt": firestore::ts(&firestore::rfc3339(now() + LOCK_TTL_SECS)) });
+        if fs.create_if_absent(LOCKS, email, f).await? {
+            return Ok(AccountLock { fs, email: email.to_string() });
+        }
+        if let Some((f, update_time)) = fs.get_doc_with_update_time(LOCKS, email).await?
+            && firestore::field_ts_secs(&f, "expiresAt").is_none_or(|t| t <= now())
+        {
+            fs.delete_doc_if_unchanged(LOCKS, email, &update_time).await?;
+            continue;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Err("account busy".into())
 }
 
 /// ログインで使った passkey の signCount と lastUsedAt を書く。文書が在るときだけ書く

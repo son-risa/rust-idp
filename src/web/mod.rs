@@ -366,6 +366,7 @@ const SERVER_ERRORS={
  'already handled':'[[This request has already been handled.]]',
  'sign-in required':'[[Please sign in again.]]',
  'confirmation required':'[[Please confirm it is you with a passkey again.]]',
+ 'too many passkeys':'[[You can add up to 10 passkeys. Remove one first.]]',
  'last passkey':'[[You cannot remove your only passkey. Add another passkey first.]]',
  'passkey not found':'[[This passkey was not found. Please reload the page.]]',
  'no challenge':'[[Something went wrong. Please try again.]]',

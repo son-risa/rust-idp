@@ -961,3 +961,109 @@ async fn admin_removes_passkeys_only_and_the_user_registers_again_as_the_same_pe
     let (_, _, again) = register_test_account(&p, &email).await;
     assert_eq!(again, account_id);
 }
+
+/// 同じアカウントの 2 本を同時に消しても、1 本は残る（アカウントの鍵で 1 つずつ通す）。
+#[tokio::test]
+async fn removing_two_passkeys_at_once_leaves_one() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, cred1, account_id) = register_test_account(&p, &email).await;
+    add_passkey(&p, &email, &account_id, b"second").await;
+    let (id1, id2) = (crate::webauthn::b64e(&cred1), crate::webauthn::b64e(b"second"));
+    let (a, b) = tokio::join!(
+        crate::registration::remove_credential(fs, &email, &id1),
+        crate::registration::remove_credential(fs, &email, &id2),
+    );
+    let mut outcomes = [a.unwrap(), b.unwrap()].map(|o| format!("{o:?}"));
+    outcomes.sort();
+    assert_eq!(outcomes, ["LastOne", "Removed"]);
+    let acct = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
+    let left = crate::registration::list_credentials(fs, &acct).await.unwrap();
+    assert_eq!(left.len(), 1);
+    let f = fs.get_doc("accounts", &email).await.unwrap().unwrap();
+    assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(left[0].credential_id.as_str()), "古いフィールドは残った 1 本を指す");
+    assert!(fs.get_doc("accountLocks", &email).await.unwrap().is_none(), "鍵が残った");
+}
+
+/// 落ちた操作が残した鍵は、期限が過ぎていれば外して進む。期限内なら待ってから断る。
+#[tokio::test]
+async fn a_stale_account_lock_is_taken_over() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let lock = |t: u64| json!({ "expiresAt": crate::firestore::ts(&crate::firestore::rfc3339(t)) });
+    fs.set_doc("accountLocks", &email, lock(now() - 1)).await.unwrap();
+    add_passkey(&p, &email, &account_id, b"after-stale-lock").await;
+
+    fs.set_doc("accountLocks", &email, lock(now() + 600)).await.unwrap();
+    let r = crate::registration::remove_credential(fs, &email, &crate::webauthn::b64e(b"after-stale-lock")).await;
+    assert_eq!(r.err().as_deref(), Some("account busy"));
+}
+
+/// 古いフィールドが一覧に無い passkey を指していたら（向け直しが途中で失敗した）、次の削除で直す。
+#[tokio::test]
+async fn a_dangling_mirror_is_repaired_on_the_next_removal() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, cred1, _) = register_test_account(&p, &email).await;
+    fs.update_fields("accounts", &email, json!({ "credentialId": crate::firestore::s("gone") })).await.unwrap();
+    let r = crate::registration::remove_credential(fs, &email, "gone").await.unwrap();
+    assert_eq!(r, crate::registration::RemoveOutcome::NotFound);
+    let f = fs.get_doc("accounts", &email).await.unwrap().unwrap();
+    assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(crate::webauthn::b64e(&cred1).as_str()));
+}
+
+/// 確かめた後に管理者が passkey を全部消してセッションを失効させたら、その後に届いた追加は取り消す。
+#[tokio::test]
+async fn an_add_that_lands_after_the_admin_removed_all_passkeys_is_discarded() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+
+    let opts = body_json(account::add_options(State(p.clone()), jar.clone()).await).await;
+    crate::account_admin::delete_passkeys(fs, "acc-admin", &email).await.unwrap();
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(&key, b"late", opts["challenge"].as_str().unwrap(), &p.origin(), &p.rp_id());
+    let req: account::AddVerifyReq =
+        serde_json::from_value(json!({ "response": { "clientDataJSON": cdj, "attestationObject": att } })).unwrap();
+    let (s, b) = error_body(account::add_verify(State(p.clone()), jar.clone(), Json(req)).await).await;
+    assert_eq!((s, b.as_str()), (StatusCode::UNAUTHORIZED, "sign-in required"));
+    assert!(!crate::registration::has_passkey(fs, &email).await.unwrap(), "失効の後に足した passkey が残った");
+    let f = fs.get_doc("accounts", &email).await.unwrap().unwrap();
+    assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(""));
+}
+
+/// 本人が passkey を消すと、ほかのセッションとトークンも失効する。いまのセッションは残る。
+#[tokio::test]
+async fn removing_a_passkey_signs_out_the_other_devices() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, cred1, account_id) = register_test_account(&p, &email).await;
+    let here = session_jar(&p, &account_id, now()).await;
+    let there = session_jar(&p, &account_id, now() - 3600).await;
+    account_add(&p, &here, b"second").await.unwrap_or_else(|r| panic!("{}", r.status()));
+
+    assert_eq!(delete_via_account(&p, &here, &cred1).await.status(), StatusCode::OK);
+    let sid = |j: &CookieJar| j.get(SID_COOKIE).unwrap().value().to_string();
+    assert!(p.store.get_session(&sid(&here)).await.is_some());
+    assert!(p.store.get_session(&sid(&there)).await.is_none(), "ほかの端末のセッションが残った");
+}
+
+/// passkey は 10 本まで。
+#[tokio::test]
+async fn at_most_ten_passkeys() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    for i in 1..10 {
+        add_passkey(&p, &email, &account_id, format!("extra-{i}").as_bytes()).await;
+    }
+    let jar = session_jar(&p, &account_id, now()).await;
+    let (s, b) = error_body(account_add(&p, &jar, b"eleventh").await.err().unwrap()).await;
+    assert_eq!((s, b.as_str()), (StatusCode::CONFLICT, "too many passkeys"));
+}

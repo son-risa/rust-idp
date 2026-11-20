@@ -283,7 +283,11 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
     ("This passkey was not found. Please reload the page.", "このパスキーが見つかりません。ページを読み直してください。"),
     ("You cannot remove your only passkey. Add another passkey first.", "パスキーが 1 つだけのときは削除できません。先に別のパスキーを追加してください。"),
-    ("Remove this passkey? You can no longer sign in with it.", "このパスキーを削除しますか？削除すると、このパスキーではログインできなくなります。"),
+    (
+        "Remove this passkey? You can no longer sign in with it, and you are signed out on your other devices.",
+        "このパスキーを削除しますか？削除すると、このパスキーではログインできなくなり、ほかの端末からもログアウトします。",
+    ),
+    ("You can add up to 10 passkeys. Remove one first.", "パスキーは 10 個まで追加できます。先に 1 つ削除してください。"),
     (
         "On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.",
         "iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。",
@@ -302,6 +306,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "このユーザーのパスキーをすべて削除しますか？アカウントとプロフィールは残り、同じ人のまま登録し直せます。セッションとトークンも失効します。",
     ),
     ("You cannot remove your own passkeys here.", "自分のパスキーはここでは削除できません。"),
+    ("The passkeys of an admin cannot be removed. Revoke admin first.", "管理者のパスキーは削除できません。先に管理者を外してください。"),
     ("Client ID", "クライアント ID"),
     (
         "A return address must use https and must not contain a fragment or user info: {uri}",

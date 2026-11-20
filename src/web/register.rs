@@ -243,7 +243,9 @@ async function reg(){
   if(!v.ok){msg.textContent=await errorText(v);return;}
   const res=await v.json();
   if(isIOS&&res.gpm){
-   msg.innerHTML='[[Registration complete. This passkey was saved in Google Password Manager, which may ask for a PIN at sign-in. We recommend also saving a passkey in Passwords (iCloud).]] <a href="'+ACCOUNT+'">[[Add a passkey in Passwords]]</a><br><a href="'+(AFTER||LOGIN)+'">'+(AFTER?'[[Continue]]':'[[Go to sign in]]')+'</a>';
+   const link=(href,text)=>{const a=document.createElement('a');a.href=href;a.textContent=text;const p=document.createElement('p');p.append(a);return p;};
+   msg.textContent='[[Registration complete. This passkey was saved in Google Password Manager, which may ask for a PIN at sign-in. We recommend also saving a passkey in Passwords (iCloud).]]';
+   msg.append(link(ACCOUNT,'[[Add a passkey in Passwords]]'),link(AFTER||LOGIN,AFTER?'[[Continue]]':'[[Go to sign in]]'));
    return;
   }
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
@@ -723,8 +725,16 @@ pub(super) async fn register_passkey_verify(
     }
     // 登録できたらログイン済みにする（メールの確認と passkey の作成で本人と確かめている）。
     // 戻った先の RP で passkey をもう一度押さずに済み、すぐ別の passkey を足せる。
-    let disabled = matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if a.disabled);
-    let jar = if disabled { jar } else { start_session(&p, jar, account_id, now()).await };
+    // 凍結を確かめられなかったときは張らない（/authorize のセッション利用は凍結を見ない）。
+    let active = matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if !a.disabled);
+    let jar = if active {
+        if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
+            p.store.delete_session(&old).await;
+        }
+        start_session(&p, jar, account_id, now()).await
+    } else {
+        jar
+    };
     (
         StatusCode::CREATED,
         jar,

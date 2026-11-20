@@ -138,22 +138,55 @@ pub async fn delete_passkeys(fs: &Firestore, actor: &str, email: &str) -> Result
     if a.account_id.is_empty() {
         return Err(format!("{email}: accountId missing"));
     }
-    let Some(n) = registration::remove_all_credentials(fs, email).await? else {
-        return Ok(None);
-    };
+    // 先に失効させる（passkey を消す途中で失敗しても、なくした端末のセッションは残さない）。
     let counts = revoke_all(fs, &a.account_id).await;
+    let removed = registration::remove_all_credentials(fs, email).await;
     audit_log::record(
         fs,
         actor,
         "delete_passkeys",
         &a.account_id,
         &format!(
-            "email={email} passkeys={n} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
+            "email={email} passkeys={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
+            match &removed {
+                Ok(n) => format!("{}", n.unwrap_or(0)),
+                Err(e) => format!("failed({e})"),
+            },
             counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors
         ),
     )
     .await;
-    Ok(Some(n))
+    removed
+}
+
+/// 本人が passkey を消したとき、いま使っているセッション以外のセッションと、発行済みのトークンを失効させる
+/// （消した passkey の端末に残るセッションやトークンを使わせない。どの passkey で入ったかは記録していない）。
+pub async fn revoke_other_sessions(fs: &Firestore, account_id: &str, keep_sid: &str) -> RevocationCounts {
+    let mut counts = RevocationCounts::default();
+    match fs.query_eq("sessions", "accountId", account_id).await {
+        Ok(rows) => {
+            for (sid, _) in rows.iter().filter(|(sid, _)| sid != keep_sid) {
+                match fs.delete_doc("sessions", sid).await {
+                    Ok(()) => counts.sessions += 1,
+                    Err(e) => tracing::error!("account_admin: sessions revoke failed: {e}"),
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("account_admin: sessions revocation query failed for {account_id}: {e}");
+            counts.query_errors.push("sessions");
+        }
+    }
+    for (col, n) in [("accessTokens", &mut counts.access_tokens), ("refreshTokens", &mut counts.refresh_tokens)] {
+        match revoke_by_account(fs, col, account_id).await {
+            Ok(k) => *n = k,
+            Err(e) => {
+                tracing::error!("account_admin: {col} revocation query failed for {account_id}: {e}");
+                counts.query_errors.push(col);
+            }
+        }
+    }
+    counts
 }
 
 /// account_id に紐づく sessions/accessTokens/refreshTokens を検索し削除する。
@@ -382,5 +415,26 @@ mod tests {
         assert!(fs.get_doc("profiles", "acc-other").await.unwrap().is_some());
         let entries = fs.query_eq("auditLog", "action", "delete_account").await.unwrap();
         assert_eq!(entries.len(), 1);
+    }
+
+    /// passkey の削除が途中で失敗しても、セッションとトークンは先に失効させ、監査ログも残す。
+    #[tokio::test]
+    async fn delete_passkeys_revokes_first_even_if_removal_fails() {
+        let (host, fake) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host.clone());
+        register(&fs, "lost@example.com", "acc-lost").await;
+        let store = crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test("proj", host)));
+        store.save_session(Session { sid: "S-LOST".into(), account_id: "acc-lost".into(), auth_time: 0 }).await;
+
+        fake.fail_once("PATCH", "accounts", Some("lost@example.com"));
+        assert!(delete_passkeys(&fs, "cli", "lost@example.com").await.is_err());
+        assert!(store.get_session("S-LOST").await.is_none(), "セッションが残った");
+        let entries = fs.query_eq("auditLog", "action", "delete_passkeys").await.unwrap();
+        assert_eq!(entries.len(), 1);
+
+        // やり直せば消える。
+        fake.clear_failures();
+        assert_eq!(delete_passkeys(&fs, "cli", "lost@example.com").await.unwrap(), Some(1));
+        assert!(!registration::has_passkey(&fs, "lost@example.com").await.unwrap());
     }
 }

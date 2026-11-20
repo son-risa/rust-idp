@@ -8,10 +8,13 @@ use super::*;
 use crate::registration::{self, ChallengeKind, RemoveOutcome};
 
 const RECENT_AUTH_SECS: u64 = 10 * 60;
+/// 1 アカウントの passkey の上限。
+const MAX_PASSKEYS: usize = 10;
 /// この画面の challenge に入れる uid。ログイン（interaction の uid）と登録（空）の challenge と分ける。
 const CEREMONY_UID: &str = "account";
 
 struct Me {
+    sid: String,
     auth_time: u64,
     account: registration::Account,
 }
@@ -38,7 +41,7 @@ async fn me(p: &Provider, fs: &crate::firestore::Firestore, jar: &CookieJar) -> 
     if account.disabled || account.account_id != s.account_id {
         return Ok(None);
     }
-    Ok(Some(Me { auth_time: s.auth_time, account }))
+    Ok(Some(Me { sid, auth_time: s.auth_time, account }))
 }
 
 fn internal(context: &str, e: &str) -> Response {
@@ -178,7 +181,7 @@ async function add(){
  }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?'[[A passkey for this account is already saved here.]]':passkeyErrorText(e);}
 }
 async function del(id){
- if(!confirm('[[Remove this passkey? You can no longer sign in with it.]]'))return;
+ if(!confirm('[[Remove this passkey? You can no longer sign in with it, and you are signed out on your other devices.]]'))return;
  if(!confirmed&&!await signIn())return;
  const v=await post(DEL,{id:id});
  if(!v.ok){msg.textContent=await errorText(v);return;}
@@ -271,6 +274,9 @@ pub(super) async fn add_options(State(p): State<Arc<Provider>>, jar: CookieJar) 
         Ok(c) => c,
         Err(e) => return internal("add_options: list_credentials", &e),
     };
+    if creds.len() >= MAX_PASSKEYS {
+        return (StatusCode::CONFLICT, "too many passkeys").into_response();
+    }
     let a = &me.account;
     let challenge = match registration::create_webauthn_challenge(fs, &a.email, ChallengeKind::Reg, CEREMONY_UID, &a.account_id).await {
         Ok(c) => c,
@@ -319,8 +325,21 @@ pub(super) async fn add_verify(
             return (StatusCode::BAD_REQUEST, format!("registration failed: {e}")).into_response();
         }
     };
+    match registration::list_credentials(fs, &me.account).await {
+        Ok(c) if c.len() >= MAX_PASSKEYS => return (StatusCode::CONFLICT, "too many passkeys").into_response(),
+        Ok(_) => {}
+        Err(e) => return internal("add_verify: list_credentials", &e),
+    }
     if let Err(e) = registration::save_credential(fs, &email, &account_id, &outcome).await {
         return internal("add_verify: save_credential", &e);
+    }
+    // 確かめた後に、管理者が passkey を全部消してセッションを失効させていたら、足した 1 本も消す
+    // （失効させてから消すので、消す前に足したものは消され、消した後に足したものはここで見つかる）。
+    if p.store.get_session(&me.sid).await.is_none() {
+        if let Err(e) = registration::discard_credential(fs, &email, &outcome.credential_id).await {
+            tracing::error!("add_verify: passkey added after revocation was not removed: {e}");
+        }
+        return (StatusCode::UNAUTHORIZED, "sign-in required").into_response();
     }
     crate::audit_log::record(
         fs,
@@ -351,7 +370,18 @@ pub(super) async fn delete_passkey(
     let a = &me.account;
     match registration::remove_credential(fs, &a.email, &req.id).await {
         Ok(RemoveOutcome::Removed) => {
-            crate::audit_log::record(fs, &a.account_id, "delete_passkey", &a.account_id, &format!("credential_id={}", req.id)).await;
+            let c = crate::account_admin::revoke_other_sessions(fs, &a.account_id, &me.sid).await;
+            crate::audit_log::record(
+                fs,
+                &a.account_id,
+                "delete_passkey",
+                &a.account_id,
+                &format!(
+                    "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
+                    req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors
+                ),
+            )
+            .await;
             Json(serde_json::json!({ "ok": true })).into_response()
         }
         Ok(RemoveOutcome::NotFound) => (StatusCode::NOT_FOUND, "passkey not found").into_response(),
