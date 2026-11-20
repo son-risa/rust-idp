@@ -42,10 +42,10 @@ impl JwksResolver {
         let now = now();
         {
             let cache = self.cache.lock().unwrap();
-            if let Some(c) = cache.get(jwks_uri) {
-                if c.expires_at > now {
-                    return c.keys.iter().find(|k| k.kid == kid).cloned();
-                }
+            if let Some(c) = cache.get(jwks_uri)
+                && c.expires_at > now
+            {
+                return c.keys.iter().find(|k| k.kid == kid).cloned();
             }
         }
         let keys = self.fetch(jwks_uri).await?;

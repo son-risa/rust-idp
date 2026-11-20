@@ -154,12 +154,16 @@ impl Firestore {
         // grant-admin 等の管理系CLIは起動が一瞬で終わり tracing 初期化前に走るため、
         // どの project/database へ書き込んだかが分かる唯一の手段として常に出す。
         eprintln!("firestore: project={project} database={database}");
+        Self::build(project, database, std::env::var("FIRESTORE_EMULATOR_HOST").ok())
+    }
+
+    fn build(project: String, database: String, emulator_host: Option<String>) -> Self {
         Self {
             project,
             database,
             http: http_client(),
             token: Mutex::new(None),
-            emulator_host: std::env::var("FIRESTORE_EMULATOR_HOST").ok(),
+            emulator_host,
         }
     }
 
@@ -167,13 +171,7 @@ impl Firestore {
     /// 並行実行されるテストが FIRESTORE_EMULATOR_HOST の set/unset で競合するのを避けるため。
     #[cfg(test)]
     pub(crate) fn new_for_test(project: impl Into<String>, emulator_host: impl Into<String>) -> Self {
-        Self {
-            project: project.into(),
-            database: "(default)".into(),
-            http: http_client(),
-            token: Mutex::new(None),
-            emulator_host: Some(emulator_host.into()),
-        }
+        Self::build(project.into(), "(default)".into(), Some(emulator_host.into()))
     }
 
     pub(crate) fn project(&self) -> &str {
@@ -188,10 +186,10 @@ impl Firestore {
         }
         {
             let g = self.token.lock().unwrap();
-            if let Some((t, exp)) = g.as_ref() {
-                if *exp > Instant::now() {
-                    return Ok(t.clone());
-                }
+            if let Some((t, exp)) = g.as_ref()
+                && *exp > Instant::now()
+            {
+                return Ok(t.clone());
             }
         }
         let resp = self
@@ -811,10 +809,10 @@ pub(crate) mod fake_firestore {
         // 差し替える(部分更新)。指定が無ければ従来通り全体置換。
         let merged = if let Some(field) = &pre.update_mask_field {
             let mut base = docs.get(&key).map(|d| d.fields.clone()).unwrap_or_else(|| json!({}));
-            if let Some(obj) = base.as_object_mut() {
-                if let Some(new_val) = fields.get(field) {
-                    obj.insert(field.clone(), new_val.clone());
-                }
+            if let Some(obj) = base.as_object_mut()
+                && let Some(new_val) = fields.get(field)
+            {
+                obj.insert(field.clone(), new_val.clone());
             }
             base
         } else {
@@ -1027,11 +1025,8 @@ mod tests {
     }
 
     #[test]
-    fn base_url_defaults_to_real_firestore_when_env_unset() {
-        // このファイル内の他テストは new_for_test に統一済みで env を set しないため、
-        // remove_var だけなら並行実行される他テストと競合しない。
-        std::env::remove_var("FIRESTORE_EMULATOR_HOST");
-        let real = Firestore::new("proj");
+    fn base_url_defaults_to_real_firestore_without_emulator() {
+        let real = Firestore::build("proj".into(), "(default)".into(), None);
         assert_eq!(real.base_url(), "https://firestore.googleapis.com");
         assert!(real.emulator_host.is_none());
     }

@@ -68,10 +68,10 @@ pub fn check_client_data(
 
 /// attStmt の x5c から DER 証明書列を取り出す（無ければ空）。MDS 照合用。
 pub fn att_x5c_ders(att_stmt: &Cbor) -> Vec<Vec<u8>> {
-    if let Cbor::Map(m) = att_stmt {
-        if let Some(Cbor::Array(a)) = cbor_text_get(m, "x5c") {
-            return a.iter().filter_map(|c| cbor_bytes(c).map(|b| b.to_vec())).collect();
-        }
+    if let Cbor::Map(m) = att_stmt
+        && let Some(Cbor::Array(a)) = cbor_text_get(m, "x5c")
+    {
+        return a.iter().filter_map(|c| cbor_bytes(c).map(|b| b.to_vec())).collect();
     }
     Vec::new()
 }

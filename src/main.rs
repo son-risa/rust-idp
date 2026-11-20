@@ -517,10 +517,10 @@ async fn revoke_client(args: &[String]) {
 fn parse_email_arg(cmd: &str, args: &[String]) -> String {
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        if a == "--email" {
-            if let Some(v) = it.next() {
-                return v.trim().to_lowercase();
-            }
+        if a == "--email"
+            && let Some(v) = it.next()
+        {
+            return v.trim().to_lowercase();
         }
     }
     eprintln!("{cmd}: usage: rust-op {cmd} --email <email>");
@@ -708,13 +708,13 @@ async fn secret_hash_from_manager_verified(fs: &firestore::Firestore, name: &'st
             std::process::exit(1);
         }
     };
-    if let Ok(env_val) = std::env::var(name) {
-        if env_val != raw {
-            eprintln!(
-                "migrate-static-clients: 環境変数 {name} と Secret Manager の値が一致しません。どちらが正か確認してください。"
-            );
-            std::process::exit(1);
-        }
+    if let Ok(env_val) = std::env::var(name)
+        && env_val != raw
+    {
+        eprintln!(
+            "migrate-static-clients: 環境変数 {name} と Secret Manager の値が一致しません。どちらが正か確認してください。"
+        );
+        std::process::exit(1);
     }
     dcr::hash_token(&raw)
 }
