@@ -168,6 +168,7 @@ async fn email_login_response_with(
             account_id: None,
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
 
@@ -198,6 +199,7 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
             account_id: None,
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
 
@@ -295,6 +297,7 @@ async fn disabled_account_cannot_login() {
             account_id: None,
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
 
@@ -548,6 +551,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
             account_id: None,
             auth_time: None,
             request_uri: None,
+            browser_binding: String::new(),
         })
         .await;
     let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({})).unwrap();

@@ -109,15 +109,21 @@ async function pkLogin(){
 
 /// ログイン確定: まだ在る interaction にアカウントを書き、SSO セッション cookie を張り、resume パスを返す。
 /// interaction が無い（消費済み・期限切れ）なら None。
+/// 誤りは画面が訳す固定文（SERVER_ERRORS）。
 async fn finalize_login(
     p: &Provider,
     jar: CookieJar,
     uid: &str,
     account_sub: String,
-) -> Option<(CookieJar, String)> {
+) -> Result<(CookieJar, String), &'static str> {
+    let interaction = p.store.get_interaction(uid).await.ok_or("interaction not found")?;
+    if !started_in_this_browser(&jar, &interaction) {
+        tracing::warn!(event = "login_from_another_browser");
+        return Err("started in another browser");
+    }
     let auth_time = now();
     if !p.store.complete_interaction(uid, &account_sub, auth_time).await {
-        return None;
+        return Err("interaction not found");
     }
     tracing::info!(event = "login_success", sub = %super::pseudonymize_sub(&account_sub));
     let sid = uuid::Uuid::new_v4().to_string();
@@ -130,7 +136,7 @@ async fn finalize_login(
         .secure(true)
         .same_site(SameSite::Lax)
         .build();
-    Some((jar.add(cookie), p.path(&format!("/authorize/resume?uid={uid}"))))
+    Ok((jar.add(cookie), p.path(&format!("/authorize/resume?uid={uid}"))))
 }
 
 /* ===== passkey ログイン ===== */
@@ -272,9 +278,9 @@ pub(super) async fn login_passkey_verify(
     }
     let account = p.store.find_account(&cred.account_id).await;
     match finalize_login(&p, jar, &uid, account.sub).await {
-        Some((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
-        // 画面はこの固定文で期限切れと見て読み直す（SERVER_ERRORS・login_form の JS）。
-        None => (StatusCode::BAD_REQUEST, "interaction not found").into_response(),
+        Ok((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
+        // "interaction not found" のとき、画面は期限切れと見て読み直す（login_form の JS）。
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
@@ -303,7 +309,7 @@ mod tests {
 
     async fn resume(p: &Arc<Provider>, uid: &str) -> Response {
         let q = HashMap::from([("uid".to_string(), uid.to_string())]);
-        super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), Query(q)).await
+        super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(q)).await
     }
 
     fn gave_code(r: &Response) -> bool {
@@ -323,17 +329,82 @@ mod tests {
                 account_id: None,
                 auth_time: None,
                 request_uri: None,
+                browser_binding: String::new(),
             })
             .await;
-        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_some());
+        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_ok());
         let first = resume(&p, "U1").await;
         assert!(gave_code(&first), "1 回目の resume はコードを出す");
 
-        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_none(), "遅れた verify は書けない");
+        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_err(), "遅れた verify は書けない");
         assert!(p.store.get_interaction("U1").await.is_none(), "消費済みの interaction は作り直されない");
         let second = resume(&p, "U1").await;
         assert!(!gave_code(&second));
         assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// 攻撃者が自分で始めたログインの URL を被害者に踏ませても、被害者のブラウザでは完了できず、
+    /// 攻撃者のブラウザ（認証していない側）でも resume でコードを取れない。
+    #[tokio::test]
+    async fn a_sign_in_completes_only_in_the_browser_that_started_it() {
+        let p = provider(Arc::new(crate::store::MemoryStore::default()));
+        let (secret, binding) = super::super::new_browser_binding();
+        p.store
+            .save_interaction(Interaction {
+                uid: "U1".into(),
+                raw_query: "client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcb&response_type=code&scope=openid".into(),
+                account_id: None,
+                auth_time: None,
+                request_uri: None,
+                browser_binding: binding,
+            })
+            .await;
+        // リクエストの Cookie ヘッダから作る（add で作ると「応答で足す cookie」になり、remove が消去を出さない）。
+        let jar_with = |v: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::COOKIE, format!("{}={v}", super::super::browser_cookie_name("U1")).parse().unwrap());
+            CookieJar::from_headers(&h)
+        };
+        let starter = jar_with(&secret);
+        let forged = jar_with("guess");
+
+        for other in [CookieJar::default(), forged] {
+            assert_eq!(
+                finalize_login(&p, other, "U1", "acct".into()).await.err(),
+                Some("started in another browser")
+            );
+        }
+        assert!(p.store.get_interaction("U1").await.is_some_and(|i| i.account_id.is_none()), "別のブラウザでは完了が書かれない");
+
+        assert!(finalize_login(&p, starter.clone(), "U1", "acct".into()).await.is_ok());
+        let stolen = resume(&p, "U1").await;
+        assert!(!gave_code(&stolen), "cookie の無いブラウザは resume でコードを取れない");
+        assert!(p.store.get_interaction("U1").await.is_some(), "断った resume は interaction を消費しない");
+
+        let q = HashMap::from([("uid".to_string(), "U1".to_string())]);
+        let own = super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), starter, Query(q)).await;
+        assert!(gave_code(&own));
+        let cleared = own.headers().get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok()).any(|c| c.starts_with("ix_U1=;"));
+        assert!(cleared, "使い終えた印の cookie を消す");
+    }
+
+    /// `/authorize` は interaction ごとに印の cookie を張り、interaction にはそのハッシュだけを残す。
+    #[tokio::test]
+    async fn authorize_marks_the_browser_that_starts_the_sign_in() {
+        let p = provider(Arc::new(crate::store::MemoryStore::default()));
+        let q = "client_id=rp&redirect_uri=https%3A%2F%2Frp.example%2Fcb&response_type=code&scope=openid".to_string();
+        let r = super::super::oidc::authorize(State(p.clone()), HeaderMap::new(), CookieJar::default(), RawQuery(Some(q))).await;
+        let loc = r.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        let uid = loc.split("/login/").nth(1).and_then(|s| s.split('?').next()).expect("login へ送る").to_string();
+        let set = r.headers().get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).expect("cookie を張る").to_string();
+        let c = Cookie::parse(set).unwrap();
+        assert_eq!(c.name(), super::super::browser_cookie_name(&uid));
+        assert_eq!(c.http_only(), Some(true));
+        assert_eq!(c.secure(), Some(true));
+        assert_eq!(c.same_site(), Some(SameSite::Lax));
+        let i = p.store.get_interaction(&uid).await.unwrap();
+        assert_ne!(i.browser_binding, c.value(), "cookie の値そのものは保存しない");
+        assert_eq!(i.browser_binding, super::super::browser_binding_hash(c.value()));
     }
 
     #[tokio::test]
@@ -361,6 +432,7 @@ mod tests {
                 account_id: Some("acct".into()),
                 auth_time: Some(1),
                 request_uri: None,
+                browser_binding: String::new(),
             })
             .await;
         let (consumed, completed) = tokio::join!(store.consume_interaction("U1"), store.complete_interaction("U1", "acct", 2));

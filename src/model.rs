@@ -84,6 +84,8 @@ pub struct Interaction {
     pub auth_time: Option<u64>,
     /// PAR 由来なら元の request_uri。resume → コード発行時に削除して単回化する。
     pub request_uri: Option<String>,
+    /// ログインを始めたブラウザに渡した cookie の値の SHA-256（b64url）。login の完了と resume で照合する。
+    pub browser_binding: String,
 }
 
 /// SSO 用セッション（cookie sid → account）。
