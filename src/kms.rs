@@ -35,7 +35,7 @@ impl KmsSigner {
 
     async fn new(kind: KmsKind, fs: Arc<Firestore>, key_path: &str) -> Result<Self, String> {
         let version = format!("{}/cryptoKeyVersions/1", key_path.trim_end_matches('/'));
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         // 公開鍵 PEM を取得し JWK / kid を作る（既存 jws.rs と同じ kid スキーム）。
         let tok = fs.token().await?;
         let url = format!("https://cloudkms.googleapis.com/v1/{version}/publicKey");

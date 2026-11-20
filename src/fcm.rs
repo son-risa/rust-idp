@@ -77,7 +77,7 @@ async fn send(fs: &Firestore, message: Value) -> Result<(), String> {
         fs.base_url_or("fcm.googleapis.com"),
         fs.project()
     );
-    let r = reqwest::Client::new()
+    let r = crate::http::client()
         .post(url)
         .bearer_auth(access)
         .json(&json!({ "message": message }))

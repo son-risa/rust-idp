@@ -74,7 +74,7 @@ impl ResendMailer {
         Self {
             api_key,
             from: "rust-op <noreply@sonrisa.co.jp>".into(),
-            http: reqwest::Client::new(),
+            http: crate::http::client(),
         }
     }
 

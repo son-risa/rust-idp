@@ -153,7 +153,7 @@ impl reqwest::dns::Resolve for PinnedResolver {
 
 /// 判定したアドレスにだけ接続し（取得の間に名前を解き直させない）、redirect は追わない。
 fn pinned_client(addrs: &[SocketAddr]) -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
+    crate::http::builder()
         .dns_resolver(std::sync::Arc::new(PinnedResolver(addrs.to_vec())))
         .redirect(reqwest::redirect::Policy::none())
         .build()

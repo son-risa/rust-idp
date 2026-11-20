@@ -144,7 +144,7 @@ fn resolve_database(raw: Result<String, std::env::VarError>) -> String {
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn http_client() -> reqwest::Client {
-    reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().expect("reqwest client")
+    crate::http::builder().timeout(HTTP_TIMEOUT).build().expect("reqwest client")
 }
 
 impl Firestore {
@@ -1075,7 +1075,7 @@ mod tests {
     #[tokio::test]
     async fn transport_error_strips_url_with_pii_id() {
         // 閉じたポート(127.0.0.1:1)への接続失敗で URL 付きの reqwest エラーを得る（ネットワーク非依存）。
-        let err = reqwest::Client::new()
+        let err = crate::http::client()
             .get("http://127.0.0.1:1/v1/documents/accounts/a%40b.com")
             .send()
             .await
