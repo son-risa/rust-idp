@@ -280,6 +280,29 @@ impl Firestore {
         }
     }
 
+    /// update_field の複数フィールド版（fields の各キーだけを書く。文書が無ければ誤り）。
+    pub async fn update_fields(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        let tok = self.token().await?;
+        let mut q: Vec<(&str, String)> = vec![("currentDocument.exists", "true".into())];
+        for k in fields.as_object().into_iter().flat_map(|o| o.keys()) {
+            q.push(("updateMask.fieldPaths", k.clone()));
+        }
+        let r = self
+            .http
+            .patch(self.doc_url(col, id))
+            .query(&q)
+            .bearer_auth(tok)
+            .json(&json!({ "fields": fields }))
+            .send()
+            .await
+            .map_err(|e| format!("update_fields: {}", e.without_url()))?;
+        if r.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("update_fields {} {}", r.status(), r.text().await.unwrap_or_default()))
+        }
+    }
+
     /// ドキュメントの fields を返す（無ければ None）。
     pub async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
         let tok = self.token().await?;
@@ -755,10 +778,25 @@ pub(crate) mod fake_firestore {
         update_time: Option<String>,
         #[serde(rename = "currentDocument.exists")]
         exists: Option<String>,
-        /// Firestore::update_field が使う部分更新。実装が単一フィールドしか送らないため
-        /// Vec ではなく単一値として受ける（複数フィールドのマスクは今のところ未使用）。
-        #[serde(rename = "updateMask.fieldPaths")]
-        update_mask_field: Option<String>,
+        /// 部分更新で書くフィールド（updateMask.fieldPaths は繰り返せるので、生の query から拾う）。
+        #[serde(skip)]
+        update_mask: Vec<String>,
+    }
+
+    impl Precondition {
+        fn parse(raw: Option<&str>) -> Self {
+            let mut pre = Precondition::default();
+            let pairs: Vec<(String, String)> = serde_urlencoded::from_str(raw.unwrap_or("")).unwrap_or_default();
+            for (k, v) in pairs {
+                match k.as_str() {
+                    "currentDocument.updateTime" => pre.update_time = Some(v),
+                    "currentDocument.exists" => pre.exists = Some(v),
+                    "updateMask.fieldPaths" => pre.update_mask.push(v),
+                    _ => {}
+                }
+            }
+            pre
+        }
     }
 
     async fn get_doc(
@@ -782,9 +820,10 @@ pub(crate) mod fake_firestore {
     async fn patch_doc(
         State(st): State<Arc<FakeState>>,
         Path((_project, col, id)): Path<(String, String, String)>,
-        Query(pre): Query<Precondition>,
+        axum::extract::RawQuery(raw): axum::extract::RawQuery,
         Json(body): Json<Value>,
     ) -> Response {
+        let pre = Precondition::parse(raw.as_deref());
         st.pass_gate("PATCH", &col, &id).await;
         if let Some(status) = st.take_failure("PATCH", &col, &id) {
             return status.into_response();
@@ -813,12 +852,15 @@ pub(crate) mod fake_firestore {
         let v = st.next();
         // updateMask 指定時は、既存ドキュメントの他フィールドを残したまま該当フィールドだけ
         // 差し替える(部分更新)。指定が無ければ従来通り全体置換。
-        let merged = if let Some(field) = &pre.update_mask_field {
+        let merged = if !pre.update_mask.is_empty() {
             let mut base = docs.get(&key).map(|d| d.fields.clone()).unwrap_or_else(|| json!({}));
-            if let Some(obj) = base.as_object_mut()
-                && let Some(new_val) = fields.get(field)
-            {
-                obj.insert(field.clone(), new_val.clone());
+            if let Some(obj) = base.as_object_mut() {
+                for field in &pre.update_mask {
+                    match fields.get(field) {
+                        Some(v) => obj.insert(field.clone(), v.clone()),
+                        None => obj.remove(field),
+                    };
+                }
             }
             base
         } else {

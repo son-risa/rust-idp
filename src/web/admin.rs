@@ -44,7 +44,7 @@ pub(super) async fn whoami(State(p): State<Arc<Provider>>, headers: HeaderMap, j
 
 /// HTML本文・属性値の両方で安全なエスケープ（&<>"'）。
 /// mailer.rs::escape は &<> のみで引用符を含まないため属性値には不十分——ここでは別に持つ。
-fn esc(s: &str) -> String {
+pub(super) fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -179,17 +179,17 @@ pub(super) async fn users_list(
                 ""
             };
             format!(
-                r#"<tr><td><a href="{href}">{email}</a>{admin_badge}</td><td>{status}</td><td>{sign_count}</td><td>{created_at}</td></tr>"#,
+                r#"<tr><td><a href="{href}">{email}</a>{admin_badge}</td><td>{status}</td><td>{passkeys}</td><td>{created_at}</td></tr>"#,
                 href = esc(&p.path(&format!("/admin/users/{}", a.account_id))),
                 email = esc(&a.email),
-                sign_count = a.sign_count,
+                passkeys = a.passkeys,
                 created_at = esc(&crate::firestore::rfc3339(a.created_at)),
             )
         })
         .collect();
 
     let body = format!(
-        "<h1>{heading}</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>[[Signature counter]]</th><th>[[Registered]]</th></tr>{rows}</table>",
+        "<h1>{heading}</h1><table><tr><th>[[Email address]]</th><th>[[Status]]</th><th>[[Passkeys]]</th><th>[[Registered]]</th></tr>{rows}</table>",
         heading = localize("[[Users ({n})]]", Lang::from_headers(&headers)).replace("{n}", &accounts.len().to_string()),
     );
     page(&p, Lang::from_headers(&headers), "[[Users]]", &body).into_response()
@@ -217,16 +217,47 @@ pub(super) async fn user_detail(
         Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
         Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: find_email", &e),
     };
-    let cred = match crate::registration::get_credential(fs, &email).await {
-        Ok(Some(c)) => c,
+    let cred = match crate::registration::get_account(fs, &email).await {
+        Ok(Some(a)) => a,
         Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
-        Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: get_credential", &e),
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: get_account", &e),
+    };
+    let passkeys = match crate::registration::list_credentials(fs, &cred).await {
+        Ok(v) => v,
+        Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: list_credentials", &e),
+    };
+    let passkey_table = if passkeys.is_empty() {
+        "<p>[[No passkeys. The user can register again with the same account.]]</p>".to_string()
+    } else {
+        let rows: String = passkeys
+            .iter()
+            .map(|c| {
+                format!(
+                    "<tr><td><code>{id}</code></td><td>{kind}</td><td>{sign_count}</td><td>{created}</td><td>{last}</td></tr>",
+                    id = esc(&c.credential_id),
+                    kind = esc(crate::webauthn::authenticator_name(&c.aaguid).unwrap_or(&c.aaguid)),
+                    sign_count = c.sign_count,
+                    created = esc(&crate::firestore::rfc3339(c.created_at)),
+                    last = c.last_used_at.map(|t| esc(&crate::firestore::rfc3339(t))).unwrap_or_default(),
+                )
+            })
+            .collect();
+        format!("<table><tr><th>credential_id</th><th>[[Authenticator]]</th><th>[[Signature counter]]</th><th>[[Registered]]</th><th>[[Last used]]</th></tr>{rows}</table>")
     };
     let is_admin_user = match is_admin_result {
         Ok(b) => b,
         Err(e) => return server_error(Lang::from_headers(&headers), "user_detail: is_admin", &e),
     };
     let is_self = account_id == viewer;
+    // 自分の passkey は消させない（セッションも失効し、すぐ締め出される）。
+    let passkey_table = if is_self || is_admin_user {
+        passkey_table
+    } else {
+        format!(
+            r#"{passkey_table}<form class="inline" method="post" action="{action}" onsubmit="return confirm('[[Remove all passkeys of this user? The account and profile are kept, and the user can register again as the same person. Sessions and tokens are also revoked.]]')"><button class="btn btn-danger" type="submit">[[Remove passkeys only]]</button></form>"#,
+            action = esc(&p.path(&format!("/admin/users/{account_id}/delete-passkeys"))),
+        )
+    };
 
     let disable_control = if cred.disabled {
         let delete_control = if is_admin_user {
@@ -290,17 +321,15 @@ pub(super) async fn user_detail(
     let body = format!(
         r#"<h1>{email}</h1>
 <p>account_id: <code>{account_id}</code></p>
-<p>credential_id: <code>{credential_id}</code></p>
-<p>sign_count: {sign_count}</p>
 <p>[[Status]]: {status} / [[Role]]: {admin_status}</p>
 <p>{disable_control} {admin_control}</p>
+<h2>[[Passkeys]]</h2>
+{passkey_table}
 <h2>[[History]]</h2>
 {audit_table}
 <p><a href="{back}">&larr; [[Back to the list]]</a></p>"#,
         email = esc(&email),
         account_id = esc(&account_id),
-        credential_id = esc(&cred.credential_id),
-        sign_count = cred.sign_count,
         status = if cred.disabled {
             "[[Disabled]]"
         } else {
@@ -370,6 +399,39 @@ pub(super) async fn user_enable(
         return server_error(Lang::from_headers(&headers), "user_enable", &e);
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
+}
+
+/// passkey だけを全部消す（アカウントと sub は残る）。
+pub(super) async fn user_delete_passkeys(
+    State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Path(account_id): Path<String>,
+) -> Response {
+    let lang = Lang::from_headers(&headers);
+    let (viewer, fs) = match require_admin_fs(&p, &jar, lang).await {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
+    if account_id == viewer {
+        return text(StatusCode::CONFLICT, lang, "[[You cannot remove your own passkeys here.]]");
+    }
+    // 管理者の passkey は消さない（0 本のアカウントには招待で登録し直せるので、管理者の権限ごと引き継がれうる）。
+    match crate::admin_store::is_admin(fs, &account_id).await {
+        Ok(true) => return text(StatusCode::CONFLICT, lang, "[[The passkeys of an admin cannot be removed. Revoke admin first.]]"),
+        Ok(false) => {}
+        Err(e) => return server_error(lang, "user_delete_passkeys: is_admin", &e),
+    }
+    let email = match crate::registration::find_email_by_account_id(fs, &account_id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return text(StatusCode::NOT_FOUND, lang, "[[User not found]]"),
+        Err(e) => return server_error(lang, "user_delete_passkeys: find_email", &e),
+    };
+    match crate::account_admin::delete_passkeys(fs, &viewer, &email).await {
+        Ok(Some(_)) => redirect(&p, &format!("/admin/users/{account_id}")),
+        Ok(None) => text(StatusCode::NOT_FOUND, lang, "[[User not found]]"),
+        Err(e) => server_error(lang, "user_delete_passkeys", &e),
+    }
 }
 
 pub(super) async fn user_delete(
@@ -1242,7 +1304,7 @@ mod tests {
             StatusCode::CONFLICT,
             "凍結していないアカウントは消さない"
         );
-        assert!(crate::registration::get_credential(&fs, "u@example.com")
+        assert!(crate::registration::get_account(&fs, "u@example.com")
             .await
             .unwrap()
             .is_some());
@@ -1269,7 +1331,7 @@ mod tests {
         .await;
         assert!(resp.status().is_redirection());
         assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/admin/users");
-        assert!(crate::registration::get_credential(&fs, "u@example.com").await.unwrap().is_none());
+        assert!(crate::registration::get_account(&fs, "u@example.com").await.unwrap().is_none());
         assert!(crate::registration::find_email_by_account_id(&fs, "acc-u").await.unwrap().is_none());
     }
 
@@ -1297,5 +1359,29 @@ mod tests {
             }
         }
         assert_eq!(shown, 1);
+    }
+
+    /// 「パスキーだけ削除」は、自分と管理者には使えない。ふつうの人には使え、詳細へ戻る。
+    #[tokio::test]
+    async fn delete_passkeys_refuses_self_and_admins() {
+        let (p, fs) = provider_with_firestore().await;
+        crate::admin_store::grant_admin(&fs, "acc-admin", "cli").await.unwrap();
+        crate::admin_store::grant_admin(&fs, "acc-other-admin", "cli").await.unwrap();
+        register(&fs, "admin@example.com", "acc-admin").await;
+        register(&fs, "boss@example.com", "acc-other-admin").await;
+        register(&fs, "u@example.com", "acc-u").await;
+        let p = Arc::new(p);
+        let call = |id: &str| {
+            let (p, id) = (p.clone(), id.to_string());
+            async move {
+                let jar = login_as(&p, "acc-admin").await;
+                user_delete_passkeys(State(p), HeaderMap::new(), jar, Path(id)).await.status()
+            }
+        };
+        assert_eq!(call("acc-admin").await, StatusCode::CONFLICT);
+        assert_eq!(call("acc-other-admin").await, StatusCode::CONFLICT);
+        assert!(crate::registration::has_passkey(&fs, "boss@example.com").await.unwrap());
+        assert_eq!(call("acc-u").await, StatusCode::SEE_OTHER);
+        assert!(!crate::registration::has_passkey(&fs, "u@example.com").await.unwrap());
     }
 }

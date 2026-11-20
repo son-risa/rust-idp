@@ -1177,3 +1177,28 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
         "https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc"
     );
 }
+
+#[tokio::test]
+async fn the_account_page_is_in_the_viewers_language() {
+    let (p, fs) = with_firestore().await;
+    register(&fs, "u@example.com", "acc-u").await;
+    let second = crate::webauthn::RegOutcome {
+        credential_id: "cred-second".into(),
+        pub_x: "x".into(),
+        pub_y: "y".into(),
+        sign_count: 0,
+        aaguid: String::new(),
+    };
+    crate::registration::save_credential(&fs, "u@example.com", "acc-u", &second).await.unwrap();
+    check_page("account (signed out)", "Passkey でログイン", |h| {
+        let p = p.clone();
+        async move { body_of(account::account_page(State(p), h, CookieJar::default()).await).await }
+    })
+    .await;
+    let jar = login_as(&p, "acc-u").await;
+    check_page("account (signed in)", "この端末のパスキーを追加", |h| {
+        let (p, jar) = (p.clone(), jar.clone());
+        async move { body_of(account::account_page(State(p), h, jar).await).await }
+    })
+    .await;
+}

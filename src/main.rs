@@ -98,6 +98,10 @@ async fn main() {
             migrate_static_clients_cmd(&argv[2..]).await;
             return;
         }
+        Some("migrate-credentials") => {
+            migrate_credentials_cmd(&argv[2..]).await;
+            return;
+        }
         _ => {}
     }
 
@@ -561,8 +565,8 @@ async fn grant_admin_cmd(args: &[String]) {
 /// admin_store へ渡さないようここで弾く（空文字列は他のどのセッションの account_id とも
 /// 一致しないはずだが、不正な入力を admin_store 層まで運ばない防御として明示的に検査する）。
 async fn resolve_account_id(cmd: &str, fs: &firestore::Firestore, email: &str) -> String {
-    let account_id = match registration::get_credential(fs, email).await {
-        Ok(Some(c)) => c.account_id,
+    let account_id = match registration::get_account(fs, email).await {
+        Ok(Some(a)) => a.account_id,
         Ok(None) => {
             eprintln!("{cmd}: account not found: {email}（先に passkey 登録を済ませてください）");
             std::process::exit(1);
@@ -797,4 +801,46 @@ async fn migrate_static_clients_cmd(args: &[String]) {
         eprintln!("migrate-static-clients: 一部のクライアントで失敗しました。上記を確認してください。");
         std::process::exit(1);
     }
+}
+
+/// accounts/{email} のフィールドに 1 本だけ持っていた passkey を credentials/{credentialId} へ写す。
+/// 何度流してもよい（移し終えたアカウントは飛ばす）。古いフィールドは消さない。
+///
+/// `rust-op migrate-credentials`          # ドライラン（移すアカウントの数を出す）
+/// `rust-op migrate-credentials --apply`  # 実行
+async fn migrate_credentials_cmd(args: &[String]) {
+    let apply = args.iter().any(|a| a == "--apply");
+    let fs = firestore::Firestore::new(resolve_project());
+    let rows = match fs.list_collection("accounts").await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("migrate-credentials: accounts を読めません: {e}");
+            std::process::exit(1);
+        }
+    };
+    let pending: Vec<&String> = rows
+        .iter()
+        .filter(|(_, f, _)| !firestore::field_bool(f, "credentialsMigrated").unwrap_or(false))
+        .map(|(email, _, _)| email)
+        .collect();
+    println!("accounts: {} / 未移行: {}", rows.len(), pending.len());
+    if !apply {
+        println!("ドライランです。移すには --apply を付けてください。");
+        return;
+    }
+    let mut failed = 0;
+    for email in pending {
+        match registration::migrate_account(&fs, email).await {
+            Ok(_) => {}
+            Err(e) => {
+                failed += 1;
+                eprintln!("migrate-credentials: {e}");
+            }
+        }
+    }
+    if failed > 0 {
+        eprintln!("migrate-credentials: {failed} 件が失敗しました。もう一度流せます。");
+        std::process::exit(1);
+    }
+    println!("done");
 }

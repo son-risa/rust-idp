@@ -22,6 +22,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::Instrument;
 use uuid::Uuid;
 
+mod account;
 mod admin;
 mod ciba;
 pub(crate) mod i18n;
@@ -71,6 +72,19 @@ fn started_in_this_browser(jar: &CookieJar, i: &crate::model::Interaction) -> bo
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+/// SSO セッションを作り、sid cookie を張る。
+async fn start_session(p: &Provider, jar: CookieJar, account_id: String, auth_time: u64) -> CookieJar {
+    let sid = uuid::Uuid::new_v4().to_string();
+    p.store.save_session(Session { sid: sid.clone(), account_id, auth_time }).await;
+    let cookie = Cookie::build((SID_COOKIE, sid))
+        .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .build();
+    jar.add(cookie)
 }
 
 /// sid cookie からログイン済み account_id を引く（SSO セッション）。
@@ -142,6 +156,7 @@ pub fn router(provider: Provider) -> Router {
         .route("/admin/users/{account_id}/disable", post(admin::user_disable))
         .route("/admin/users/{account_id}/enable", post(admin::user_enable))
         .route("/admin/users/{account_id}/delete", post(admin::user_delete))
+        .route("/admin/users/{account_id}/delete-passkeys", post(admin::user_delete_passkeys))
         .route("/admin/users/{account_id}/grant-admin", post(admin::user_grant_admin))
         .route("/admin/users/{account_id}/revoke-admin", post(admin::user_revoke_admin))
         .route("/admin/audit", get(admin::audit_list))
@@ -169,6 +184,12 @@ pub fn router(provider: Provider) -> Router {
         .route("/signup/passkey/options", post(register::register_passkey_options))
         .route("/signup/passkey/verify", post(register::register_passkey_verify))
         // 招待: RP（INVITE_CLIENT_IDS の confidential client）が登録リンクを発行し、受け手は /invite で登録する。
+        .route("/account", get(account::account_page))
+        .route("/account/signin/options", post(account::signin_options))
+        .route("/account/signin/verify", post(account::signin_verify))
+        .route("/account/passkeys/options", post(account::add_options))
+        .route("/account/passkeys/verify", post(account::add_verify))
+        .route("/account/passkeys/delete", post(account::delete_passkey))
         .route("/invites", post(register::invite_create))
         .route("/accounts/disable", post(register::account_disable))
         .route("/invite", get(register::invite_page))
@@ -343,6 +364,11 @@ const SERVER_ERRORS={
  'request not found':'[[This request was not found or has expired.]]',
  'no passkey':'[[No passkey is registered for this account.]]',
  'already handled':'[[This request has already been handled.]]',
+ 'sign-in required':'[[Please sign in again.]]',
+ 'confirmation required':'[[Please confirm it is you with a passkey again.]]',
+ 'too many passkeys':'[[You can add up to 10 passkeys. Remove one first.]]',
+ 'last passkey':'[[You cannot remove your only passkey. Add another passkey first.]]',
+ 'passkey not found':'[[This passkey was not found. Please reload the page.]]',
  'no challenge':'[[Something went wrong. Please try again.]]',
  'challenge context mismatch':'[[Something went wrong. Please try again.]]',
  'no firestore':'[[Something went wrong. Please try again.]]',

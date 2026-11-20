@@ -56,7 +56,7 @@ async fn issue_register_email(
     {
         return Err("rate_limited".into());
     }
-    match crate::registration::account_exists(fs, email).await? {
+    match crate::registration::has_passkey(fs, email).await? {
         true => {
             let _ = p.mailer.send_already_registered(email, lang).await;
         }
@@ -151,7 +151,7 @@ pub(super) async fn register_verify_email(
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
     match crate::registration::peek_email_challenge(fs, &req.token).await {
-        Ok(Some(email)) => match crate::registration::account_exists(fs, &email).await {
+        Ok(Some(email)) => match crate::registration::has_passkey(fs, &email).await {
             Ok(true) => (StatusCode::CONFLICT, "already registered").into_response(),
             _ => Json(serde_json::json!({ "email": email, "verified_token": req.token }))
                 .into_response(),
@@ -212,7 +212,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
+const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
@@ -241,6 +241,13 @@ async function reg(){
   if(nm)body.name=nm;
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   if(!v.ok){msg.textContent=await errorText(v);return;}
+  const res=await v.json();
+  if(isIOS&&res.gpm){
+   const link=(href,text)=>{const a=document.createElement('a');a.href=href;a.textContent=text;const p=document.createElement('p');p.append(a);return p;};
+   msg.textContent='[[Registration complete. This passkey was saved in Google Password Manager, which may ask for a PIN at sign-in. We recommend also saving a passkey in Passwords (iCloud).]]';
+   msg.append(link(ACCOUNT,'[[Add a passkey in Passwords]]'),link(AFTER||LOGIN,AFTER?'[[Continue]]':'[[Go to sign in]]'));
+   return;
+  }
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
   msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to sign in]]</a>';
  }catch(e){msg.textContent=passkeyErrorText(e);}
@@ -253,6 +260,7 @@ async function reg(){
             .replace("__OPT__", &p.path("/signup/passkey/options"))
             .replace("__VER__", &p.path("/signup/passkey/verify"))
             .replace("__LOGIN__", &p.path("/"))
+            .replace("__ACCOUNT__", &p.path("/account"))
             .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or(""))),
     )
 }
@@ -357,18 +365,30 @@ pub(super) async fn invite_create(
     if !return_to_allowed(&client, &return_to) {
         return plain_error("return_to must be under a registered redirect_uri origin");
     }
-    match crate::registration::get_credential(fs, &email).await {
-        Ok(Some(cred)) if cred.disabled => {
+    match crate::registration::get_account(fs, &email).await {
+        Ok(Some(a)) if a.disabled => {
             tracing::info!(event = "invite_account_disabled", client_id = %client.client_id);
             return Json(serde_json::json!({ "status": "disabled" })).into_response();
         }
-        Ok(Some(_)) => {
+        // passkey を全部消したアカウントには、登録し直す招待を出せる（同じ accountId のまま）。
+        Ok(Some(a)) if a.account_id.is_empty() => {
             tracing::info!(event = "invite_already_registered", client_id = %client.client_id);
             return Json(serde_json::json!({ "status": "registered" })).into_response();
         }
+        Ok(Some(a)) => match crate::registration::list_credentials(fs, &a).await {
+            Ok(c) if c.is_empty() => {}
+            Ok(_) => {
+                tracing::info!(event = "invite_already_registered", client_id = %client.client_id);
+                return Json(serde_json::json!({ "status": "registered" })).into_response();
+            }
+            Err(e) => {
+                tracing::error!("invite list_credentials: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            }
+        },
         Ok(None) => {}
         Err(e) => {
-            tracing::error!("invite get_credential: {e}");
+            tracing::error!("invite get_account: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     }
@@ -426,8 +446,8 @@ pub(super) async fn account_disable(
         Ok(x) => x,
         Err(r) => return r,
     };
-    match crate::registration::get_credential(fs, &email).await {
-        Ok(Some(cred)) => match crate::admin_store::is_admin(fs, &cred.account_id).await {
+    match crate::registration::get_account(fs, &email).await {
+        Ok(Some(account)) => match crate::admin_store::is_admin(fs, &account.account_id).await {
             Ok(true) => {
                 tracing::warn!(event = "account_disable_protected", client_id = %client.client_id);
                 return (StatusCode::CONFLICT, Json(serde_json::json!({ "status": "protected" }))).into_response();
@@ -440,7 +460,7 @@ pub(super) async fn account_disable(
         },
         Ok(None) => {}
         Err(e) => {
-            tracing::error!("account_disable get_credential: {e}");
+            tracing::error!("account_disable get_account: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     }
@@ -497,7 +517,7 @@ pub(super) async fn invite_page(
                 .into_response();
         }
     };
-    if matches!(crate::registration::account_exists(fs, &email).await, Ok(true)) {
+    if matches!(crate::registration::has_passkey(fs, &email).await, Ok(true)) {
         return Redirect::to(&return_to).into_response();
     }
     passkey_register_page(&p, lang, &q.t, Some(&return_to)).into_response()
@@ -514,7 +534,7 @@ async fn refuse_invite_for_registered(fs: &crate::firestore::Firestore, token: &
             return Some((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response());
         }
     };
-    match crate::registration::account_exists(fs, &email).await {
+    match crate::registration::has_passkey(fs, &email).await {
         Ok(false) => None,
         Ok(true) => Some((StatusCode::CONFLICT, "already registered").into_response()),
         Err(e) => {
@@ -548,12 +568,28 @@ pub(super) async fn register_passkey_options(
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
-    // 既存 passkey の再登録なら account_id を再利用、新規なら払い出す。
+    // アカウントが在れば（passkey を全部消して登録し直すとき）account_id を引き継ぎ、無ければ払い出す。
     // WebAuthn user.id は sub と同じ不透明な account_id にする（email を含めない）。
-    let existing = crate::registration::get_credential(fs, &email).await.ok().flatten();
+    let existing = match crate::registration::get_account(fs, &email).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!("register options get_account: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
+    let existing_creds = match &existing {
+        Some(a) => match crate::registration::list_credentials(fs, a).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("register options list_credentials: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            }
+        },
+        None => vec![],
+    };
     let account_id = existing
         .as_ref()
-        .map(|c| c.account_id.clone())
+        .map(|a| a.account_id.clone())
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let challenge = match crate::registration::create_webauthn_challenge(fs, &email, crate::registration::ChallengeKind::Reg, "", &account_id).await {
@@ -563,11 +599,23 @@ pub(super) async fn register_passkey_options(
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
-    let exclude: Vec<serde_json::Value> = match &existing {
-        Some(c) => vec![serde_json::json!({"type":"public-key","id":c.credential_id})],
-        None => vec![],
-    };
-    Json(serde_json::json!({
+    Json(creation_options(&p, &challenge, &account_id, &email, &existing_creds)).into_response()
+}
+
+/// navigator.credentials.create に渡す options。登録と、ログイン後の passkey の追加で同じものを使う。
+/// WebAuthn user.id は sub と同じ不透明な account_id にする（email を含めない）。
+pub(super) fn creation_options(
+    p: &Provider,
+    challenge: &str,
+    account_id: &str,
+    email: &str,
+    existing: &[crate::registration::Credential],
+) -> serde_json::Value {
+    let exclude: Vec<serde_json::Value> = existing
+        .iter()
+        .map(|c| serde_json::json!({"type":"public-key","id":c.credential_id}))
+        .collect();
+    serde_json::json!({
         "challenge": challenge,
         "rp": { "id": p.rp_id(), "name": "rust-op" },
         "user": {
@@ -583,16 +631,15 @@ pub(super) async fn register_passkey_options(
         "attestation": "none",
         "timeout": 60000,
         "excludeCredentials": exclude,
-    }))
-    .into_response()
+    })
 }
 
 #[derive(serde::Deserialize)]
-struct RegResponse {
+pub(super) struct RegResponse {
     #[serde(rename = "clientDataJSON")]
-    client_data_json: String,
+    pub(super) client_data_json: String,
     #[serde(rename = "attestationObject")]
-    attestation_object: String,
+    pub(super) attestation_object: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -606,6 +653,7 @@ pub(super) struct RegVerifyReq {
 
 pub(super) async fn register_passkey_verify(
     State(p): State<Arc<Provider>>,
+    jar: CookieJar,
     Json(req): Json<RegVerifyReq>,
 ) -> Response {
     let fs = match &p.firestore {
@@ -641,7 +689,7 @@ pub(super) async fn register_passkey_verify(
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
     };
-    let (email2, kind, _, account_id) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
+    let (email2, kind, ceremony_uid, account_id) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
         Ok(Some(t)) => t,
         Ok(None) => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
         Err(e) => {
@@ -649,7 +697,7 @@ pub(super) async fn register_passkey_verify(
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
-    if kind != crate::registration::ChallengeKind::Reg || email2 != email1 || account_id.is_empty() {
+    if kind != crate::registration::ChallengeKind::Reg || !ceremony_uid.is_empty() || email2 != email1 || account_id.is_empty() {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
     let outcome = match crate::webauthn::verify_registration(
@@ -675,9 +723,26 @@ pub(super) async fn register_passkey_verify(
             tracing::error!("save_profile after registration: {e}");
         }
     }
+    // 登録できたらログイン済みにする（メールの確認と passkey の作成で本人と確かめている）。
+    // 戻った先の RP で passkey をもう一度押さずに済み、すぐ別の passkey を足せる。
+    // 凍結を確かめられなかったときは張らない（/authorize のセッション利用は凍結を見ない）。
+    let active = matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if !a.disabled);
+    let jar = if active {
+        if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
+            p.store.delete_session(&old).await;
+        }
+        start_session(&p, jar, account_id, now()).await
+    } else {
+        jar
+    };
     (
         StatusCode::CREATED,
-        Json(serde_json::json!({ "ok": true, "redirect": p.path("/") })),
+        jar,
+        Json(serde_json::json!({
+            "ok": true,
+            "redirect": p.path("/"),
+            "gpm": outcome.aaguid == crate::webauthn::GOOGLE_PASSWORD_MANAGER,
+        })),
     )
         .into_response()
 }
@@ -769,7 +834,9 @@ mod invite_tests {
         let challenge = opts["challenge"].as_str().unwrap();
         let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
-        let acd = attested_cred_data(b"invite-cred", &cose_es256(&x, &y));
+        // credential id は登録ごとに変える（同じ id の登録は、別のアカウントのものとして断られる）。
+        let cred_id = uuid::Uuid::new_v4();
+        let acd = attested_cred_data(cred_id.as_bytes(), &cose_es256(&x, &y));
         let att = Cbor::Map(vec![
             (Cbor::Text("fmt".into()), Cbor::Text("none".into())),
             (Cbor::Text("attStmt".into()), Cbor::Map(vec![])),
@@ -787,7 +854,7 @@ mod invite_tests {
             body["name"] = serde_json::json!(n);
         }
         let verify_req: RegVerifyReq = serde_json::from_value(body).unwrap();
-        register_passkey_verify(State(p.clone()), Json(verify_req)).await.status()
+        register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await.status()
     }
 
     #[tokio::test]
@@ -812,8 +879,8 @@ mod invite_tests {
 
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
         let fs = p.firestore.as_ref().unwrap();
-        assert!(crate::registration::account_exists(fs, "new@example.com").await.unwrap());
-        let cred = crate::registration::get_credential(fs, "new@example.com").await.unwrap().unwrap();
+        assert!(crate::registration::has_passkey(fs, "new@example.com").await.unwrap());
+        let cred = crate::registration::get_account(fs, "new@example.com").await.unwrap().unwrap();
         let claims = p.store.find_account(&cred.account_id).await.claims;
         assert_eq!(claims.get("email"), Some(&serde_json::json!("new@example.com")));
         assert_eq!(
@@ -854,7 +921,7 @@ mod invite_tests {
         )
         .await;
         assert_eq!(register_with_token(&p, &first).await, StatusCode::CREATED);
-        let before = crate::registration::get_credential(fs, "a@example.com").await.unwrap().unwrap();
+        let before = crate::registration::sole_credential(fs, "a@example.com").await.unwrap();
 
         let opts = register_passkey_options(
             State(p.clone()),
@@ -868,11 +935,11 @@ mod invite_tests {
             "response": { "clientDataJSON": "", "attestationObject": "" },
         }))
         .unwrap();
-        let verify = register_passkey_verify(State(p.clone()), Json(verify_req)).await;
+        let verify = register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await;
         assert_eq!(verify.status(), StatusCode::CONFLICT, "登録の前に取った options があっても、verify で断る");
         assert!(second_opts["challenge"].is_string());
 
-        let after = crate::registration::get_credential(fs, "a@example.com").await.unwrap().unwrap();
+        let after = crate::registration::sole_credential(fs, "a@example.com").await.unwrap();
         assert_eq!(after.pub_x, before.pub_x);
         assert_eq!(after.credential_id, before.credential_id);
     }
@@ -924,7 +991,7 @@ mod invite_tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["status"], "disabled");
         let fs = p.firestore.as_ref().unwrap();
-        assert!(crate::registration::get_credential(fs, "a@example.com").await.unwrap().unwrap().disabled);
+        assert!(crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
         let audit = fs.query_eq("auditLog", "action", "disable_account").await.unwrap();
         assert_eq!(audit.len(), 1);
         assert_eq!(crate::firestore::field_str(&audit[0].1, "actor"), Some("client:amate"));
@@ -947,13 +1014,13 @@ mod invite_tests {
         let token = token_of(body_json(first).await["url"].as_str().unwrap());
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
         let fs = p.firestore.as_ref().unwrap();
-        let account_id = crate::registration::get_credential(fs, "boss@example.com").await.unwrap().unwrap().account_id;
+        let account_id = crate::registration::get_account(fs, "boss@example.com").await.unwrap().unwrap().account_id;
         crate::admin_store::grant_admin(fs, &account_id, "cli").await.unwrap();
 
         let resp = disable(&p, basic("amate", "s3cret"), "boss@example.com").await;
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         assert_eq!(body_json(resp).await["status"], "protected");
-        assert!(!crate::registration::get_credential(fs, "boss@example.com").await.unwrap().unwrap().disabled);
+        assert!(!crate::registration::get_account(fs, "boss@example.com").await.unwrap().unwrap().disabled);
         assert!(fs.query_eq("auditLog", "action", "disable_account").await.unwrap().is_empty());
     }
 
@@ -981,7 +1048,7 @@ mod invite_tests {
         assert_eq!(public.status(), StatusCode::FORBIDDEN);
         assert_eq!(disable(&p, basic("amate", "s3cret"), "not-an-email").await.status(), StatusCode::BAD_REQUEST);
         let fs = p.firestore.as_ref().unwrap();
-        assert!(!crate::registration::get_credential(fs, "a@example.com").await.unwrap().unwrap().disabled);
+        assert!(!crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
     }
 
     #[tokio::test]
@@ -1019,7 +1086,7 @@ mod invite_tests {
 
     async fn claims_of(p: &Arc<Provider>, email: &str) -> HashMap<String, serde_json::Value> {
         let fs = p.firestore.as_ref().unwrap();
-        let cred = crate::registration::get_credential(fs, email).await.unwrap().unwrap();
+        let cred = crate::registration::get_account(fs, email).await.unwrap().unwrap();
         p.store.find_account(&cred.account_id).await.claims
     }
 
