@@ -363,6 +363,10 @@ pub(super) async fn invite_create(
             return Json(serde_json::json!({ "status": "disabled" })).into_response();
         }
         // passkey を全部消したアカウントには、登録し直す招待を出せる（同じ accountId のまま）。
+        Ok(Some(a)) if a.account_id.is_empty() => {
+            tracing::info!(event = "invite_already_registered", client_id = %client.client_id);
+            return Json(serde_json::json!({ "status": "registered" })).into_response();
+        }
         Ok(Some(a)) => match crate::registration::list_credentials(fs, &a).await {
             Ok(c) if c.is_empty() => {}
             Ok(_) => {

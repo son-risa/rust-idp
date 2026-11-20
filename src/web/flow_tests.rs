@@ -679,3 +679,43 @@ async fn deleting_an_account_removes_its_passkeys() {
         assert!(fs.get_doc("credentials", &id).await.unwrap().is_none(), "{id} が残った");
     }
 }
+
+/// CIBA の承認も 2 本目の passkey で通る。他人の passkey の id を名乗ると通らない。
+#[tokio::test]
+async fn ciba_is_approved_with_either_passkey_but_not_anothers() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let key2 = add_passkey(&p, &email, &account_id, b"second-credential").await;
+    let other = format!("other-{}@example.com", uuid::Uuid::new_v4());
+    let other_id = uuid::Uuid::new_v4().to_string();
+    let other_key = add_passkey(&p, &other, &other_id, b"other-credential").await;
+
+    let approve = |cred: &'static [u8], key: SigningKey| {
+        let p = p.clone();
+        let email = email.clone();
+        async move {
+            let mut form = HashMap::new();
+            form.insert("client_id".to_string(), "test-ciba-rp".to_string());
+            form.insert("login_hint".to_string(), email);
+            form.insert("scope".to_string(), "openid".to_string());
+            let body = body_json(ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(form)).await).await;
+            let auth_req_id = body["auth_req_id"].as_str().unwrap().to_string();
+            let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone())).await).await;
+            assert_eq!(opts["allowCredentials"].as_array().unwrap().len(), 2);
+            let challenge = opts["challenge"].as_str().unwrap().to_string();
+            let (ad, sig, cdj) = make_auth_ceremony(&key, 1, &challenge, &p.origin(), &p.rp_id(), true);
+            let req: AuthVerifyReq = serde_json::from_value(json!({
+                "id": crate::webauthn::b64e(cred),
+                "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig, "userHandle": null },
+            }))
+            .unwrap();
+            let status = ciba::ciba_approve(State(p.clone()), Path(auth_req_id.clone()), Json(req)).await.status();
+            // 同じ要求の dedup に当たらないよう、次の試しの前に片づける。
+            p.ciba.transition_if_pending(&auth_req_id, CibaStatus::Denied).await.unwrap();
+            status
+        }
+    };
+    assert_eq!(approve(b"other-credential", other_key).await, StatusCode::BAD_REQUEST);
+    assert_eq!(approve(b"second-credential", key2).await, StatusCode::OK);
+}
