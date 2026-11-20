@@ -75,6 +75,15 @@ impl FirestoreStore {
     }
 }
 
+/// 外から来た値をそのまま文書 ID にする前に形を見る。発行する値は 32 桁の 16 進なので、それより緩く
+/// 「Firestore が ID として受け付ける形」だけを通す。受け付けない形を引くと Firestore が 400 を返し、
+/// それがストアの誤り（5xx）になって、ただの「無い」が障害に見えてしまう。
+fn issued_shape(id: &str) -> bool {
+    (1..=128).contains(&id.len())
+        && !id.starts_with("__")
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 #[async_trait]
 impl Store for FirestoreStore {
     async fn save_interaction(&self, i: Interaction) {
@@ -186,6 +195,9 @@ impl Store for FirestoreStore {
     }
 
     async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> {
+        if !issued_shape(code) {
+            return Ok(None);
+        }
         // updateTime CAS で単回消費を原子化する。get→write の間に別リクエストが消費した
         // 場合は CAS が負け、二重発行を防ぐ（consume_mandate_if_unused / CIBA と同型）。
         let Some((mut f, update_time)) = self.fs.get_doc_with_update_time("authCodes", code).await? else {
@@ -271,6 +283,9 @@ impl Store for FirestoreStore {
     }
 
     async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> {
+        if !issued_shape(token) {
+            return Ok(None);
+        }
         let Some(f) = self.fs.get_doc("accessTokens", token).await? else {
             return Ok(None);
         };
@@ -294,6 +309,9 @@ impl Store for FirestoreStore {
     }
 
     async fn revoke_access_token(&self, token: &str) -> StoreResult<()> {
+        if !issued_shape(token) {
+            return Ok(());
+        }
         Ok(self.fs.delete_doc("accessTokens", token).await?)
     }
 
@@ -347,6 +365,9 @@ impl Store for FirestoreStore {
     }
 
     async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> {
+        if !issued_shape(token) {
+            return Ok(None);
+        }
         let Some(f) = self.fs.get_doc("refreshTokens", token).await? else {
             return Ok(None);
         };
@@ -357,6 +378,9 @@ impl Store for FirestoreStore {
     }
 
     async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> StoreResult<bool> {
+        if !issued_shape(token) {
+            return Ok(false);
+        }
         // 消費前の fields と updateTime を読み、used=false なら used=true + replacedBy を
         // updateTime 条件付き更新で書く（CAS）。並行ローテーションは高々 1 回成功。
         let Some((mut f, ut)) = self.fs.get_doc_with_update_time("refreshTokens", token).await? else {
@@ -372,15 +396,8 @@ impl Store for FirestoreStore {
         Ok(self.fs.set_doc_if_unchanged("refreshTokens", token, f, &ut).await?)
     }
 
-    async fn refresh_family_revoked(&self, family_id: &str) -> bool {
-        match self.fs.get_doc(FAMILY_REVOCATIONS, family_id).await {
-            Ok(Some(f)) => !doc_expired(&f),
-            Ok(None) => false,
-            Err(e) => {
-                tracing::error!("refresh family revocation lookup failed ({e}); fail-closed");
-                true
-            }
-        }
+    async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> {
+        Ok(self.fs.get_doc(FAMILY_REVOCATIONS, family_id).await?.is_some_and(|f| !doc_expired(&f)))
     }
 
     async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
@@ -430,6 +447,9 @@ impl Store for FirestoreStore {
     }
 
     async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()> {
+        if !issued_shape(token) {
+            return Ok(());
+        }
         Ok(self.fs.delete_doc("refreshTokens", token).await?)
     }
 
@@ -684,6 +704,28 @@ mod tests {
         let (a, b) = tokio::join!(s.consume_interaction("U1"), s.consume_interaction("U1"));
         assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
         assert!(!s.consume_interaction("U1").await);
+    }
+
+    /// Firestore が ID として受け付けない値は、引かずに「無い」とする（400 を 5xx にしない）。
+    #[tokio::test]
+    async fn a_value_firestore_cannot_hold_is_simply_not_found() {
+        let (s, fake) = store_and_fake().await;
+        for bad in ["a/b".to_string(), "x".repeat(1501), "__x__".into(), String::new(), "a.b".into()] {
+            // 引いてしまったら落ちるようにしておく。
+            for col in ["authCodes", "accessTokens", "refreshTokens"] {
+                for m in ["GET", "PATCH", "DELETE"] {
+                    fake.fail_once_with(m, col, None, axum::http::StatusCode::BAD_REQUEST);
+                }
+            }
+            assert!(s.take_code(&bad).await.unwrap().is_none());
+            assert!(s.get_access_token(&bad).await.unwrap().is_none());
+            assert!(s.get_refresh_token(&bad).await.unwrap().is_none());
+            assert!(!s.mark_refresh_used(&bad, None).await.unwrap());
+            s.revoke_access_token(&bad).await.unwrap();
+            s.revoke_refresh_token(&bad).await.unwrap();
+            fake.clear_failures();
+        }
+        assert!(issued_shape(&uuid::Uuid::new_v4().simple().to_string()));
     }
 
     #[tokio::test]

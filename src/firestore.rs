@@ -698,6 +698,14 @@ pub(crate) mod fake_firestore {
             *n
         }
 
+        pub fn clear_failures(&self) {
+            self.failures.lock().unwrap().clear();
+        }
+
+        pub fn doc_ids(&self, col: &str) -> Vec<String> {
+            self.docs.lock().unwrap().keys().filter(|(c, _)| c == col).map(|(_, id)| id.clone()).collect()
+        }
+
         pub fn fcm_sent_messages(&self) -> Vec<Value> {
             self.fcm_sent.lock().unwrap().clone()
         }

@@ -119,8 +119,8 @@ pub trait Store: Send + Sync {
     /// 後片付けとして start から `replaced_by` を辿って各 RT を削除する。札が使わせないので、
     /// 後片付けの消し漏れは安全に関わらない（盗難者・正規ユーザ双方に再認証を強制）。
     async fn revoke_refresh_family(&self, family_id: &str, start_token: &str);
-    /// 系列に失効の札があれば true。ストアに問い合わせられないときも true（閉じる側に倒す）。
-    async fn refresh_family_revoked(&self, family_id: &str) -> bool;
+    /// 系列に失効の札があれば true。ストアに問い合わせられないときは誤り（呼び出し側は 5xx で断る）。
+    async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool>;
 
     /// sub からアカウントを解決。未登録なら自動生成する（PoC 用）。
     async fn find_account(&self, sub: &str) -> Account;
@@ -316,8 +316,8 @@ impl Store for MemoryStore {
             _ => false,
         })
     }
-    async fn refresh_family_revoked(&self, family_id: &str) -> bool {
-        self.revoked_families.lock().unwrap().get(family_id).is_some_and(|e| e.alive())
+    async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> {
+        Ok(self.revoked_families.lock().unwrap().get(family_id).is_some_and(|e| e.alive()))
     }
     async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
         self.revoked_families

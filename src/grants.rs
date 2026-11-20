@@ -140,12 +140,17 @@ async fn maybe_issue_refresh(
     Ok(Some(token))
 }
 
-/// 保存したが渡さなかった RT を消す。消せなくても、渡していないので誰も使えない。
-async fn discard_unissued_refresh(p: &Provider, token: Option<&str>) {
-    if let Some(t) = token
+/// 保存したが渡さなかったトークンを消す。消せなくても、渡していないので誰も使えない。
+async fn discard_unissued(p: &Provider, refresh: Option<&str>, access: Option<&str>) {
+    if let Some(t) = refresh
         && let Err(e) = p.store.revoke_refresh_token(t).await
     {
-        tracing::warn!(event = "unissued_refresh_not_removed", "{e}");
+        tracing::warn!(event = "unissued_token_not_removed", kind = "refresh", "{e}");
+    }
+    if let Some(t) = access
+        && let Err(e) = p.store.revoke_access_token(t).await
+    {
+        tracing::warn!(event = "unissued_token_not_removed", kind = "access", "{e}");
     }
 }
 
@@ -311,7 +316,7 @@ impl GrantHandler for RefreshTokenGrant {
         if pre.family_id.is_empty() {
             return Err(OAuthError::InvalidGrant("refresh token has no family; sign in again".into()));
         }
-        if p.store.refresh_family_revoked(&pre.family_id).await {
+        if p.store.refresh_family_revoked(&pre.family_id).await? {
             return Err(OAuthError::InvalidGrant("refresh token family revoked".into()));
         }
 
@@ -366,29 +371,44 @@ impl GrantHandler for RefreshTokenGrant {
                 })
                 .await?;
         }
+        // AT も古い RT を使用済みにする前に作る。後で作ると、AT の保存の失敗で古い RT だけが使用済みになり、
+        // RP が古い RT で試し直したときに再利用として系列ごと失効する。
+        let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
+        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
+        let (access_token, id_token) = match issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None).await {
+            Ok(x) => x,
+            Err(e) => {
+                discard_unissued(p, new_refresh.as_deref(), None).await;
+                return Err(e);
+            }
+        };
+        let unissued = |p| discard_unissued(p, new_refresh.as_deref(), Some(access_token.as_str()));
+
         let marked = match p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await {
             Ok(m) => m,
             Err(e) => {
-                // 古い RT が使われた印を書けたかどうか分からない。新しい RT は誰にも渡していないので消し、
+                // 古い RT が使われた印を書けたかどうか分からない。新しいトークンは誰にも渡していないので消し、
                 // 5xx を返す。RP は古い RT で試し直せる（書けていれば、そのときは再利用として断られる）。
-                discard_unissued_refresh(p, new_refresh.as_deref()).await;
+                unissued(p).await;
                 return Err(e.into());
             }
         };
-        if !marked || p.store.refresh_family_revoked(&pre.family_id).await {
-            discard_unissued_refresh(p, new_refresh.as_deref()).await;
+        let revoked = match p.store.refresh_family_revoked(&pre.family_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                // 札を確かめられないまま渡すと、失効した系列にトークンを出しうる。
+                unissued(p).await;
+                return Err(e.into());
+            }
+        };
+        if !marked || revoked {
+            unissued(p).await;
             return Err(OAuthError::InvalidGrant(if marked {
                 "refresh token family revoked".into()
             } else {
                 "refresh_token not found or already used".into()
             }));
         }
-
-        let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
-        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
-        let (access_token, id_token) =
-            issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None)
-                .await?;
         let refresh_token = new_refresh;
 
         Ok(TokenResponse {
@@ -966,7 +986,7 @@ mod tests {
         async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
             self.inner.revoke_refresh_family(family_id, start_token).await
         }
-        async fn refresh_family_revoked(&self, family_id: &str) -> bool { self.inner.refresh_family_revoked(family_id).await }
+        async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> { self.inner.refresh_family_revoked(family_id).await }
         async fn find_account(&self, sub: &str) -> crate::model::Account { self.inner.find_account(sub).await }
     }
 
@@ -1050,7 +1070,8 @@ mod tests {
         }
     }
 
-    /// 札を引けない（ストアの誤り）ときは断り、RT を使用済みにしない（閉じる側に倒す）。
+    /// 札を引けない（ストアの誤り）ときは server_error で断る。invalid_grant だと RP が RT を捨てる。
+    /// 1 回目（使用済みにする前）なら RT はそのまま、障害が明けたら同じ RT で続けられる。
     #[tokio::test]
     async fn a_failed_tombstone_lookup_refuses_the_rotation() {
         let (store, fake) = fake_store_and_state().await;
@@ -1058,8 +1079,34 @@ mod tests {
         p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
         fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
         let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
-        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
+        assert!(matches!(r, Err(OAuthError::ServerError(_))), "{:?}", r.err());
         assert!(!p.store.get_refresh_token("RT0").await.unwrap().unwrap().used);
+        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        assert!(again.is_ok(), "{:?}", again.err());
+    }
+
+    /// 古い RT を使用済みにする書き込み、またはその後の札の確認が誤ったときは server_error。
+    /// 先に作った新しい RT と AT は渡していないので消す。
+    #[tokio::test]
+    async fn a_failure_after_minting_discards_the_unissued_tokens() {
+        for case in ["mark", "second lookup"] {
+            let (store, fake) = fake_store_and_state().await;
+            let p = provider().with_store(store);
+            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
+            match case {
+                "mark" => fake.fail_once("PATCH", "refreshTokens", Some("RT0")),
+                _ => {
+                    // 1 回目は「札は無い」（404）で通し、2 回目を落とす。
+                    fake.fail_once_with("GET", "refreshFamilyRevocations", Some("fam-test"), axum::http::StatusCode::NOT_FOUND);
+                    fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
+                }
+            }
+            let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+            assert!(matches!(r, Err(OAuthError::ServerError(_))), "{case}: {:?}", r.err());
+            let left = |col: &str| fake.doc_ids(col).into_iter().filter(|id| id != "RT0").count();
+            assert_eq!(left("refreshTokens"), 0, "{case}: 渡していない RT が残った");
+            assert_eq!(left("accessTokens"), 0, "{case}: 渡していない AT が残った");
+        }
     }
 
     /// familyId を持たない RT（2026-06-11 より前に始まった鎖）はローテーションせず、ログインし直させる。
