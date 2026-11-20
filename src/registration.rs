@@ -425,6 +425,7 @@ fn challenge_expired(fields: &serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use super::*;
     use crate::firestore::fake_firestore;
 
@@ -487,7 +488,7 @@ mod tests {
                 ("nickname".to_string(), "ok".to_string()),
                 ("name".to_string(), bad.to_string()),
             ]);
-            assert!(matches!(save_profile(&fs, "acc", &upd).await, Err(ProfileError::Invalid(k)) if k == "name"), "{bad:?}");
+            assert_matches!(save_profile(&fs, "acc", &upd).await, Err(ProfileError::Invalid(k)) if k == "name", "{bad:?}");
         }
         let saved = get_profile(&fs, "acc").await.unwrap();
         assert_eq!(saved.get("name").map(String::as_str), Some("山田 太郎"));
