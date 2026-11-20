@@ -5,7 +5,7 @@
 
 use crate::firestore::{self as fs_h, Firestore};
 use crate::model::*;
-use crate::store::Store;
+use crate::store::{Store, StoreResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -153,7 +153,7 @@ impl Store for FirestoreStore {
         let _ = self.fs.delete_doc("sessions", sid).await;
     }
 
-    async fn save_code(&self, c: AuthorizationCode) {
+    async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> {
         let mut f = json!({
             "clientId": fs_h::s(&c.client_id),
             "accountId": fs_h::s(&c.account_id),
@@ -182,14 +182,15 @@ impl Store for FirestoreStore {
         if let Some(v) = &c.resource {
             f["resource"] = fs_h::s(v);
         }
-        let _ = self.fs.set_doc("authCodes", &c.code, f).await;
+        Ok(self.fs.set_doc("authCodes", &c.code, f).await?)
     }
 
-    async fn take_code(&self, code: &str) -> Option<AuthorizationCode> {
+    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> {
         // updateTime CAS で単回消費を原子化する。get→write の間に別リクエストが消費した
         // 場合は CAS が負け、二重発行を防ぐ（consume_mandate_if_unused / CIBA と同型）。
-        let (mut f, update_time) =
-            self.fs.get_doc_with_update_time("authCodes", code).await.ok()??;
+        let Some((mut f, update_time)) = self.fs.get_doc_with_update_time("authCodes", code).await? else {
+            return Ok(None);
+        };
         let used = f
             .get("used")
             .and_then(|v| v.get("booleanValue"))
@@ -197,22 +198,26 @@ impl Store for FirestoreStore {
             .unwrap_or(false);
         if used {
             // 再利用: このコードで発行したトークンを失効させ拒否する（RFC 6749 §4.1.2）。
-            if let Some(at) = fs_h::field_str(&f, "issuedAccessToken") {
-                let _ = self.fs.delete_doc("accessTokens", at).await;
+            // 消せなかったときも、このコードは使わせない（None）。消し損ねたトークンはログで追う。
+            if let Some(at) = fs_h::field_str(&f, "issuedAccessToken")
+                && let Err(e) = self.fs.delete_doc("accessTokens", at).await
+            {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "access", "{e}");
             }
-            if let Some(rt) = fs_h::field_str(&f, "issuedRefreshToken") {
-                let _ = self.fs.delete_doc("refreshTokens", rt).await;
+            if let Some(rt) = fs_h::field_str(&f, "issuedRefreshToken")
+                && let Err(e) = self.fs.delete_doc("refreshTokens", rt).await
+            {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
             }
-            return None;
+            return Ok(None);
         }
-        // 初回消費: used=true を CAS で書く。並行消費に負けたら（Ok(false)/Err）None を返す。
+        // 初回消費: used=true を CAS で書く。並行消費に負けたら None を返す。
         f["used"] = fs_h::b(true);
-        match self.fs.set_doc_if_unchanged("authCodes", code, f.clone(), &update_time).await {
-            Ok(true) => {}
-            _ => return None,
+        if !self.fs.set_doc_if_unchanged("authCodes", code, f.clone(), &update_time).await? {
+            return Ok(None);
         }
         // 期限チェックは grant 側（code.expires_at）。ここでは復元のみ。
-        Some(AuthorizationCode {
+        Ok(Some(AuthorizationCode {
             code: code.to_string(),
             client_id: fs_h::field_str(&f, "clientId").unwrap_or("").to_string(),
             account_id: fs_h::field_str(&f, "accountId").unwrap_or("").to_string(),
@@ -226,18 +231,18 @@ impl Store for FirestoreStore {
             dpop_jkt: fs_h::field_str(&f, "dpopJkt").map(str::to_string),
             resource: fs_h::field_str(&f, "resource").map(str::to_string),
             expires_at: fs_h::field_ts_secs(&f, "expiresAt").unwrap_or(0),
-        })
+        }))
     }
 
-    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) {
+    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()> {
         let mut f = json!({ "issuedAccessToken": fs_h::s(access_token) });
         if let Some(rt) = refresh_token {
             f["issuedRefreshToken"] = fs_h::s(rt);
         }
-        let _ = self.fs.merge_doc("authCodes", code, f).await;
+        Ok(self.fs.merge_doc("authCodes", code, f).await?)
     }
 
-    async fn save_access_token(&self, t: AccessToken) {
+    async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> {
         let mut f = json!({
             "clientId": fs_h::s(&t.client_id),
             "accountId": fs_h::s(&t.account_id),
@@ -262,15 +267,17 @@ impl Store for FirestoreStore {
         if t.mandate_consumed {
             f["mandateConsumed"] = fs_h::b(true);
         }
-        let _ = self.fs.set_doc("accessTokens", &t.token, f).await;
+        Ok(self.fs.set_doc("accessTokens", &t.token, f).await?)
     }
 
-    async fn get_access_token(&self, token: &str) -> Option<AccessToken> {
-        let f = self.fs.get_doc("accessTokens", token).await.ok()??;
+    async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> {
+        let Some(f) = self.fs.get_doc("accessTokens", token).await? else {
+            return Ok(None);
+        };
         if doc_expired(&f) {
-            return None;
+            return Ok(None);
         }
-        Some(AccessToken {
+        Ok(Some(AccessToken {
             token: token.to_string(),
             client_id: fs_h::field_str(&f, "clientId").unwrap_or("").to_string(),
             account_id: fs_h::field_str(&f, "accountId").unwrap_or("").to_string(),
@@ -283,11 +290,11 @@ impl Store for FirestoreStore {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
             mandate_consumed: fs_h::field_bool(&f, "mandateConsumed").unwrap_or(false),
-        })
+        }))
     }
 
-    async fn revoke_access_token(&self, token: &str) {
-        let _ = self.fs.delete_doc("accessTokens", token).await;
+    async fn revoke_access_token(&self, token: &str) -> StoreResult<()> {
+        Ok(self.fs.delete_doc("accessTokens", token).await?)
     }
 
     /// updateTime CAS で mandate_consumed: false → true を 1 回だけ成功させる。
@@ -312,7 +319,7 @@ impl Store for FirestoreStore {
             .await
     }
 
-    async fn save_refresh_token(&self, t: RefreshToken) {
+    async fn save_refresh_token(&self, t: RefreshToken) -> StoreResult<()> {
         let mut f = json!({
             "clientId": fs_h::s(&t.client_id),
             "accountId": fs_h::s(&t.account_id),
@@ -336,35 +343,33 @@ impl Store for FirestoreStore {
         if let Some(rb) = &t.replaced_by {
             f["replacedBy"] = fs_h::s(rb);
         }
-        let _ = self.fs.set_doc("refreshTokens", &t.token, f).await;
+        Ok(self.fs.set_doc("refreshTokens", &t.token, f).await?)
     }
 
-    async fn get_refresh_token(&self, token: &str) -> Option<RefreshToken> {
-        let f = self.fs.get_doc("refreshTokens", token).await.ok()??;
+    async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> {
+        let Some(f) = self.fs.get_doc("refreshTokens", token).await? else {
+            return Ok(None);
+        };
         if doc_expired(&f) {
-            return None;
+            return Ok(None);
         }
-        Some(rt_from_fields(token, &f))
+        Ok(Some(rt_from_fields(token, &f)))
     }
 
-    async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool {
+    async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> StoreResult<bool> {
         // 消費前の fields と updateTime を読み、used=false なら used=true + replacedBy を
         // updateTime 条件付き更新で書く（CAS）。並行ローテーションは高々 1 回成功。
-        let (mut f, ut) = match self.fs.get_doc_with_update_time("refreshTokens", token).await {
-            Ok(Some(x)) => x,
-            _ => return false,
+        let Some((mut f, ut)) = self.fs.get_doc_with_update_time("refreshTokens", token).await? else {
+            return Ok(false);
         };
         if fs_h::field_bool(&f, "used").unwrap_or(false) {
-            return false; // 既に使用済み（再利用/競合）
+            return Ok(false); // 既に使用済み（再利用/競合）
         }
         f["used"] = fs_h::b(true);
         if let Some(rb) = replaced_by {
             f["replacedBy"] = fs_h::s(rb);
         }
-        self.fs
-            .set_doc_if_unchanged("refreshTokens", token, f, &ut)
-            .await
-            .unwrap_or(false)
+        Ok(self.fs.set_doc_if_unchanged("refreshTokens", token, f, &ut).await?)
     }
 
     async fn refresh_family_revoked(&self, family_id: &str) -> bool {
@@ -424,8 +429,8 @@ impl Store for FirestoreStore {
         }
     }
 
-    async fn revoke_refresh_token(&self, token: &str) {
-        let _ = self.fs.delete_doc("refreshTokens", token).await;
+    async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()> {
+        Ok(self.fs.delete_doc("refreshTokens", token).await?)
     }
 
     async fn find_account(&self, sub: &str) -> Account {
@@ -477,13 +482,13 @@ mod revoke_family_tests {
         let (host, state) = fake_firestore::spawn().await;
         let s = FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)));
         for (t, next) in chain {
-            s.save_refresh_token(rt(t, *next)).await;
+            s.save_refresh_token(rt(t, *next)).await.unwrap();
         }
         state.fail_once("DELETE", "refreshTokens", Some(fail));
         s.revoke_refresh_family("F", start).await;
         let mut left = Vec::new();
         for (t, _) in chain {
-            if s.get_refresh_token(t).await.is_some() {
+            if s.get_refresh_token(t).await.unwrap().is_some() {
                 left.push(t.to_string());
             }
         }
@@ -530,7 +535,7 @@ mod revoke_family_tests {
             id_token_signed_response_alg: None,
         };
         let form = |t: &str| std::collections::HashMap::from([("refresh_token".to_string(), t.to_string())]);
-        store.save_refresh_token(rt("RT0", None)).await;
+        store.save_refresh_token(rt("RT0", None)).await.unwrap();
         let rt1 = RefreshTokenGrant.handle(&p, &client, &form("RT0"), None).await.unwrap().refresh_token.unwrap();
 
         let (reached, release) = state.gate("DELETE", "refreshTokens", &rt1);
@@ -545,7 +550,7 @@ mod revoke_family_tests {
 
         assert!(during.is_err(), "札を書いた後のローテーションが通った: {:?}", during.map(|r| r.refresh_token));
         for t in ["RT0", rt1.as_str()] {
-            assert!(store.get_refresh_token(t).await.is_none(), "失効の後に {t} が残っている");
+            assert!(store.get_refresh_token(t).await.unwrap().is_none(), "失効の後に {t} が残っている");
         }
     }
 
@@ -598,9 +603,9 @@ mod tests {
             resource: None,
             expires_at: now + 600,
         })
-        .await;
-        assert_eq!(s.take_code("C1").await.map(|c| c.client_id), Some("cl".to_string()));
-        assert!(s.take_code("C1").await.is_none());
+        .await.unwrap();
+        assert_eq!(s.take_code("C1").await.unwrap().map(|c| c.client_id), Some("cl".to_string()));
+        assert!(s.take_code("C1").await.unwrap().is_none());
     }
 
     async fn store() -> FirestoreStore {
@@ -631,32 +636,32 @@ mod tests {
     #[tokio::test]
     async fn a_refresh_token_is_rotated_once() {
         let s = store().await;
-        s.save_refresh_token(rt("R1", "F", None)).await;
-        assert!(s.mark_refresh_used("R1", Some("R2")).await);
-        assert!(!s.mark_refresh_used("R1", Some("R3")).await, "使用済みの RT は 2 度目のローテーションに使えない");
-        assert_eq!(s.get_refresh_token("R1").await.unwrap().replaced_by.as_deref(), Some("R2"));
+        s.save_refresh_token(rt("R1", "F", None)).await.unwrap();
+        assert!(s.mark_refresh_used("R1", Some("R2")).await.unwrap());
+        assert!(!s.mark_refresh_used("R1", Some("R3")).await.unwrap(), "使用済みの RT は 2 度目のローテーションに使えない");
+        assert_eq!(s.get_refresh_token("R1").await.unwrap().unwrap().replaced_by.as_deref(), Some("R2"));
     }
 
     #[tokio::test]
     async fn two_concurrent_rotations_of_one_refresh_token_let_only_one_through() {
         let s = store().await;
-        s.save_refresh_token(rt("R1", "F", None)).await;
+        s.save_refresh_token(rt("R1", "F", None)).await.unwrap();
         let (a, b) = tokio::join!(s.mark_refresh_used("R1", Some("Ra")), s.mark_refresh_used("R1", Some("Rb")));
-        assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
+        assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|w| **w).count(), 1);
     }
 
     #[tokio::test]
     async fn revoking_a_family_deletes_the_whole_chain_and_nothing_else() {
         let s = store().await;
-        s.save_refresh_token(rt("R1", "F", Some("R2"))).await;
-        s.save_refresh_token(rt("R2", "F", Some("R3"))).await;
-        s.save_refresh_token(rt("R3", "F", None)).await;
-        s.save_refresh_token(rt("X1", "G", None)).await;
+        s.save_refresh_token(rt("R1", "F", Some("R2"))).await.unwrap();
+        s.save_refresh_token(rt("R2", "F", Some("R3"))).await.unwrap();
+        s.save_refresh_token(rt("R3", "F", None)).await.unwrap();
+        s.save_refresh_token(rt("X1", "G", None)).await.unwrap();
         s.revoke_refresh_family("F", "R1").await;
         for t in ["R1", "R2", "R3"] {
-            assert!(s.get_refresh_token(t).await.is_none(), "{t} が残っている");
+            assert!(s.get_refresh_token(t).await.unwrap().is_none(), "{t} が残っている");
         }
-        assert!(s.get_refresh_token("X1").await.is_some());
+        assert!(s.get_refresh_token("X1").await.unwrap().is_some());
     }
 
     /// 循環した鎖でも止まる。止めているのは辿った RT の集合（seen）で、REVOKE_MAX_RTS の上限ではない。
@@ -664,11 +669,11 @@ mod tests {
     #[tokio::test]
     async fn revoking_a_cyclic_family_stops_because_deleted_links_are_gone() {
         let s = store().await;
-        s.save_refresh_token(rt("C1", "F", Some("C2"))).await;
-        s.save_refresh_token(rt("C2", "F", Some("C1"))).await;
+        s.save_refresh_token(rt("C1", "F", Some("C2"))).await.unwrap();
+        s.save_refresh_token(rt("C2", "F", Some("C1"))).await.unwrap();
         s.revoke_refresh_family("F", "C1").await;
-        assert!(s.get_refresh_token("C1").await.is_none());
-        assert!(s.get_refresh_token("C2").await.is_none());
+        assert!(s.get_refresh_token("C1").await.unwrap().is_none());
+        assert!(s.get_refresh_token("C2").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -684,17 +689,18 @@ mod tests {
     #[tokio::test]
     async fn rotation_of_an_unknown_refresh_token_fails() {
         let s = store().await;
-        assert!(!s.mark_refresh_used("NOPE", Some("R2")).await);
+        assert!(!s.mark_refresh_used("NOPE", Some("R2")).await.unwrap());
     }
 
     #[tokio::test]
     async fn rotation_fails_closed_when_the_store_errs() {
         for method in ["GET", "PATCH"] {
             let (s, fake) = store_and_fake().await;
-            s.save_refresh_token(rt("R1", "F", None)).await;
+            s.save_refresh_token(rt("R1", "F", None)).await.unwrap();
             fake.fail_once(method, "refreshTokens", Some("R1"));
-            assert!(!s.mark_refresh_used("R1", Some("R2")).await, "{method} の 503 で通ってしまった");
-            assert!(!s.get_refresh_token("R1").await.unwrap().used, "{method} の 503 で使用済みになった");
+            // 「使用済み」（false）ではなく誤りとして返す。false だと invalid_grant になり、RP が RT を捨てる。
+            assert!(s.mark_refresh_used("R1", Some("R2")).await.is_err(), "{method} の 503 を誤りとして返さなかった");
+            assert!(!s.get_refresh_token("R1").await.unwrap().unwrap().used, "{method} の 503 で使用済みになった");
         }
     }
 

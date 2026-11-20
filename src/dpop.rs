@@ -184,7 +184,8 @@ mod tests {
     async fn rejects_an_iat_at_the_ends_of_the_range() {
         let key = SigningKey::generate();
         let v = Es256Dpop::default();
-        for iat in [i64::MIN, i64::MAX, now_secs() - IAT_SKEW_SECS - 1, now_secs() + IAT_SKEW_SECS + 1] {
+        // 窓のすぐ外だと、作ってから検証するまでに時計が進んで窓に入ることがある。十分に離す。
+        for iat in [i64::MIN, i64::MAX, now_secs() - 2 * IAT_SKEW_SECS, now_secs() + 2 * IAT_SKEW_SECS] {
             let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, iat));
             assert_eq!(v.verify(&proof, HTM, HTU, None).await.err().as_deref(), Some("iat out of window"), "{iat}");
         }

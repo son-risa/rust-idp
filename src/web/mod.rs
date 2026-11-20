@@ -481,8 +481,13 @@ async fn authenticate_token(
         },
     };
     let at = match p.store.get_access_token(&token).await {
-        Some(at) => at,
-        None => {
+        Ok(Some(at)) => at,
+        Err(e) => {
+            // 401 にすると、RP は生きているトークンを捨ててログインし直させる。
+            tracing::error!(event = "store_error", "token auth [{method} {path_suffix}]: {e}");
+            return Err((StatusCode::SERVICE_UNAVAILABLE, "temporarily unavailable").into_response());
+        }
+        Ok(None) => {
             tracing::warn!("token auth failed [{method} {path_suffix}]: invalid/expired token");
             return Err((StatusCode::UNAUTHORIZED, "invalid token").into_response());
         }
@@ -570,7 +575,7 @@ mod token_auth_tests {
                 authorization_details: None,
                 mandate_consumed: false,
             })
-            .await;
+            .await.unwrap();
         p
     }
 

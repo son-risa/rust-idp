@@ -47,6 +47,32 @@ fn retain_alive<K, V>(map: &mut HashMap<K, Expiring<V>>) {
     map.retain(|_, e| e.expires_at > cutoff);
 }
 
+/// ストアに問い合わせられなかった（Firestore の障害など）。「無い」「競合に負けた」とは分けて返し、
+/// 呼び出し側は 5xx にする。4xx にすると、RP は一時的な障害で RT を捨て、利用者はログインし直しになる。
+#[derive(Debug)]
+pub struct StoreError(pub String);
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for StoreError {
+    fn from(s: String) -> Self {
+        StoreError(s)
+    }
+}
+
+impl From<StoreError> for crate::error::OAuthError {
+    fn from(e: StoreError) -> Self {
+        tracing::error!(event = "store_error", "{e}");
+        crate::error::OAuthError::ServerError("temporarily unavailable".into())
+    }
+}
+
+pub type StoreResult<T> = Result<T, StoreError>;
+
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn save_interaction(&self, i: Interaction);
@@ -63,32 +89,32 @@ pub trait Store: Send + Sync {
     async fn get_session(&self, sid: &str) -> Option<Session>;
     async fn delete_session(&self, sid: &str);
 
-    async fn save_code(&self, c: AuthorizationCode);
+    async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()>;
     /// 認可コードを消費する。初回は使用済みマークして返す。
     /// 再利用（既に使用済み）を検出したら、そのコードで発行したトークンを失効させ None を返す
     /// （RFC 6749 §4.1.2: コード再利用時は発行済みトークンを revoke すべき）。
-    async fn take_code(&self, code: &str) -> Option<AuthorizationCode>;
+    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>>;
     /// 発行した access/refresh token をコードに紐付ける（再利用時の失効対象を記録）。
-    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>);
+    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()>;
 
-    async fn save_access_token(&self, t: AccessToken);
-    async fn get_access_token(&self, token: &str) -> Option<AccessToken>;
+    async fn save_access_token(&self, t: AccessToken) -> StoreResult<()>;
+    async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>>;
     /// アクセストークンを失効（削除）する（RFC 7009）。未知でも no-op。
-    async fn revoke_access_token(&self, token: &str);
+    async fn revoke_access_token(&self, token: &str) -> StoreResult<()>;
     /// mandate の単回消費。`mandate_consumed: false → true` を CAS で 1 回だけ成功させる。
     /// 成功: Ok(true)、既消費/無効トークン: Ok(false)。
     async fn consume_mandate_if_unused(&self, token: &str) -> Result<bool, String>;
 
-    async fn save_refresh_token(&self, t: RefreshToken);
+    async fn save_refresh_token(&self, t: RefreshToken) -> StoreResult<()>;
     /// 消費せず参照する（失効時の所有者確認用・再利用検知の used 判定用）。
-    async fn get_refresh_token(&self, token: &str) -> Option<RefreshToken>;
+    async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>>;
     /// リフレッシュトークンを失効（削除）する（RFC 7009）。未知でも no-op。
-    async fn revoke_refresh_token(&self, token: &str);
+    async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()>;
     /// ローテーション消費（OAuth Security BCP 再利用検知）: `used=false` の RT を `used=true`
     /// にし `replaced_by` を記録する CAS。この呼び出しが初めて used 化したら true（=ローテーション
     /// 成功）、既に used or 競合敗北 or 未存在なら false。delete でなく used マークで残すことで、
     /// 後の再提示を「再利用」として検知できる。
-    async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool;
+    async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> StoreResult<bool>;
     /// 再利用検知時に系列を失効する。系列に失効の札を書き（以後その系列の RT はどれも使えない）、
     /// 後片付けとして start から `replaced_by` を辿って各 RT を削除する。札が使わせないので、
     /// 後片付けの消し漏れは安全に関わらない（盗難者・正規ユーザ双方に再認証を強制）。
@@ -177,7 +203,7 @@ impl Store for MemoryStore {
     async fn delete_session(&self, sid: &str) {
         self.sessions.lock().unwrap().remove(sid);
     }
-    async fn save_code(&self, c: AuthorizationCode) {
+    async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> {
         // code 自身の expires_at をストア TTL にも流用する(二重管理を避ける)。
         // 再利用検知のため used 化後も expires_at までは保持する(削除しない)。
         let exp = c.expires_at;
@@ -189,16 +215,19 @@ impl Store for MemoryStore {
                 exp,
             ),
         );
+        Ok(())
     }
-    async fn take_code(&self, code: &str) -> Option<AuthorizationCode> {
+    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> {
         // 失効対象を lock 内で収集し、lock 解放後にトークンマップを触る（ロック順序固定）。
         let revoke = {
             let mut codes = self.codes.lock().unwrap();
-            let entry = codes.get_mut(code)?;
+            let Some(entry) = codes.get_mut(code) else {
+                return Ok(None);
+            };
             if !entry.alive() {
                 // 期限切れコードは未知と同義。lazy 削除して None。
                 codes.remove(code);
-                return None;
+                return Ok(None);
             }
             let rec = &mut entry.value;
             if rec.used {
@@ -206,7 +235,7 @@ impl Store for MemoryStore {
                 Some(r)
             } else {
                 rec.used = true;
-                return Some(rec.code.clone());
+                return Ok(Some(rec.code.clone()));
             }
         };
         if let Some((at, rt)) = revoke {
@@ -217,31 +246,34 @@ impl Store for MemoryStore {
                 self.refresh_tokens.lock().unwrap().remove(&rt);
             }
         }
-        None
+        Ok(None)
     }
-    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) {
+    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()> {
         if let Some(entry) = self.codes.lock().unwrap().get_mut(code) {
             entry.value.issued_access = Some(access_token.to_string());
             entry.value.issued_refresh = refresh_token.map(str::to_string);
         }
+        Ok(())
     }
-    async fn save_access_token(&self, t: AccessToken) {
+    async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> {
         let exp = now_secs() + ACCESS_TTL_SECS;
         self.access_tokens.lock().unwrap().insert(t.token.clone(), Expiring::new(t, exp));
+        Ok(())
     }
-    async fn get_access_token(&self, token: &str) -> Option<AccessToken> {
+    async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> {
         let mut map = self.access_tokens.lock().unwrap();
-        match map.get(token) {
+        Ok(match map.get(token) {
             Some(e) if e.alive() => Some(e.value.clone()),
             Some(_) => {
                 map.remove(token); // lazy 失効: introspection 等が期限切れを active 扱いしない
                 None
             }
             None => None,
-        }
+        })
     }
-    async fn revoke_access_token(&self, token: &str) {
+    async fn revoke_access_token(&self, token: &str) -> StoreResult<()> {
         self.access_tokens.lock().unwrap().remove(token);
+        Ok(())
     }
     async fn consume_mandate_if_unused(&self, token: &str) -> Result<bool, String> {
         let mut map = self.access_tokens.lock().unwrap();
@@ -253,34 +285,36 @@ impl Store for MemoryStore {
             _ => Ok(false),
         }
     }
-    async fn save_refresh_token(&self, t: RefreshToken) {
+    async fn save_refresh_token(&self, t: RefreshToken) -> StoreResult<()> {
         let exp = now_secs() + REFRESH_TTL_SECS;
         self.refresh_tokens.lock().unwrap().insert(t.token.clone(), Expiring::new(t, exp));
+        Ok(())
     }
-    async fn get_refresh_token(&self, token: &str) -> Option<RefreshToken> {
+    async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> {
         let mut map = self.refresh_tokens.lock().unwrap();
-        match map.get(token) {
+        Ok(match map.get(token) {
             Some(e) if e.alive() => Some(e.value.clone()),
             Some(_) => {
                 map.remove(token);
                 None
             }
             None => None,
-        }
+        })
     }
-    async fn revoke_refresh_token(&self, token: &str) {
+    async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()> {
         self.refresh_tokens.lock().unwrap().remove(token);
+        Ok(())
     }
-    async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> bool {
+    async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> StoreResult<bool> {
         let mut map = self.refresh_tokens.lock().unwrap();
-        match map.get_mut(token) {
+        Ok(match map.get_mut(token) {
             Some(e) if e.alive() && !e.value.used => {
                 e.value.used = true;
                 e.value.replaced_by = replaced_by.map(str::to_string);
                 true
             }
             _ => false,
-        }
+        })
     }
     async fn refresh_family_revoked(&self, family_id: &str) -> bool {
         self.revoked_families.lock().unwrap().get(family_id).is_some_and(|e| e.alive())
@@ -401,15 +435,15 @@ mod tests {
     #[tokio::test]
     async fn mark_refresh_used_is_single_use() {
         let s = MemoryStore::default();
-        s.save_refresh_token(rtok("RT1", None, false)).await;
-        assert!(s.mark_refresh_used("RT1", Some("RT2")).await); // 初回成功
+        s.save_refresh_token(rtok("RT1", None, false)).await.unwrap();
+        assert!(s.mark_refresh_used("RT1", Some("RT2")).await.unwrap()); // 初回成功
         for _ in 0..5 {
-            assert!(!s.mark_refresh_used("RT1", Some("RTx")).await); // 以降は負け
+            assert!(!s.mark_refresh_used("RT1", Some("RTx")).await.unwrap()); // 以降は負け
         }
-        let rt = s.get_refresh_token("RT1").await.unwrap();
+        let rt = s.get_refresh_token("RT1").await.unwrap().unwrap();
         assert!(rt.used);
         assert_eq!(rt.replaced_by.as_deref(), Some("RT2")); // 初回の連結が保たれる
-        assert!(!s.mark_refresh_used("UNKNOWN", None).await); // 未存在も false
+        assert!(!s.mark_refresh_used("UNKNOWN", None).await.unwrap()); // 未存在も false
     }
 
     // B-4: revoke_refresh_family は replaced_by 連鎖を辿り family 全体を削除する（任意長）。
@@ -419,11 +453,11 @@ mod tests {
             let s = MemoryStore::default();
             for i in 1..=n {
                 let rb = if i < n { Some(format!("RT{}", i + 1)) } else { None };
-                s.save_refresh_token(rtok(&format!("RT{i}"), rb.as_deref(), i < n)).await;
+                s.save_refresh_token(rtok(&format!("RT{i}"), rb.as_deref(), i < n)).await.unwrap();
             }
             s.revoke_refresh_family("fam", "RT1").await;
             for i in 1..=n {
-                assert!(s.get_refresh_token(&format!("RT{i}")).await.is_none(), "n={n} RT{i} 残存");
+                assert!(s.get_refresh_token(&format!("RT{i}")).await.unwrap().is_none(), "n={n} RT{i} 残存");
             }
         }
     }
@@ -432,71 +466,71 @@ mod tests {
     #[tokio::test]
     async fn revoke_family_cyclic_chain_terminates() {
         let s = MemoryStore::default();
-        s.save_refresh_token(rtok("RT1", Some("RT2"), true)).await;
-        s.save_refresh_token(rtok("RT2", Some("RT1"), true)).await; // RT1<->RT2 循環
+        s.save_refresh_token(rtok("RT1", Some("RT2"), true)).await.unwrap();
+        s.save_refresh_token(rtok("RT2", Some("RT1"), true)).await.unwrap(); // RT1<->RT2 循環
         s.revoke_refresh_family("fam", "RT1").await; // 停止すること自体が検証点
-        assert!(s.get_refresh_token("RT1").await.is_none());
-        assert!(s.get_refresh_token("RT2").await.is_none());
+        assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
+        assert!(s.get_refresh_token("RT2").await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn consume_mandate_is_single_use() {
         let s = MemoryStore::default();
-        s.save_access_token(at("AT1")).await;
+        s.save_access_token(at("AT1")).await.unwrap();
         // 初回成功、2 回目以降は失敗（先勝ち）。
         assert!(s.consume_mandate_if_unused("AT1").await.unwrap());
         assert!(!s.consume_mandate_if_unused("AT1").await.unwrap());
         // 未知トークンも false。
         assert!(!s.consume_mandate_if_unused("UNKNOWN").await.unwrap());
         // 消費フラグが永続化されている。
-        assert!(s.get_access_token("AT1").await.unwrap().mandate_consumed);
+        assert!(s.get_access_token("AT1").await.unwrap().unwrap().mandate_consumed);
     }
 
     #[tokio::test]
     async fn code_reuse_revokes_issued_tokens() {
         let s = MemoryStore::default();
-        s.save_code(code("C1")).await;
-        s.save_access_token(at("AT1")).await;
-        s.save_refresh_token(RefreshToken { token: "RT1".into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), resource: None, jkt: None, acr: None, auth_time: None, family_id: "fam1".into(), used: false, replaced_by: None }).await;
-        s.link_issued_tokens("C1", "AT1", Some("RT1")).await;
+        s.save_code(code("C1")).await.unwrap();
+        s.save_access_token(at("AT1")).await.unwrap();
+        s.save_refresh_token(RefreshToken { token: "RT1".into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), resource: None, jkt: None, acr: None, auth_time: None, family_id: "fam1".into(), used: false, replaced_by: None }).await.unwrap();
+        s.link_issued_tokens("C1", "AT1", Some("RT1")).await.unwrap();
 
         // 初回消費は成功し、発行トークンは生きている。
-        assert!(s.take_code("C1").await.is_some());
-        assert!(s.get_access_token("AT1").await.is_some());
+        assert!(s.take_code("C1").await.unwrap().is_some());
+        assert!(s.get_access_token("AT1").await.unwrap().is_some());
 
         // 再利用は拒否（None）され、発行済みトークンが失効する。
-        assert!(s.take_code("C1").await.is_none());
-        assert!(s.get_access_token("AT1").await.is_none());
-        assert!(s.get_refresh_token("RT1").await.is_none());
+        assert!(s.take_code("C1").await.unwrap().is_none());
+        assert!(s.get_access_token("AT1").await.unwrap().is_none());
+        assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn unknown_code_returns_none() {
         let s = MemoryStore::default();
-        assert!(s.take_code("nope").await.is_none());
+        assert!(s.take_code("nope").await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn revoke_access_token_removes_it() {
         let s = MemoryStore::default();
-        s.save_access_token(at("AT1")).await;
-        assert!(s.get_access_token("AT1").await.is_some());
-        s.revoke_access_token("AT1").await;
-        assert!(s.get_access_token("AT1").await.is_none());
+        s.save_access_token(at("AT1")).await.unwrap();
+        assert!(s.get_access_token("AT1").await.unwrap().is_some());
+        s.revoke_access_token("AT1").await.unwrap();
+        assert!(s.get_access_token("AT1").await.unwrap().is_none());
         // 未知トークンの失効は no-op（パニックしない）。
-        s.revoke_access_token("nope").await;
+        s.revoke_access_token("nope").await.unwrap();
     }
 
     #[tokio::test]
     async fn get_refresh_token_peeks_without_consuming() {
         let s = MemoryStore::default();
-        s.save_refresh_token(RefreshToken { token: "RT1".into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), resource: None, jkt: None, acr: None, auth_time: None, family_id: "fam1".into(), used: false, replaced_by: None }).await;
+        s.save_refresh_token(RefreshToken { token: "RT1".into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), resource: None, jkt: None, acr: None, auth_time: None, family_id: "fam1".into(), used: false, replaced_by: None }).await.unwrap();
         // peek は消費しない。
-        assert!(s.get_refresh_token("RT1").await.is_some());
-        assert!(s.get_refresh_token("RT1").await.is_some());
+        assert!(s.get_refresh_token("RT1").await.unwrap().is_some());
+        assert!(s.get_refresh_token("RT1").await.unwrap().is_some());
         // revoke で消える。
-        s.revoke_refresh_token("RT1").await;
-        assert!(s.get_refresh_token("RT1").await.is_none());
+        s.revoke_refresh_token("RT1").await.unwrap();
+        assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
     }
 
     // 保持期間はレコード種別ごとに異なる。DEFAULT 一律にすると session が 15 分で
@@ -523,11 +557,11 @@ mod tests {
         let inter_exp = s.interactions.lock().unwrap().get("U1").unwrap().expires_at;
         assert!(inter_exp >= base + INTERACTION_TTL_SECS, "interaction は 1 時間保持");
 
-        s.save_access_token(at("AT1")).await;
+        s.save_access_token(at("AT1")).await.unwrap();
         let at_exp = s.access_tokens.lock().unwrap().get("AT1").unwrap().expires_at;
         assert!(at_exp >= base + ACCESS_TTL_SECS && at_exp < base + SESSION_TTL_SECS);
 
-        s.save_refresh_token(rtok("RT1", None, false)).await;
+        s.save_refresh_token(rtok("RT1", None, false)).await.unwrap();
         let rt_exp = s.refresh_tokens.lock().unwrap().get("RT1").unwrap().expires_at;
         assert!(rt_exp >= base + REFRESH_TTL_SECS, "refresh は 14 日保持");
     }
@@ -539,7 +573,7 @@ mod tests {
         let s = MemoryStore::default();
         let mut c = code("C1");
         c.expires_at = now_secs() + 42;
-        s.save_code(c).await;
+        s.save_code(c).await.unwrap();
         assert_eq!(s.codes.lock().unwrap().get("C1").unwrap().expires_at, now_secs() + 42);
     }
 
@@ -552,7 +586,7 @@ mod tests {
             .lock()
             .unwrap()
             .insert("AT_OLD".into(), Expiring::new(at("AT_OLD"), now_secs().saturating_sub(1)));
-        assert!(s.get_access_token("AT_OLD").await.is_none());
+        assert!(s.get_access_token("AT_OLD").await.unwrap().is_none());
         // lazy 削除されている(マップから消える)。
         assert!(!s.access_tokens.lock().unwrap().contains_key("AT_OLD"));
     }
@@ -561,15 +595,15 @@ mod tests {
     #[tokio::test]
     async fn live_access_token_survives() {
         let s = MemoryStore::default();
-        s.save_access_token(at("AT_NEW")).await; // now + 900s
-        assert!(s.get_access_token("AT_NEW").await.is_some());
+        s.save_access_token(at("AT_NEW")).await.unwrap(); // now + 900s
+        assert!(s.get_access_token("AT_NEW").await.unwrap().is_some());
     }
 
     // active sweep は期限切れだけを物理削除し、生存エントリは残す。
     #[tokio::test]
     async fn sweep_removes_only_expired() {
         let s = MemoryStore::default();
-        s.save_access_token(at("LIVE")).await; // 生存
+        s.save_access_token(at("LIVE")).await.unwrap(); // 生存
         s.access_tokens
             .lock()
             .unwrap()

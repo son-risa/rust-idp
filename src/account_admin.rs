@@ -232,7 +232,7 @@ mod tests {
                 authorization_details: None,
                 mandate_consumed: false,
             })
-            .await;
+            .await.unwrap();
         store
             .save_refresh_token(RefreshToken {
                 token: "rt-victim".into(),
@@ -247,7 +247,7 @@ mod tests {
                 used: false,
                 replaced_by: None,
             })
-            .await;
+            .await.unwrap();
 
         let out = disable_account(&fs, "cli", "victim@example.com").await.unwrap();
         assert_eq!(
@@ -263,8 +263,8 @@ mod tests {
         let cred = registration::get_credential(&fs, "victim@example.com").await.unwrap().unwrap();
         assert!(cred.disabled);
         assert!(store.get_session("sid-1").await.is_none());
-        assert!(store.get_access_token("at-victim").await.is_none());
-        assert!(store.get_refresh_token("rt-victim").await.is_none());
+        assert!(store.get_access_token("at-victim").await.unwrap().is_none());
+        assert!(store.get_refresh_token("rt-victim").await.unwrap().is_none());
         // 無関係のアカウントのセッションは残る。
         assert!(store.get_session("sid-other").await.is_some());
     }

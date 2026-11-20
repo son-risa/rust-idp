@@ -322,7 +322,8 @@ impl Firestore {
         }
         let j: Value = r.json().await.map_err(|e| format!("get json: {}", e.without_url()))?;
         let fields = j.get("fields").cloned().unwrap_or(Value::Null);
-        let update_time = j.get("updateTime").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // 空の updateTime で CAS すると、Firestore は不正な要求として断る。読みの段階で誤りにする。
+        let update_time = j.get("updateTime").and_then(|v| v.as_str()).ok_or("get: no updateTime")?.to_string();
         Ok(Some((fields, update_time)))
     }
 
@@ -350,13 +351,7 @@ impl Firestore {
             return Ok(true);
         }
         // updateTime 不一致（他者が先に更新）は FAILED_PRECONDITION（400/409）。レースに負けた。
-        if r.status() == reqwest::StatusCode::BAD_REQUEST
-            || r.status() == reqwest::StatusCode::CONFLICT
-            || r.status() == reqwest::StatusCode::PRECONDITION_FAILED
-        {
-            return Ok(false);
-        }
-        Err(format!("cas {}", r.status()))
+        precondition_lost(r, "cas").await
     }
 
     /// ドキュメントが存在しないときだけ作成する（atomic な単回作成）。
@@ -376,13 +371,7 @@ impl Firestore {
         if r.status().is_success() {
             return Ok(true);
         }
-        if r.status() == reqwest::StatusCode::BAD_REQUEST
-            || r.status() == reqwest::StatusCode::CONFLICT
-            || r.status() == reqwest::StatusCode::PRECONDITION_FAILED
-        {
-            return Ok(false);
-        }
-        Err(format!("create_if_absent {}", r.status()))
+        precondition_lost(r, "create_if_absent").await
     }
 
     /// updateTime が一致するときだけ削除する（compare-and-set 削除）。
@@ -406,14 +395,7 @@ impl Firestore {
         if r.status().is_success() {
             return Ok(true);
         }
-        if r.status() == reqwest::StatusCode::BAD_REQUEST
-            || r.status() == reqwest::StatusCode::CONFLICT
-            || r.status() == reqwest::StatusCode::PRECONDITION_FAILED
-            || r.status() == reqwest::StatusCode::NOT_FOUND
-        {
-            return Ok(false);
-        }
-        Err(format!("cas delete {}", r.status()))
+        precondition_lost(r, "cas delete").await
     }
 
     /// updateTime CAS で単回削除し、削除直前の fields を返す。並行リクエスト/リプレイでは
@@ -647,6 +629,19 @@ impl Firestore {
 }
 
 /// fields から文字列値を取り出す。
+/// 前提条件つきの書き込みが断られたとき、競合に負けたのか（Ok(false)）、要求そのものが誤りなのか（Err）を
+/// 本文の status で分ける。HTTP の番号だけだと、不正な要求の 400 INVALID_ARGUMENT も「負けた」になる。
+/// 実 Firestore で確かめた返し方: updateTime の不一致（消えた文書も含む）は 400 FAILED_PRECONDITION、
+/// exists=false で既に在れば 409 ALREADY_EXISTS。
+async fn precondition_lost(r: reqwest::Response, what: &str) -> Result<bool, String> {
+    let code = r.status();
+    let body: Value = r.json().await.unwrap_or(Value::Null);
+    match body["error"]["status"].as_str() {
+        Some("FAILED_PRECONDITION" | "ALREADY_EXISTS" | "ABORTED" | "NOT_FOUND") => Ok(false),
+        other => Err(format!("{what} {code} {}", other.unwrap_or("-"))),
+    }
+}
+
 pub fn field_str<'a>(fields: &'a Value, name: &str) -> Option<&'a str> {
     fields.get(name)?.get("stringValue")?.as_str()
 }
@@ -791,15 +786,18 @@ pub(crate) mod fake_firestore {
         if let Some(want) = &pre.exists {
             let want_exists = want == "true";
             if docs.contains_key(&key) != want_exists {
-                return (StatusCode::CONFLICT, "precondition failed: exists").into_response();
+                return if want_exists {
+                    fs_error(StatusCode::NOT_FOUND, "NOT_FOUND")
+                } else {
+                    fs_error(StatusCode::CONFLICT, "ALREADY_EXISTS")
+                };
             }
         }
         if let Some(want_ut) = &pre.update_time {
             match docs.get(&key) {
                 Some(d) if version_str(d.update_time) == *want_ut => {}
                 _ => {
-                    return (StatusCode::BAD_REQUEST, "precondition failed: updateTime")
-                        .into_response()
+                    return fs_error(StatusCode::BAD_REQUEST, "FAILED_PRECONDITION")
                 }
             }
         }
@@ -822,6 +820,11 @@ pub(crate) mod fake_firestore {
         Json(json!({ "fields": merged, "updateTime": version_str(v) })).into_response()
     }
 
+    /// 実 Firestore と同じ形の誤りの本文。
+    fn fs_error(code: StatusCode, status: &str) -> Response {
+        (code, Json(json!({ "error": { "code": code.as_u16(), "status": status } }))).into_response()
+    }
+
     async fn delete_doc(
         State(st): State<Arc<FakeState>>,
         Path((_project, col, id)): Path<(String, String, String)>,
@@ -837,8 +840,7 @@ pub(crate) mod fake_firestore {
             match docs.get(&key) {
                 Some(d) if version_str(d.update_time) == *want_ut => {}
                 _ => {
-                    return (StatusCode::BAD_REQUEST, "precondition failed: updateTime")
-                        .into_response()
+                    return fs_error(StatusCode::BAD_REQUEST, "FAILED_PRECONDITION")
                 }
             }
         }
@@ -1119,6 +1121,22 @@ mod tests {
         assert!(!second, "create_if_absent on an existing doc must lose");
         let (fields, _) = fs.get_doc_with_update_time("col", "id2").await.unwrap().unwrap();
         assert_eq!(field_u64(&fields, "v"), Some(1), "loser must not overwrite");
+    }
+
+    /// 本文に競合の status が無い 400（不正な要求など）は、競合に負けたのではなく誤りとして返す。
+    /// 負けにすると、たとえば長すぎる jti が「リプレイ」になり、原因がログに出ない。
+    #[tokio::test]
+    async fn a_rejected_request_is_an_error_not_a_lost_race() {
+        let (host, state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        state.fail_once_with("PATCH", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
+        assert!(fs.create_if_absent("col", "id9", json!({})).await.is_err());
+        fs.set_doc("col", "id9", json!({})).await.unwrap();
+        state.fail_once_with("PATCH", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
+        let (_, ut) = fs.get_doc_with_update_time("col", "id9").await.unwrap().unwrap();
+        assert!(fs.set_doc_if_unchanged("col", "id9", json!({}), &ut).await.is_err());
+        state.fail_once_with("DELETE", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
+        assert!(fs.delete_doc_if_unchanged("col", "id9", &ut).await.is_err());
     }
 
     #[tokio::test]
