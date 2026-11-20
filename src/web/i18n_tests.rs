@@ -74,7 +74,7 @@ where
 const JA_ALLOWED_WORDS: &[&str] = &[
     "passkey", "Passkey", "IAT", "ID", "client", "CIBA", "Web", "iCloud", "Keychain", "scope",
     "openid", "none", "true", "false", "jwks", "kids", "redirect", "host", "delete", "enable",
-    "disable",
+    "disable", "iPhone", "Google", "PIN",
 ];
 
 /// 句としてだけ許すもの（client のプロファイル名）。語に分ける前に取り除く。
@@ -207,6 +207,7 @@ async fn register(fs: &Firestore, email: &str, account_id: &str) {
         pub_x: "x".into(),
         pub_y: "y".into(),
         sign_count: 0,
+        aaguid: String::new(),
     };
     crate::registration::save_credential(fs, email, account_id, &outcome)
         .await

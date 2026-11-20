@@ -184,6 +184,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Continue on the web", "Web で登録を続ける"),
     ("It is created as a synced passkey (for example in iCloud Keychain).", "同期 passkey（iCloud Keychain 等）として作成されます。"),
     (
+        "On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.",
+        "iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。Google パスワードマネージャーに保存すると、ログインのときに PIN を求められることがあります。",
+    ),
+    (
         "Create a passkey with this device (for example with biometrics) to finish signing up.",
         "このデバイスの生体認証等で passkey を作成し、登録を完了します。",
     ),

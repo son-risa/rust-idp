@@ -192,6 +192,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <h1>[[Create a passkey]]</h1>
 <label for="nm" id="nml">[[Name]]</label>
 <input id="nm" autocomplete="name" maxlength="80">
+<p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
 <div id="mobile" hidden>
  <p>[[Register securely with the fido2demo app.]]</p>
  <button class="primary" onclick="openApp()">[[Open in the app]]</button>
@@ -216,6 +217,7 @@ const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
 const isIOS=/iPad|iPhone|iPod/i.test(ua)||(/(Macintosh).*Mobile/i.test(ua));
 document.getElementById((!AFTER&&(isAndroid||isIOS))?'mobile':'desktop').hidden=false;
+document.getElementById('ioshint').hidden=!isIOS;
 function openApp(){
  const url=isAndroid
   ?('intent://magic?t='+TOKEN+'#Intent;scheme=jp.co.sonrisa.fido2demo;package=jp.co.sonrisa.fido2demo;S.browser_fallback_url='+encodeURIComponent('https://oidc.sonrisa.co.jp/r?t='+TOKEN)+';end')
@@ -1080,6 +1082,15 @@ mod invite_tests {
         assert!(html.contains("NAME_REQUIRED=!!AFTER"));
         let plain = passkey_register_page(&p, Lang::En, "tok", None).0;
         assert!(plain.contains(r#"AFTER="""#), "通常の登録では AFTER が空なので、氏名は任意");
+    }
+
+    /// iPhone のときだけ、保存先は iCloud がよいと案内する（AMATE の要件の一覧の #3）。
+    #[test]
+    fn the_registration_page_recommends_icloud_on_iphone() {
+        let p = Provider::new("https://idp.example/oidc".to_string());
+        let html = passkey_register_page(&p, Lang::Ja, "tok", None).0;
+        assert!(html.contains(r#"<p class="small" id="ioshint" hidden>iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。"#), "{html}");
+        assert!(html.contains("document.getElementById('ioshint').hidden=!isIOS;"));
     }
 
     #[test]

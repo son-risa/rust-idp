@@ -526,6 +526,7 @@ mod tests {
             pub_x: crate::webauthn::b64e(&x),
             pub_y: crate::webauthn::b64e(&y),
             sign_count: 0,
+            aaguid: String::new(),
         };
         crate::registration::save_credential(&fs, EMAIL, ACCOUNT, &reg).await.unwrap();
         let ciba = Arc::new(MemoryCibaStore::default());

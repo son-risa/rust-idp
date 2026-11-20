@@ -1215,6 +1215,7 @@ mod tests {
             pub_x: "x".into(),
             pub_y: "y".into(),
             sign_count: 0,
+            aaguid: String::new(),
         };
         crate::registration::save_credential(fs, email, account_id, &outcome).await.unwrap();
     }

@@ -15,6 +15,8 @@ pub struct RegOutcome {
     pub pub_x: String,         // b64url(32)
     pub pub_y: String,         // b64url(32)
     pub sign_count: u32,
+    /// 認証器の種類（iCloud キーチェーン、Google パスワードマネージャーなど）。UUID の形。
+    pub aaguid: String,
 }
 
 pub fn b64e(b: &[u8]) -> String {
@@ -63,6 +65,7 @@ pub fn verify_registration(
         pub_x: b64e(&x),
         pub_y: b64e(&y),
         sign_count: ad.sign_count,
+        aaguid: uuid::Uuid::from_slice(&rest[..16]).map(|u| u.to_string()).unwrap_or_default(),
     })
 }
 
@@ -141,6 +144,25 @@ mod tests {
         assert_eq!(out.pub_x, b64e2(&x));
         assert_eq!(out.pub_y, b64e2(&y));
         assert_eq!(out.sign_count, 0);
+        assert_eq!(out.aaguid, "00000000-0000-0000-0000-000000000000");
+    }
+
+    /// 認証器の AAGUID を UUID の形で取り出す（Google パスワードマネージャーの値で確かめる）。
+    #[test]
+    fn registration_reports_the_authenticator_aaguid() {
+        let key = SigningKey::generate();
+        let (x, y) = ec_xy(&key);
+        let mut acd = attested_cred_data(b"cred", &cose_es256(&x, &y));
+        acd[..16].copy_from_slice(&uuid::Uuid::parse_str("ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4").unwrap().into_bytes());
+        let auth_data = build_auth_data(RP, FLAG_UP | FLAG_AT, 0, Some(&acd));
+        let att = Cbor::Map(vec![
+            (Cbor::Text("fmt".into()), Cbor::Text("none".into())),
+            (Cbor::Text("attStmt".into()), Cbor::Map(vec![])),
+            (Cbor::Text("authData".into()), Cbor::Bytes(auth_data)),
+        ]);
+        let cdj = client_data_json("webauthn.create", CH, ORIGIN);
+        let out = verify_registration(&b64e2(cdj), &b64e2(cbor_to_vec(&att)), CH, ORIGIN, RP).unwrap();
+        assert_eq!(out.aaguid, "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4");
     }
 
     #[test]
