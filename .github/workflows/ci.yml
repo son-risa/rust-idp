@@ -45,3 +45,4 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
         with:
           command: check advisories bans licenses sources
+          rust-version: 1.100.0 # rust-toolchain.toml と同じ版（無いと toolchain file の版が入っていないと言って止まる）

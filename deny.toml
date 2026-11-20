@@ -9,6 +9,9 @@ ignore = [
     # 用途は RS256 id_token 署名のみ（既定は ES256）。P1-1（署名鍵の Cloud KMS 移行）で
     # ローカル rsa 秘密鍵操作を撤廃して恒久解消する。それまで追跡として ignore。
     "RUSTSEC-2023-0071",
+    # crypto-bigint 0.5.x: 定数時間でない演算（RUSTSEC-2026-0387）。p256/p384 0.13 の elliptic-curve が引く。
+    # 修正版 0.7.6 は RustCrypto 0.14 の一式でしか使えないので、次の PR で一式を上げて消す。
+    "RUSTSEC-2026-0387",
 ]
 
 [bans]
