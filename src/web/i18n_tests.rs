@@ -923,7 +923,7 @@ async fn unknown_path_under_the_base_path_is_answered_in_the_browser_language() 
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     for (lang, expected) in [("en", "Page not found"), ("ja", "ページが見つかりません")]
     {
-        let resp = reqwest::Client::new()
+        let resp = crate::http::client()
             .get(format!("http://{addr}/oidc/nope"))
             .header("accept-language", lang)
             .send()
@@ -956,7 +956,7 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
             "/oidc/end-session?state=x&state=y",
             "/oidc/login/%FF",
         ] {
-            let resp = reqwest::Client::new()
+            let resp = crate::http::client()
                 .get(format!("http://{addr}{path}"))
                 .header("accept-language", lang)
                 .send()
@@ -965,7 +965,7 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
             assert_eq!(resp.status().as_u16(), 400, "{path}");
             assert_eq!(resp.text().await.unwrap(), bad_addr, "{path}");
         }
-        let resp = reqwest::Client::new()
+        let resp = crate::http::client()
             .get(format!("http://{addr}/oidc/admin/whoami"))
             .header("accept-language", lang)
             .send()
@@ -974,7 +974,7 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
         let whoami = resp.text().await.unwrap();
         assert_eq!(has_japanese(&whoami), lang == "ja", "{whoami}");
         // 招待は token が無くても axum の英語の説明を出さない。ここは Firestore が無いので汎用の文になる。
-        let resp = reqwest::Client::new()
+        let resp = crate::http::client()
             .get(format!("http://{addr}/oidc/invite"))
             .header("accept-language", lang)
             .send()
@@ -984,7 +984,7 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
         assert!(!invite.contains("deserialize"), "{invite}");
         assert_eq!(has_japanese(&invite), lang == "ja", "{invite}");
         for path in ["/r", "/oidc/signup/verify"] {
-            let resp = reqwest::Client::new()
+            let resp = crate::http::client()
                 .get(format!("http://{addr}{path}"))
                 .header("accept-language", lang)
                 .send()
@@ -1004,7 +1004,7 @@ async fn broken_links_and_bad_form_values_are_answered_in_the_browser_language()
             ("/oidc/admin/clients/rp-1/post-logout", "", 422),
             ("/oidc/admin/iats/abc/revoke", "", 422),
         ] {
-            let resp = reqwest::Client::new()
+            let resp = crate::http::client()
                 .post(format!("http://{addr}{path}"))
                 .header("accept-language", lang)
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -1044,7 +1044,7 @@ async fn own_errors_and_rp_facing_rejections_pass_through_unchanged() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client = reqwest::Client::new();
+    let client = crate::http::client();
 
     let resp = client
         .post(format!("http://{addr}/oidc/token"))
@@ -1135,7 +1135,7 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let http = reqwest::Client::builder()
+    let http = crate::http::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();

@@ -27,6 +27,7 @@ mod fido;
 mod firestore;
 mod firestore_store;
 mod grants;
+mod http;
 mod interaction_policy;
 mod jwks_resolver;
 mod jws;
