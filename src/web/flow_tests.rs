@@ -424,9 +424,10 @@ async fn reregistration_reuses_existing_account_id() {
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_key1, _cred1, account_id1) = register_test_account(&p, &email).await;
 
-    // 同じ email で passkey を作り直す（機種変更等）。account_id は変わってはならない
+    // 管理者が passkey だけを消した後に、同じ email で作り直す。account_id は変わってはならない
     // （変わると、過去に発行済みの sub を持つ他システムとの紐付けが切れる）。
     let fs = p.firestore.as_ref().unwrap();
+    crate::registration::remove_all_credentials(fs, &email).await.unwrap();
     let email_token = crate::registration::create_email_challenge(fs, &email).await.unwrap();
     let opts_req: register::RegPkOptionsReq =
         serde_json::from_value(json!({ "token": email_token })).unwrap();
@@ -436,6 +437,30 @@ async fn reregistration_reuses_existing_account_id() {
     let account_id2 = String::from_utf8(crate::es256::b64url_decode(&user_id_b64).unwrap()).unwrap();
 
     assert_eq!(account_id1, account_id2, "再登録で account_id が変わってしまっている");
+}
+
+#[tokio::test]
+async fn leftover_signup_token_is_refused_once_registered() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let fs = p.firestore.as_ref().unwrap();
+    // 確認のメールを 2 通出し、1 通目で登録した後に残りの 1 通を使う。
+    let leftover = crate::registration::create_email_challenge(fs, &email).await.unwrap();
+    register_test_account(&p, &email).await;
+
+    let opts_req: register::RegPkOptionsReq = serde_json::from_value(json!({ "token": leftover })).unwrap();
+    let opts = register::register_passkey_options(State(p.clone()), Json(opts_req)).await;
+    assert_eq!(opts.status(), StatusCode::CONFLICT);
+
+    let ver_req: register::RegVerifyReq = serde_json::from_value(json!({
+        "token": leftover,
+        "response": { "clientDataJSON": "", "attestationObject": "" },
+    }))
+    .unwrap();
+    let ver = register::register_passkey_verify(State(p.clone()), CookieJar::new(), Json(ver_req)).await;
+    assert_eq!(ver.status(), StatusCode::CONFLICT);
+    let account = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
+    assert_eq!(crate::registration::list_credentials(fs, &account).await.unwrap().len(), 1);
 }
 
 #[tokio::test]

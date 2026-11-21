@@ -523,14 +523,14 @@ pub(super) async fn invite_page(
     passkey_register_page(&p, lang, &q.t, Some(&return_to)).into_response()
 }
 
-/// 招待の token は、宛先が既に登録済みなら使わせない（同じアドレスへの招待が複数残っていても、
-/// 登録の後に残りの token で passkey を置き換えられないようにする）。通常の登録の token は今までどおり。
-async fn refuse_invite_for_registered(fs: &crate::firestore::Firestore, token: &str) -> Option<Response> {
-    let email = match crate::registration::peek_invite(fs, token).await {
-        Ok(Some((email, _))) => email,
+/// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
+/// 登録の後に残りの token で、通知も失効も無しに passkey を足せないようにする。
+async fn refuse_token_for_registered(fs: &crate::firestore::Firestore, token: &str) -> Option<Response> {
+    let email = match crate::registration::peek_email_challenge(fs, token).await {
+        Ok(Some(email)) => email,
         Ok(None) => return None,
         Err(e) => {
-            tracing::error!("peek_invite: {e}");
+            tracing::error!("peek_email_challenge: {e}");
             return Some((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response());
         }
     };
@@ -538,7 +538,7 @@ async fn refuse_invite_for_registered(fs: &crate::firestore::Firestore, token: &
         Ok(false) => None,
         Ok(true) => Some((StatusCode::CONFLICT, "already registered").into_response()),
         Err(e) => {
-            tracing::error!("invite account_exists: {e}");
+            tracing::error!("register token has_passkey: {e}");
             Some((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response())
         }
     }
@@ -557,7 +557,7 @@ pub(super) async fn register_passkey_options(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    if let Some(r) = refuse_invite_for_registered(fs, &req.token).await {
+    if let Some(r) = refuse_token_for_registered(fs, &req.token).await {
         return r;
     }
     let email = match crate::registration::peek_email_challenge(fs, &req.token).await {
@@ -660,7 +660,7 @@ pub(super) async fn register_passkey_verify(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    if let Some(r) = refuse_invite_for_registered(fs, &req.token).await {
+    if let Some(r) = refuse_token_for_registered(fs, &req.token).await {
         return r;
     }
     let name = match crate::registration::normalize_profile_value(req.name.as_deref().unwrap_or("")) {

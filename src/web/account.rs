@@ -178,7 +178,7 @@ async function add(){
   const v=await post(ADD_VER,{response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),attestationObject:bufToB64(cred.response.attestationObject)}});
   if(!v.ok){msg.textContent=await errorText(v);return;}
   location.reload();
- }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?'[[A passkey for this account is already saved here.]]':passkeyErrorText(e);}
+ }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already saved here.]]'):passkeyErrorText(e);}
 }
 async function del(id){
  if(!confirm('[[Remove this passkey? You can no longer sign in with it, and you are signed out on your other devices.]]'))return;
