@@ -18,6 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const EMAIL_TTL_SECS: u64 = 30 * 60;
 // 招待リンクは管理者が送り、受け手がいつ開くか分からないので数日もたせる。
 const INVITE_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+// 復旧のリンクは、メールを読める人に passkey を足させる。開いてすぐ使う前提で短くする。
+pub(crate) const RECOVERY_TTL_SECS: u64 = 15 * 60;
+/// emailChallenges の purpose。登録の token と取り違えないよう、登録と招待の口はこれを持つ token を受けない。
+const PURPOSE_RECOVERY: &str = "recovery";
 pub(crate) const CEREMONY_TTL_SECS: u64 = 5 * 60;
 
 fn now() -> u64 {
@@ -87,33 +91,63 @@ pub async fn peek_invite(fs: &Firestore, token: &str) -> Result<Option<(String, 
     }
 }
 
-/// 消費せず email を覗く（passkey options 生成時に使用）。
-pub async fn peek_email_challenge(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
-    if !token_ok(token) {
-        return Ok(None);
-    }
-    let fields = match fs.get_doc("emailChallenges", token).await? {
-        Some(f) => f,
-        None => return Ok(None),
-    };
-    if challenge_expired(&fields) {
-        return Ok(None);
-    }
-    Ok(firestore::field_str(&fields, "email").map(|s| s.to_string()))
+/// 復旧のリンク（登録済みの人が、メールで確かめて passkey を 1 本足す）。
+pub async fn create_recovery_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
+    let token = random_token();
+    fs.set_doc(
+        "emailChallenges",
+        &token,
+        json!({
+            "email": firestore::s(email),
+            "purpose": firestore::s(PURPOSE_RECOVERY),
+            "expiresAt": firestore::ts(&firestore::rfc3339(now() + RECOVERY_TTL_SECS)),
+        }),
+    )
+    .await?;
+    Ok(token)
 }
 
-/// 単回消費して email を返す（passkey verify 成功時）。
-pub async fn consume_email_challenge(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+fn token_email(fields: &serde_json::Value, recovery: bool) -> Option<String> {
+    if challenge_expired(fields) {
+        return None;
+    }
+    let is_recovery = firestore::field_str(fields, "purpose") == Some(PURPOSE_RECOVERY);
+    if is_recovery != recovery {
+        return None;
+    }
+    firestore::field_str(fields, "email").map(|s| s.to_string())
+}
+
+async fn peek_token(fs: &Firestore, token: &str, recovery: bool) -> Result<Option<String>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
-    let Some(fields) = fs.take_doc("emailChallenges", token).await? else {
-        return Ok(None);
-    };
-    if challenge_expired(&fields) {
+    Ok(fs.get_doc("emailChallenges", token).await?.and_then(|f| token_email(&f, recovery)))
+}
+
+async fn consume_token(fs: &Firestore, token: &str, recovery: bool) -> Result<Option<String>, String> {
+    if !token_ok(token) {
         return Ok(None);
     }
-    Ok(firestore::field_str(&fields, "email").map(|s| s.to_string()))
+    Ok(fs.take_doc("emailChallenges", token).await?.and_then(|f| token_email(&f, recovery)))
+}
+
+/// 消費せず email を覗く（passkey options 生成時に使用）。復旧の token は None。
+pub async fn peek_email_challenge(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+    peek_token(fs, token, false).await
+}
+
+/// 単回消費して email を返す（passkey verify 成功時）。復旧の token は None。
+pub async fn consume_email_challenge(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+    consume_token(fs, token, false).await
+}
+
+pub async fn peek_recovery(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+    peek_token(fs, token, true).await
+}
+
+pub async fn consume_recovery(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+    consume_token(fs, token, true).await
 }
 
 /* ===== WebAuthn セレモニーチャレンジ ===== */
@@ -213,6 +247,9 @@ pub struct Account {
     /// （[`crate::account_admin`] 参照）。欠落時は false。
     pub disabled: bool,
     pub created_at: u64,
+    /// 最後にメールで passkey を足した（復旧した）時刻と、そのとき足した passkey。無ければ 0 と空。
+    pub recovered_at: u64,
+    pub recovered_with: String,
     migrated: bool,
     /// 移行前のアカウントが accounts のフィールドに持つ passkey。
     legacy: Option<Credential>,
@@ -251,6 +288,8 @@ fn account_from(email: &str, f: &serde_json::Value) -> Account {
         account_id: firestore::field_str(f, "accountId").unwrap_or("").to_string(),
         disabled: firestore::field_bool(f, "disabled").unwrap_or(false),
         created_at: firestore::field_ts_secs(f, "createdAt").unwrap_or(0),
+        recovered_at: firestore::field_ts_secs(f, "recoveredAt").unwrap_or(0),
+        recovered_with: firestore::field_str(f, "recoveredWith").unwrap_or("").to_string(),
         migrated,
         legacy,
     }
@@ -674,6 +713,20 @@ pub async fn delete_all_credentials(fs: &Firestore, account: &Account) -> Result
 /// エラーを返す）。
 pub async fn set_disabled(fs: &Firestore, email: &str, disabled: bool) -> Result<(), String> {
     fs.update_field("accounts", email, "disabled", firestore::b(disabled)).await
+}
+
+/// メールで passkey を足す直前に、その時刻と足す passkey を残す。この時刻までに作られたほかの passkey は、
+/// しばらく本人の画面から消せない（メールを奪った人が、本人の passkey を消して締め出せないように）。
+pub async fn mark_recovered(fs: &Firestore, email: &str, credential_id: &str) -> Result<(), String> {
+    fs.update_fields(
+        "accounts",
+        email,
+        json!({
+            "recoveredAt": firestore::ts(&firestore::rfc3339(now())),
+            "recoveredWith": firestore::s(credential_id),
+        }),
+    )
+    .await
 }
 
 /// accountId(UUID) -> email の逆引き。discoverable ログイン（userHandle=accountId のみ判明）で使う。

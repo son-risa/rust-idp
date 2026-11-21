@@ -12,6 +12,16 @@ const RECENT_AUTH_SECS: u64 = 10 * 60;
 const MAX_PASSKEYS: usize = 10;
 /// この画面の challenge に入れる uid。ログイン（interaction の uid）と登録（空）の challenge と分ける。
 const CEREMONY_UID: &str = "account";
+/// メールで passkey を足した（復旧した）後、それより前からあった passkey を消せない時間。
+const RECOVERY_HOLD_SECS: u64 = 24 * 60 * 60;
+
+/// 復旧の直後で、この passkey を本人の画面から消せないか。
+fn held_by_recovery(a: &registration::Account, c: &registration::Credential) -> bool {
+    a.recovered_at > 0
+        && now().saturating_sub(a.recovered_at) < RECOVERY_HOLD_SECS
+        && c.created_at <= a.recovered_at
+        && c.credential_id != a.recovered_with
+}
 
 struct Me {
     sid: String,
@@ -67,7 +77,18 @@ async fn me_confirmed(p: &Provider, jar: &CookieJar) -> Result<Me, Response> {
     Ok(me)
 }
 
-pub(super) async fn account_page(State(p): State<Arc<Provider>>, headers: HeaderMap, jar: CookieJar) -> Response {
+#[derive(serde::Deserialize, Default)]
+pub(super) struct AccountQuery {
+    #[serde(default)]
+    recovered: Option<String>,
+}
+
+pub(super) async fn account_page(
+    State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<AccountQuery>,
+) -> Response {
     let lang = Lang::from_headers(&headers);
     let fs = match &p.firestore {
         Some(fs) => fs,
@@ -80,7 +101,8 @@ pub(super) async fn account_page(State(p): State<Arc<Provider>>, headers: Header
     let (main, confirmed) = match &me {
         None => (
             r#"<p>[[Sign in with your passkey to see and add passkeys.]]</p>
-<button class="primary" onclick="signIn().then(ok=>{if(ok)location.reload();})">[[Sign in with a passkey]]</button>"#
+<button class="primary" onclick="signIn().then(ok=>{if(ok)location.reload();})">[[Sign in with a passkey]]</button>
+<p class="small"><a href="__RECOVER__">[[Can’t use your passkey?]]</a></p>"#
                 .to_string(),
             false,
         ),
@@ -100,6 +122,8 @@ pub(super) async fn account_page(State(p): State<Arc<Provider>>, headers: Header
                     };
                     let remove = if only_one {
                         String::new()
+                    } else if held_by_recovery(&m.account, c) {
+                        r#"<div class="sub">[[This passkey can be removed 24 hours after a passkey was added with email.]]</div>"#.to_string()
                     } else {
                         format!(
                             r#"<button class="link" data-id="{id}" onclick="del(this.dataset.id)">[[Remove]]</button>"#,
@@ -122,12 +146,17 @@ pub(super) async fn account_page(State(p): State<Arc<Provider>>, headers: Header
             };
             (
                 format!(
-                    r#"<p class="sub">{email}</p>
+                    r#"{recovered}<p class="sub">{email}</p>
 <ul class="pk">{rows}</ul>
 {gpm_hint}
 <button class="primary" onclick="add()">[[Add a passkey on this device]]</button>
 <p class="small">[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.]]</p>"#,
                     email = esc(&m.account.email),
+                    recovered = if q.recovered.is_some() {
+                        r#"<p>[[The passkey was added. Go back to the app or service and sign in again.]]</p>"#
+                    } else {
+                        ""
+                    },
                 ),
                 m.confirmed_recently(),
             )
@@ -200,6 +229,7 @@ async function del(id){
     .replace("__ADD_OPT__", &p.path("/account/passkeys/options"))
     .replace("__ADD_VER__", &p.path("/account/passkeys/verify"))
     .replace("__DEL__", &p.path("/account/passkeys/delete"))
+    .replace("__RECOVER__", &p.path("/recover"))
     .replace("__CONFIRMED__", if confirmed { "true" } else { "false" });
     ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response()
 }
@@ -368,6 +398,13 @@ pub(super) async fn delete_passkey(
     };
     let fs = p.firestore.as_ref().expect("me_confirmed checked firestore");
     let a = &me.account;
+    match registration::list_credentials(fs, a).await {
+        Ok(creds) if creds.iter().any(|c| c.credential_id == req.id && held_by_recovery(a, c)) => {
+            return (StatusCode::CONFLICT, "recently recovered").into_response();
+        }
+        Ok(_) => {}
+        Err(e) => return internal("delete_passkey: list_credentials", &e),
+    }
     match registration::remove_credential(fs, &a.email, &req.id).await {
         Ok(RemoveOutcome::Removed) => {
             let c = crate::account_admin::revoke_other_sessions(fs, &a.account_id, &me.sid).await;

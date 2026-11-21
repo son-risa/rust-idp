@@ -38,7 +38,7 @@ pub(super) struct RegisterForm {
 
 /// メール確認チャレンジを作り確認メールを送る。Web フォーム/ネイティブ JSON 共通。
 /// `lang` はブラウザのフォームから来たときだけ Some。ネイティブの JSON API は None（両言語で送る）。
-async fn issue_register_email(
+pub(super) async fn issue_register_email(
     p: &Provider,
     fs: &crate::firestore::Firestore,
     email: &str,
@@ -58,7 +58,15 @@ async fn issue_register_email(
     }
     match crate::registration::has_passkey(fs, email).await? {
         true => {
-            let _ = p.mailer.send_already_registered(email, lang).await;
+            if super::recover::recovery_for(fs, email).await? == super::recover::Recovery::Allowed {
+                let token = crate::registration::create_recovery_challenge(fs, email).await?;
+                let url = format!("{}{}?t={}", p.origin(), p.path("/recover"), token);
+                if let Err(e) = p.mailer.send_recovery(email, &url, lang).await {
+                    tracing::error!("send_recovery failed: {e}");
+                }
+            } else {
+                let _ = p.mailer.send_already_registered(email, lang).await;
+            }
         }
         false => {
             let token = crate::registration::create_email_challenge(fs, email).await?;
@@ -86,7 +94,7 @@ pub(super) async fn register_submit(
         Ok(()) => page(
             lang,
             "[[Sent]]",
-            "<h1>[[Confirmation email sent]]</h1><p>[[Open the link in the email and create a passkey to finish signing up (the link expires in 15 minutes).]]</p>",
+            "<h1>[[Confirmation email sent]]</h1><p>[[Open the link in the email and create a passkey to finish signing up (the link expires in 30 minutes).]]</p>",
         )
         .into_response(),
         Err(e) if e == "invalid email" => plain_error(&localize("[[Enter a valid email address.]]", lang)),

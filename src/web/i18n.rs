@@ -158,8 +158,8 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Sent", "送信しました"),
     ("Confirmation email sent", "確認メールを送信しました"),
     (
-        "Open the link in the email and create a passkey to finish signing up (the link expires in 15 minutes).",
-        "メール内のリンクから passkey を作成して登録を完了してください（有効期限15分）。",
+        "Open the link in the email and create a passkey to finish signing up (the link expires in 30 minutes).",
+        "メール内のリンクから passkey を作成して登録を完了してください（有効期限30分）。",
     ),
     ("Invitation expired", "招待の期限切れ"),
     ("This invitation cannot be used", "この招待は使えません"),
@@ -281,6 +281,68 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Please sign in again.", "もう一度ログインしてください。"),
     ("Please confirm it is you with a passkey again.", "もう一度パスキーで本人確認をしてください。"),
     ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
+    ("Can’t use your passkey?", "パスキーを使えないとき"),
+    ("is registered. Sign in with your passkey.", "は登録済みです。パスキーでログインしてください。"),
+    ("[rust-op] Add a passkey on this device", "【rust-op】この端末にパスキーを追加する"),
+    ("If you cannot use your passkey, contact the administrator.", "パスキーを使えない場合は、管理者に問い合わせてください。"),
+    (
+        "Passkeys cannot be used in this browser. Open the link in Safari or Chrome.",
+        "このブラウザではパスキーを使えません。リンクを Safari か Chrome で開いてください。",
+    ),
+    (
+        "A passkey for this account is already available on this device. Sign in with it.",
+        "このアカウントのパスキーは、この端末で既に使えます。そのパスキーでログインしてください。",
+    ),
+    (
+        "This account has no passkey. Sign up again with the same email address.",
+        "このアカウントにはパスキーがありません。同じメールアドレスで登録し直してください。",
+    ),
+    (
+        "This passkey can be removed 24 hours after a passkey was added with email.",
+        "このパスキーは、メールでパスキーを追加してから 24 時間たつと削除できます。",
+    ),
+    (
+        "The passkey was added. Go back to the app or service and sign in again.",
+        "パスキーを追加しました。アプリやサービスに戻って、もう一度ログインしてください。",
+    ),
+    (
+        "Enter your email address. We will send a link to add a passkey on this device. When you use it, you are signed out on your other devices.",
+        "メールアドレスを入れてください。この端末にパスキーを追加するリンクを送ります。使うと、ほかの端末ではログアウトされます。",
+    ),
+    ("Send email", "メールを送る"),
+    ("Email sent", "メールを送りました"),
+    (
+        "If this address is registered, we sent a link to add a passkey on this device. Open it on the device you want to use (the link expires in 15 minutes).",
+        "登録済みのアドレスなら、この端末にパスキーを追加するリンクを送りました。使いたい端末でリンクを開いてください（有効期限15分）。",
+    ),
+    ("This link cannot be used", "このリンクは使えません"),
+    ("Send the email again", "メールを送り直す"),
+    (
+        "Create a passkey on this device to sign in again. Your other passkeys are kept. When you finish, you are signed out on your other devices.",
+        "この端末にパスキーを作って、もう一度ログインできるようにします。ほかのパスキーはそのまま残ります。終わると、ほかの端末ではログアウトされます。",
+    ),
+    (
+        "A passkey cannot be added with email for this account. Contact the administrator.",
+        "このアカウントには、メールでパスキーを追加できません。管理者に問い合わせてください。",
+    ),
+    (
+        "If you cannot use your passkey, or want to use this device too, add a passkey on this device with the button below. The link expires in 15 minutes.",
+        "パスキーを使えないときや、この端末でも使いたいときは、下のボタンからこの端末にパスキーを追加できます。有効期限は15分です。",
+    ),
+    (
+        "When you add a passkey this way, you are signed out on your other devices.",
+        "この方法でパスキーを追加すると、ほかの端末ではログアウトされます。",
+    ),
+    ("A passkey was added", "パスキーが追加されました"),
+    ("[rust-op] A passkey was added", "【rust-op】パスキーが追加されました"),
+    (
+        "A passkey was added to your account using a link sent to this email address, and you were signed out on your other devices.",
+        "このメールアドレスに送ったリンクを使って、あなたのアカウントにパスキーが追加されました。ほかの端末ではログアウトしています。",
+    ),
+    (
+        "If this was not you, someone may be able to read your email. Secure your email account, then sign in with your own passkey and remove the passkey you do not recognize.",
+        "心当たりが無い場合は、誰かがあなたのメールを読める状態かもしれません。メールのアカウントを守ったうえで、ご自分のパスキーでログインし、覚えの無いパスキーを削除してください。",
+    ),
     (
         "A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.",
         "選んだ保存先には、このアカウントのパスキーが既に保存されています。もう一度押して、保存先に「パスワード」（iCloud）を選んでください。",
@@ -454,8 +516,8 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("[rust-op] Verify your email", "【rust-op】メールアドレス確認"),
     ("Verify your email address", "メールアドレス確認"),
     (
-        "To finish signing up, create your passkey with the button below. The link expires in 15 minutes.",
-        "登録を完了するには、以下のボタンから passkey を作成してください。有効期限は15分です。",
+        "To finish signing up, create your passkey with the button below. The link expires in 30 minutes.",
+        "登録を完了するには、以下のボタンから passkey を作成してください。有効期限は30分です。",
     ),
     ("Sign up with a passkey", "passkey を作成して登録"),
     ("If you did not request this, ignore this email.", "心当たりがない場合はこのメールを無視してください。"),
@@ -494,6 +556,7 @@ mod tests {
         ("web/ciba.rs", include_str!("ciba.rs")),
         ("web/admin.rs", include_str!("admin.rs")),
         ("web/account.rs", include_str!("account.rs")),
+        ("web/recover.rs", include_str!("recover.rs")),
         ("web/mod.rs", include_str!("mod.rs")),
         ("mailer.rs", include_str!("../mailer.rs")),
         ("fcm.rs", include_str!("../fcm.rs")),

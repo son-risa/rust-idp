@@ -57,6 +57,7 @@ details input{font-size:14px;padding:8px;margin-top:8px}</style>
 <input id="email" placeholder="[[Email address (optional)]]" autocomplete="off">
 <button class="filled" onclick="pkLogin()">[[Sign in]]</button>
 <button class="outlined" onclick="location.href='__REGISTER__'">[[Sign up with email]]</button>
+<p style="font-size:13px;text-align:center;margin-top:12px"><a href="__RECOVER__">[[Can’t use your passkey?]]</a></p>
 <button class="outlined" onclick="location.href='__CANCEL__'">[[Cancel]]</button>
 <p id="msg"></p>
 <script>
@@ -102,7 +103,8 @@ async function pkLogin(){
             // 切れた challenge で検証に行かないため。端末が眠ると setInterval も止まるので、画面に戻ったときにも取り直す。
             .replace("__CEREMONY_TTL_SECS__", &crate::registration::CEREMONY_TTL_SECS.to_string())
             .replace("__CANCEL__", &p.path(&format!("/login/{uid}/cancel")))
-            .replace("__REGISTER__", &p.path("/signup")),
+            .replace("__REGISTER__", &p.path("/signup"))
+            .replace("__RECOVER__", &p.path("/recover")),
     )
     .into_response()
 }

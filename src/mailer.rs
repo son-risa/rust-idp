@@ -17,6 +17,10 @@ pub trait Mailer: Send + Sync {
     ) -> Result<(), String>;
     /// 既登録ユーザーへの案内（メール列挙対策で本文を分岐）。
     async fn send_already_registered(&self, to: &str, lang: Option<Lang>) -> Result<(), String>;
+    /// 登録済みの人への案内に、この端末に passkey を足す（復旧の）リンクを添える。
+    async fn send_recovery(&self, to: &str, url: &str, lang: Option<Lang>) -> Result<(), String>;
+    /// メールで確かめて passkey が足されたことの知らせ。
+    async fn send_passkey_added(&self, to: &str, lang: Option<Lang>) -> Result<(), String>;
 }
 
 /// (件名, HTML 本文)。両言語のときは本文を日本語、英語の順に並べる。
@@ -38,7 +42,7 @@ pub(crate) fn verification_mail(verify_url: &str, lang: Option<Lang>) -> (String
     let html = format!(
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
 <h2 style="margin:0 0 16px">[[Verify your email address]]</h2>
-<p>[[To finish signing up, create your passkey with the button below. The link expires in 15 minutes.]]</p>
+<p>[[To finish signing up, create your passkey with the button below. The link expires in 30 minutes.]]</p>
 <p style="margin:24px 0"><a href="{url}" style="display:inline-block;background:#3367d6;color:#fff;padding:14px 24px;border-radius:8px;text-decoration:none;font-weight:600">[[Sign up with a passkey]]</a></p>
 <p style="font-size:13px;color:#666">[[If you did not request this, ignore this email.]]</p>
 </div>"#,
@@ -52,11 +56,36 @@ pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, 
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
 <h2 style="margin:0 0 16px">[[Already registered]]</h2>
 <p>[[This email address]] (<strong>{email}</strong>) [[is already registered. Please sign in instead of signing up.]]</p>
+<p>[[If you cannot use your passkey, contact the administrator.]]</p>
 <p style="font-size:13px;color:#666">[[If you did not request this, ignore this email.]]</p>
 </div>"#,
         email = escape(to)
     );
     compose("[[[rust-op] An account already exists]]", &html, lang)
+}
+
+pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String, String) {
+    let html = format!(
+        r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
+<h2 style="margin:0 0 16px">[[Add a passkey on this device]]</h2>
+<p>[[This email address]] (<strong>{email}</strong>) [[is registered. Sign in with your passkey.]]</p>
+<p>[[If you cannot use your passkey, or want to use this device too, add a passkey on this device with the button below. The link expires in 15 minutes.]]</p>
+<p style="margin:24px 0"><a href="{url}" style="display:inline-block;background:#3367d6;color:#fff;padding:14px 24px;border-radius:8px;text-decoration:none;font-weight:600">[[Add a passkey on this device]]</a></p>
+<p style="font-size:13px;color:#666">[[When you add a passkey this way, you are signed out on your other devices.]] [[If you did not request this, ignore this email.]]</p>
+</div>"#,
+        email = escape(to),
+        url = escape(url)
+    );
+    compose("[[[rust-op] Add a passkey on this device]]", &html, lang)
+}
+
+pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {
+    let html = r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
+<h2 style="margin:0 0 16px">[[A passkey was added]]</h2>
+<p>[[A passkey was added to your account using a link sent to this email address, and you were signed out on your other devices.]]</p>
+<p>[[If this was not you, someone may be able to read your email. Secure your email account, then sign in with your own passkey and remove the passkey you do not recognize.]]</p>
+</div>"#;
+    compose("[[[rust-op] A passkey was added]]", html, lang)
 }
 
 fn escape(s: &str) -> String {
@@ -111,6 +140,16 @@ impl Mailer for ResendMailer {
         let (subject, html) = already_registered_mail(to, lang);
         self.send(to, &subject, html).await
     }
+
+    async fn send_recovery(&self, to: &str, url: &str, lang: Option<Lang>) -> Result<(), String> {
+        let (subject, html) = recovery_mail(to, url, lang);
+        self.send(to, &subject, html).await
+    }
+
+    async fn send_passkey_added(&self, to: &str, lang: Option<Lang>) -> Result<(), String> {
+        let (subject, html) = passkey_added_mail(lang);
+        self.send(to, &subject, html).await
+    }
 }
 
 /// ローカル用。送信せず確認 URL をログに出すだけ。
@@ -129,6 +168,14 @@ impl Mailer for LogMailer {
     }
     async fn send_already_registered(&self, to: &str, _lang: Option<Lang>) -> Result<(), String> {
         tracing::info!("[LogMailer] already-registered notice to {to}");
+        Ok(())
+    }
+    async fn send_recovery(&self, to: &str, url: &str, _lang: Option<Lang>) -> Result<(), String> {
+        tracing::info!("[LogMailer] recovery {to}: {url}");
+        Ok(())
+    }
+    async fn send_passkey_added(&self, to: &str, _lang: Option<Lang>) -> Result<(), String> {
+        tracing::info!("[LogMailer] passkey-added notice to {to}");
         Ok(())
     }
 }
