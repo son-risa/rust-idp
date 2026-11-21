@@ -281,6 +281,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Please sign in again.", "もう一度ログインしてください。"),
     ("Please confirm it is you with a passkey again.", "もう一度パスキーで本人確認をしてください。"),
     ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
+    (
+        "A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.",
+        "選んだ保存先には、このアカウントのパスキーが既に保存されています。もう一度押して、保存先に「パスワード」（iCloud）を選んでください。",
+    ),
     ("This passkey was not found. Please reload the page.", "このパスキーが見つかりません。ページを読み直してください。"),
     ("You cannot remove your only passkey. Add another passkey first.", "パスキーが 1 つだけのときは削除できません。先に別のパスキーを追加してください。"),
     (
