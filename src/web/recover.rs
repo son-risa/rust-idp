@@ -1,6 +1,8 @@
 //! メールで確かめて passkey を 1 本足す口（/recover）。passkey を失くした・この端末では使えない人のため。
 //!
 //! 既存の passkey は消さない（本人が自分の passkey で入り直し、覚えの無い 1 本を /account で消せるように）。
+//! 足す前からあった passkey は、足してから RECOVERY_HOLD_SECS の間 /account で消せない（メールを奪った人が、
+//! 本人の passkey を消して締め出せないように）。
 //! メールだけで確かめるので、足したら全部のセッションとトークンを失効させ、本人に知らせる。
 //! 管理者はこの口を使えない（受信箱を取られると IdP ごと取られるため）。管理者は別の管理者が戻す。
 
@@ -15,18 +17,37 @@ fn internal(context: &str, e: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response()
 }
 
-/// メールで passkey を足してよいアカウントか。passkey が 1 本も無い人は登録し直しの道（/signup）へ行く。
-pub(super) async fn recoverable(fs: &crate::firestore::Firestore, email: &str) -> Result<bool, String> {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Recovery {
+    Allowed,
+    /// アカウントが無いか、passkey が 1 本も無い。登録し直しの道（/signup）へ行く。
+    NoPasskey,
+    /// 管理者か、凍結中か、accountId の無い壊れた文書。
+    Refused,
+}
+
+/// メールで passkey を足してよいアカウントか。
+pub(super) async fn recovery_for(fs: &crate::firestore::Firestore, email: &str) -> Result<Recovery, String> {
     let Some(a) = registration::get_account(fs, email).await? else {
-        return Ok(false);
+        return Ok(Recovery::NoPasskey);
     };
     if a.disabled || a.account_id.is_empty() {
-        return Ok(false);
+        return Ok(Recovery::Refused);
     }
     if registration::list_credentials(fs, &a).await?.is_empty() {
-        return Ok(false);
+        return Ok(Recovery::NoPasskey);
     }
-    Ok(!crate::admin_store::is_admin(fs, &a.account_id).await?)
+    if crate::admin_store::is_admin(fs, &a.account_id).await? {
+        return Ok(Recovery::Refused);
+    }
+    Ok(Recovery::Allowed)
+}
+
+fn refused(r: Recovery) -> Response {
+    match r {
+        Recovery::NoPasskey => (StatusCode::CONFLICT, "no passkey to recover").into_response(),
+        _ => (StatusCode::CONFLICT, "recovery unavailable").into_response(),
+    }
 }
 
 fn shell(lang: Lang, body: &str) -> String {
@@ -80,8 +101,8 @@ pub(super) async fn recover_page(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    match registration::peek_recovery(fs, &q.t).await {
-        Ok(Some(_)) => {}
+    let email = match registration::peek_recovery(fs, &q.t).await {
+        Ok(Some(e)) => e,
         Ok(None) => {
             return page(
                 lang,
@@ -92,9 +113,10 @@ pub(super) async fn recover_page(
             );
         }
         Err(e) => return internal("recover_page: peek", &e),
-    }
+    };
     let token: String = q.t.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
     let body = r##"<h1>[[Add a passkey on this device]]</h1>
+<p class="small">__EMAIL__</p>
 <p>[[Create a passkey on this device to sign in again. Your other passkeys are kept. When you finish, you are signed out on your other devices.]]</p>
 <p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
 <button onclick="add()">[[Create a passkey]]</button>
@@ -108,6 +130,7 @@ document.getElementById('ioshint').hidden=!isIOS;
 const msg=document.getElementById('msg');
 function post(u,b){return fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});}
 async function add(){
+ if(!window.PublicKeyCredential||!navigator.credentials){msg.textContent='[[Passkeys cannot be used in this browser. Open the link in Safari or Chrome.]]';return;}
  msg.textContent='[[Working…]]';
  try{
   const r=await post(OPT,{token:TOKEN});
@@ -116,14 +139,15 @@ async function add(){
   const cred=await navigator.credentials.create({publicKey:{challenge:b64ToBuf(o.challenge),rp:o.rp,user:{id:b64ToBuf(o.user.id),name:o.user.name,displayName:o.user.displayName},pubKeyCredParams:o.pubKeyCredParams,authenticatorSelection:o.authenticatorSelection,attestation:o.attestation,timeout:o.timeout,excludeCredentials:(o.excludeCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id)}))}});
   const v=await post(VER,{token:TOKEN,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),attestationObject:bufToB64(cred.response.attestationObject)}});
   if(!v.ok){msg.textContent=await errorText(v);return;}
-  location.href=ACCOUNT;
- }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already saved here.]]'):passkeyErrorText(e);}
+  location.href=ACCOUNT+'?recovered=1';
+ }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device. Sign in with it.]]'):passkeyErrorText(e);}
 }
 </script>"##
         .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS);
     let html = shell(lang, &body)
         .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
         .replace("__TOKEN__", &token)
+        .replace("__EMAIL__", &super::admin::esc(&email))
         .replace("__OPT__", &p.path("/recover/options"))
         .replace("__VER__", &p.path("/recover/verify"))
         .replace("__ACCOUNT__", &p.path("/account"));
@@ -180,10 +204,10 @@ pub(super) async fn recover_options(State(p): State<Arc<Provider>>, Json(req): J
         Ok(None) => return (StatusCode::BAD_REQUEST, "invalid or expired token").into_response(),
         Err(e) => return internal("recover_options: peek", &e),
     };
-    match recoverable(fs, &email).await {
-        Ok(true) => {}
-        Ok(false) => return (StatusCode::CONFLICT, "recovery unavailable").into_response(),
-        Err(e) => return internal("recover_options: recoverable", &e),
+    match recovery_for(fs, &email).await {
+        Ok(Recovery::Allowed) => {}
+        Ok(r) => return refused(r),
+        Err(e) => return internal("recover_options: recovery_for", &e),
     }
     let account = match registration::get_account(fs, &email).await {
         Ok(Some(a)) => a,
@@ -219,10 +243,11 @@ pub(super) async fn recover_verify(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    let email = match registration::consume_recovery(fs, &req.token).await {
+    // token は最後まで消費しない（challenge 切れや検証の失敗で、メールからやり直しにならないように）。
+    let email = match registration::peek_recovery(fs, &req.token).await {
         Ok(Some(e)) => e,
         Ok(None) => return (StatusCode::BAD_REQUEST, "invalid or expired token").into_response(),
-        Err(e) => return internal("recover_verify: consume token", &e),
+        Err(e) => return internal("recover_verify: peek token", &e),
     };
     let challenge = match crate::webauthn::extract_challenge(&req.response.client_data_json) {
         Some(c) => c,
@@ -236,10 +261,10 @@ pub(super) async fn recover_verify(
     if kind != ChallengeKind::Reg || uid != CEREMONY_UID || email2 != email {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
-    match recoverable(fs, &email).await {
-        Ok(true) => {}
-        Ok(false) => return (StatusCode::CONFLICT, "recovery unavailable").into_response(),
-        Err(e) => return internal("recover_verify: recoverable", &e),
+    match recovery_for(fs, &email).await {
+        Ok(Recovery::Allowed) => {}
+        Ok(r) => return refused(r),
+        Err(e) => return internal("recover_verify: recovery_for", &e),
     }
     match registration::get_account(fs, &email).await {
         Ok(Some(a)) if a.account_id == account_id => {}
@@ -259,28 +284,67 @@ pub(super) async fn recover_verify(
             return (StatusCode::BAD_REQUEST, format!("registration failed: {e}")).into_response();
         }
     };
-    if let Err(e) = registration::save_credential(fs, &email, &account_id, &outcome).await {
-        return internal("recover_verify: save_credential", &e);
+    match registration::consume_recovery(fs, &req.token).await {
+        Ok(Some(e)) if e == email => {}
+        Ok(_) => return (StatusCode::BAD_REQUEST, "invalid or expired token").into_response(),
+        Err(e) => return internal("recover_verify: consume token", &e),
     }
-    let c = crate::account_admin::revoke_other_sessions(fs, &account_id, "").await;
+    // 保存から失効・監査までは、接続が切れても途中で止まらないよう別のタスクで最後まで行う。
+    let task = {
+        let p = p.clone();
+        let (email, account_id) = (email.clone(), account_id.clone());
+        tokio::spawn(async move { add_and_revoke(&p, &email, &account_id, &outcome).await })
+    };
+    let still_open = match task.await {
+        Ok(Ok(open)) => open,
+        Ok(Err(e)) => return internal("recover_verify", &e),
+        Err(e) => return internal("recover_verify: task", &e.to_string()),
+    };
     if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
         p.store.delete_session(&old).await;
     }
+    {
+        let p = p.clone();
+        let (email, lang) = (email.clone(), Lang::from_headers(&headers));
+        tokio::spawn(async move {
+            if let Err(e) = p.mailer.send_passkey_added(&email, Some(lang)).await {
+                tracing::error!("send_passkey_added failed: {e}");
+            }
+        });
+    }
+    if !still_open {
+        return (StatusCode::FORBIDDEN, "account disabled").into_response();
+    }
+    tracing::info!(event = "recover_passkey", sub = %pseudonymize_sub(&account_id));
+    let jar = start_session(&p, jar, account_id, now()).await;
+    (jar, (StatusCode::CREATED, Json(serde_json::json!({ "ok": true })))).into_response()
+}
+
+/// 復旧の時刻を残して passkey を足し、全部のセッションとトークンを失効させ、監査ログに残す。
+/// 戻り値は、終わった時点でアカウントが凍結されていないか（凍結と重なったら、新しいセッションを張らない）。
+async fn add_and_revoke(
+    p: &Provider,
+    email: &str,
+    account_id: &str,
+    outcome: &crate::webauthn::RegOutcome,
+) -> Result<bool, String> {
+    let fs = p.firestore.as_ref().ok_or("no firestore")?;
+    registration::mark_recovered(fs, email, &outcome.credential_id).await?;
+    registration::save_credential(fs, email, account_id, outcome).await?;
+    let c = crate::account_admin::revoke_other_sessions(fs, account_id, "").await;
+    if !c.query_errors.is_empty() {
+        tracing::error!("recover_passkey: revocation incomplete for account_id={account_id}: {:?}", c.query_errors);
+    }
     crate::audit_log::record(
         fs,
-        &account_id,
+        account_id,
         "recover_passkey",
-        &account_id,
+        account_id,
         &format!(
             "credential_id={} aaguid={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
             outcome.credential_id, outcome.aaguid, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors
         ),
     )
     .await;
-    if let Err(e) = p.mailer.send_passkey_added(&email, Some(Lang::from_headers(&headers))).await {
-        tracing::error!("send_passkey_added failed: {e}");
-    }
-    tracing::info!(event = "recover_passkey", sub = %pseudonymize_sub(&account_id));
-    let jar = start_session(&p, jar, account_id, now()).await;
-    (jar, (StatusCode::CREATED, Json(serde_json::json!({ "ok": true })))).into_response()
+    Ok(matches!(registration::get_account(fs, email).await?, Some(a) if !a.disabled))
 }

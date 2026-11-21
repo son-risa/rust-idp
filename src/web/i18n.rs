@@ -282,6 +282,29 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Please confirm it is you with a passkey again.", "もう一度パスキーで本人確認をしてください。"),
     ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
     ("Can’t use your passkey?", "パスキーを使えないとき"),
+    ("is registered. Sign in with your passkey.", "は登録済みです。パスキーでログインしてください。"),
+    ("[rust-op] Add a passkey on this device", "【rust-op】この端末にパスキーを追加する"),
+    ("If you cannot use your passkey, contact the administrator.", "パスキーを使えない場合は、管理者に問い合わせてください。"),
+    (
+        "Passkeys cannot be used in this browser. Open the link in Safari or Chrome.",
+        "このブラウザではパスキーを使えません。リンクを Safari か Chrome で開いてください。",
+    ),
+    (
+        "A passkey for this account is already available on this device. Sign in with it.",
+        "このアカウントのパスキーは、この端末で既に使えます。そのパスキーでログインしてください。",
+    ),
+    (
+        "This account has no passkey. Sign up again with the same email address.",
+        "このアカウントにはパスキーがありません。同じメールアドレスで登録し直してください。",
+    ),
+    (
+        "This passkey can be removed 24 hours after a passkey was added with email.",
+        "このパスキーは、メールでパスキーを追加してから 24 時間たつと削除できます。",
+    ),
+    (
+        "The passkey was added. Go back to the app or service and sign in again.",
+        "パスキーを追加しました。アプリやサービスに戻って、もう一度ログインしてください。",
+    ),
     (
         "Enter your email address. We will send a link to add a passkey on this device. When you use it, you are signed out on your other devices.",
         "メールアドレスを入れてください。この端末にパスキーを追加するリンクを送ります。使うと、ほかの端末ではログアウトされます。",

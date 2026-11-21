@@ -58,7 +58,7 @@ pub(super) async fn issue_register_email(
     }
     match crate::registration::has_passkey(fs, email).await? {
         true => {
-            if super::recover::recoverable(fs, email).await? {
+            if super::recover::recovery_for(fs, email).await? == super::recover::Recovery::Allowed {
                 let token = crate::registration::create_recovery_challenge(fs, email).await?;
                 let url = format!("{}{}?t={}", p.origin(), p.path("/recover"), token);
                 if let Err(e) = p.mailer.send_recovery(email, &url, lang).await {

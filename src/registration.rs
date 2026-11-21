@@ -247,6 +247,9 @@ pub struct Account {
     /// （[`crate::account_admin`] 参照）。欠落時は false。
     pub disabled: bool,
     pub created_at: u64,
+    /// 最後にメールで passkey を足した（復旧した）時刻と、そのとき足した passkey。無ければ 0 と空。
+    pub recovered_at: u64,
+    pub recovered_with: String,
     migrated: bool,
     /// 移行前のアカウントが accounts のフィールドに持つ passkey。
     legacy: Option<Credential>,
@@ -285,6 +288,8 @@ fn account_from(email: &str, f: &serde_json::Value) -> Account {
         account_id: firestore::field_str(f, "accountId").unwrap_or("").to_string(),
         disabled: firestore::field_bool(f, "disabled").unwrap_or(false),
         created_at: firestore::field_ts_secs(f, "createdAt").unwrap_or(0),
+        recovered_at: firestore::field_ts_secs(f, "recoveredAt").unwrap_or(0),
+        recovered_with: firestore::field_str(f, "recoveredWith").unwrap_or("").to_string(),
         migrated,
         legacy,
     }
@@ -708,6 +713,20 @@ pub async fn delete_all_credentials(fs: &Firestore, account: &Account) -> Result
 /// エラーを返す）。
 pub async fn set_disabled(fs: &Firestore, email: &str, disabled: bool) -> Result<(), String> {
     fs.update_field("accounts", email, "disabled", firestore::b(disabled)).await
+}
+
+/// メールで passkey を足す直前に、その時刻と足す passkey を残す。この時刻までに作られたほかの passkey は、
+/// しばらく本人の画面から消せない（メールを奪った人が、本人の passkey を消して締め出せないように）。
+pub async fn mark_recovered(fs: &Firestore, email: &str, credential_id: &str) -> Result<(), String> {
+    fs.update_fields(
+        "accounts",
+        email,
+        json!({
+            "recoveredAt": firestore::ts(&firestore::rfc3339(now())),
+            "recoveredWith": firestore::s(credential_id),
+        }),
+    )
+    .await
 }
 
 /// accountId(UUID) -> email の逆引き。discoverable ログイン（userHandle=accountId のみ判明）で使う。

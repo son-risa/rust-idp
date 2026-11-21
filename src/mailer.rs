@@ -56,6 +56,7 @@ pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, 
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
 <h2 style="margin:0 0 16px">[[Already registered]]</h2>
 <p>[[This email address]] (<strong>{email}</strong>) [[is already registered. Please sign in instead of signing up.]]</p>
+<p>[[If you cannot use your passkey, contact the administrator.]]</p>
 <p style="font-size:13px;color:#666">[[If you did not request this, ignore this email.]]</p>
 </div>"#,
         email = escape(to)
@@ -66,8 +67,8 @@ pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, 
 pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String, String) {
     let html = format!(
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
-<h2 style="margin:0 0 16px">[[Already registered]]</h2>
-<p>[[This email address]] (<strong>{email}</strong>) [[is already registered. Please sign in instead of signing up.]]</p>
+<h2 style="margin:0 0 16px">[[Add a passkey on this device]]</h2>
+<p>[[This email address]] (<strong>{email}</strong>) [[is registered. Sign in with your passkey.]]</p>
 <p>[[If you cannot use your passkey, or want to use this device too, add a passkey on this device with the button below. The link expires in 15 minutes.]]</p>
 <p style="margin:24px 0"><a href="{url}" style="display:inline-block;background:#3367d6;color:#fff;padding:14px 24px;border-radius:8px;text-decoration:none;font-weight:600">[[Add a passkey on this device]]</a></p>
 <p style="font-size:13px;color:#666">[[When you add a passkey this way, you are signed out on your other devices.]] [[If you did not request this, ignore this email.]]</p>
@@ -75,7 +76,7 @@ pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String,
         email = escape(to),
         url = escape(url)
     );
-    compose("[[[rust-op] An account already exists]]", &html, lang)
+    compose("[[[rust-op] Add a passkey on this device]]", &html, lang)
 }
 
 pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {

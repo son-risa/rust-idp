@@ -1192,13 +1192,13 @@ async fn the_account_page_is_in_the_viewers_language() {
     crate::registration::save_credential(&fs, "u@example.com", "acc-u", &second).await.unwrap();
     check_page("account (signed out)", "Passkey でログイン", |h| {
         let p = p.clone();
-        async move { body_of(account::account_page(State(p), h, CookieJar::default()).await).await }
+        async move { body_of(account::account_page(State(p), h, CookieJar::default(), Query(account::AccountQuery::default())).await).await }
     })
     .await;
     let jar = login_as(&p, "acc-u").await;
     check_page("account (signed in)", "この端末のパスキーを追加", |h| {
         let (p, jar) = (p.clone(), jar.clone());
-        async move { body_of(account::account_page(State(p), h, jar).await).await }
+        async move { body_of(account::account_page(State(p), h, jar, Query(account::AccountQuery::default())).await).await }
     })
     .await;
 }

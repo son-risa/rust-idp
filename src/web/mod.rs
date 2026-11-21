@@ -374,6 +374,8 @@ const SERVER_ERRORS={
  'last passkey':'[[You cannot remove your only passkey. Add another passkey first.]]',
  'passkey not found':'[[This passkey was not found. Please reload the page.]]',
  'recovery unavailable':'[[A passkey cannot be added with email for this account. Contact the administrator.]]',
+ 'no passkey to recover':'[[This account has no passkey. Sign up again with the same email address.]]',
+ 'recently recovered':'[[This passkey can be removed 24 hours after a passkey was added with email.]]',
  'no challenge':'[[Something went wrong. Please try again.]]',
  'challenge context mismatch':'[[Something went wrong. Please try again.]]',
  'no firestore':'[[Something went wrong. Please try again.]]',

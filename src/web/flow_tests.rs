@@ -1153,7 +1153,7 @@ async fn recovery_is_not_offered_to_admins_or_disabled_accounts() {
     let token = crate::registration::create_recovery_challenge(fs, &admin).await.unwrap();
     let r = recover_add(&p, &token, CookieJar::default(), b"admin-recovered").await.unwrap_err();
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert!(!recover::recoverable(fs, &admin).await.unwrap());
+    assert_eq!(recover::recovery_for(fs, &admin).await.unwrap(), recover::Recovery::Refused);
 
     let frozen = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let fid = uuid::Uuid::new_v4().to_string();
@@ -1207,4 +1207,88 @@ async fn signing_up_again_sends_a_recovery_link_only_when_recoverable() {
     crate::admin_store::grant_admin(fs, &aid, "test").await.unwrap();
     register::issue_register_email(&p, fs, &admin, "192.0.2.2", None).await.unwrap();
     assert_eq!(recovery_tokens().await, 1, "管理者に復旧のリンクを出した");
+}
+
+#[tokio::test]
+async fn passkeys_from_before_a_recovery_cannot_be_removed_for_a_day() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
+    let (_, resp) = recover_add(&p, &token, CookieJar::default(), b"recovered-credential").await.unwrap();
+    let here = jar_after(&resp);
+
+    // メールを奪った人が、本人の passkey を消して締め出すことはできない。
+    let (status, body) = error_body(delete_via_account(&p, &here, b"probe-credential-id").await).await;
+    assert_eq!((status, body.as_str()), (StatusCode::CONFLICT, "recently recovered"));
+    // 足した 1 本は消せる（本人が、覚えの無い 1 本を消す）。
+    assert_eq!(delete_via_account(&p, &here, b"recovered-credential").await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_failed_recovery_attempt_does_not_use_up_the_link() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
+
+    let opts_req: recover::RecoverOptionsReq = serde_json::from_value(json!({ "token": token })).unwrap();
+    let challenge = body_json(recover::recover_options(State(p.clone()), Json(opts_req)).await).await["challenge"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let key = SigningKey::generate();
+    let (_, cdj) = make_reg_ceremony(&key, b"broken", &challenge, &p.origin(), &p.rp_id());
+    let req: recover::RecoverVerifyReq = serde_json::from_value(json!({
+        "token": token,
+        "response": { "clientDataJSON": cdj, "attestationObject": "AAAA" },
+    }))
+    .unwrap();
+    let r = recover::recover_verify(State(p.clone()), HeaderMap::new(), CookieJar::default(), Json(req)).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    recover_add(&p, &token, CookieJar::default(), b"recovered-credential").await.unwrap();
+}
+
+#[tokio::test]
+async fn recovery_for_an_account_without_passkeys_points_to_sign_up() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
+    crate::registration::remove_all_credentials(fs, &email).await.unwrap();
+    let (status, body) = error_body(recover_add(&p, &token, CookieJar::default(), b"x").await.unwrap_err()).await;
+    assert_eq!((status, body.as_str()), (StatusCode::CONFLICT, "no passkey to recover"));
+}
+
+#[tokio::test]
+async fn the_recovery_page_names_the_account_and_the_request_page_does_not_tell_who_is_registered() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
+    let page = recover::recover_page(
+        State(p.clone()),
+        HeaderMap::new(),
+        Query(serde_json::from_value(json!({ "t": token })).unwrap()),
+    )
+    .await;
+    let html = body_text(page).await;
+    assert!(html.contains(&email), "どのアカウントに足すのかが出ていない");
+    assert!(html.contains(&token));
+
+    let mut bodies = vec![];
+    for (i, who) in [email.clone(), format!("nobody-{}@example.com", uuid::Uuid::new_v4())].iter().enumerate() {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", format!("192.0.2.{}", 10 + i).parse().unwrap());
+        let form: recover::RecoverForm = serde_json::from_value(json!({ "email": who })).unwrap();
+        let r = recover::recover_submit(State(p.clone()), h, Form(form)).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        bodies.push(body_text(r).await);
+    }
+    assert_eq!(bodies[0], bodies[1], "登録済みかどうかで画面が変わる");
 }
