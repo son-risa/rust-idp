@@ -80,7 +80,8 @@ pub(super) async fn account_page(State(p): State<Arc<Provider>>, headers: Header
     let (main, confirmed) = match &me {
         None => (
             r#"<p>[[Sign in with your passkey to see and add passkeys.]]</p>
-<button class="primary" onclick="signIn().then(ok=>{if(ok)location.reload();})">[[Sign in with a passkey]]</button>"#
+<button class="primary" onclick="signIn().then(ok=>{if(ok)location.reload();})">[[Sign in with a passkey]]</button>
+<p class="small"><a href="__RECOVER__">[[Can’t use your passkey?]]</a></p>"#
                 .to_string(),
             false,
         ),
@@ -200,6 +201,7 @@ async function del(id){
     .replace("__ADD_OPT__", &p.path("/account/passkeys/options"))
     .replace("__ADD_VER__", &p.path("/account/passkeys/verify"))
     .replace("__DEL__", &p.path("/account/passkeys/delete"))
+    .replace("__RECOVER__", &p.path("/recover"))
     .replace("__CONFIRMED__", if confirmed { "true" } else { "false" });
     ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response()
 }

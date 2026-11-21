@@ -1092,3 +1092,119 @@ async fn at_most_ten_passkeys() {
     let (s, b) = error_body(account_add(&p, &jar, b"eleventh").await.err().unwrap()).await;
     assert_eq!((s, b.as_str()), (StatusCode::CONFLICT, "too many passkeys"));
 }
+
+/// /recover でメールの token を使い、passkey を 1 本足す。options か verify が断ったら、その応答を返す。
+async fn recover_add(p: &Arc<Provider>, token: &str, jar: CookieJar, cred_id: &[u8]) -> Result<(SigningKey, Response), Response> {
+    let opts_req: recover::RecoverOptionsReq = serde_json::from_value(json!({ "token": token })).unwrap();
+    let opts = recover::recover_options(State(p.clone()), Json(opts_req)).await;
+    if opts.status() != StatusCode::OK {
+        return Err(opts);
+    }
+    let challenge = body_json(opts).await["challenge"].as_str().unwrap().to_string();
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(&key, cred_id, &challenge, &p.origin(), &p.rp_id());
+    let req: recover::RecoverVerifyReq = serde_json::from_value(json!({
+        "token": token,
+        "response": { "clientDataJSON": cdj, "attestationObject": att },
+    }))
+    .unwrap();
+    let v = recover::recover_verify(State(p.clone()), HeaderMap::new(), jar, Json(req)).await;
+    if v.status() != StatusCode::CREATED {
+        return Err(v);
+    }
+    Ok((key, v))
+}
+
+#[tokio::test]
+async fn recovery_adds_a_passkey_keeps_the_others_and_signs_out_everywhere_else() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (old_key, _, account_id) = register_test_account(&p, &email).await;
+    let elsewhere = session_jar(&p, &account_id, now()).await;
+    let elsewhere_sid = elsewhere.get(SID_COOKIE).unwrap().value().to_string();
+
+    let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
+    let (new_key, resp) = recover_add(&p, &token, CookieJar::default(), b"recovered-credential").await.unwrap();
+    let here = jar_after(&resp);
+
+    assert!(p.store.get_session(&elsewhere_sid).await.is_none(), "ほかの端末のセッションが残った");
+    let account = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
+    assert_eq!(account.account_id, account_id, "sub が変わった");
+    assert_eq!(crate::registration::list_credentials(fs, &account).await.unwrap().len(), 2);
+    // 前の passkey も、足した passkey も使える。
+    assert_eq!(login_with_email(&p, &email, &old_key, 1).await, account_id);
+    let (_, r) = email_login_with_credential(&p, &email, b"recovered-credential", &new_key, 1, |s| s).await;
+    assert!(r.status().is_success() || r.status().is_redirection(), "足した passkey で入れない: {}", r.status());
+    // 足した直後は確かめ済みなので、/account で失くした passkey を消せる。
+    assert_eq!(account::add_options(State(p.clone()), here).await.status(), StatusCode::OK);
+    // token は 1 回きり。
+    let again = recover_add(&p, &token, CookieJar::default(), b"recovered-again").await.unwrap_err();
+    assert_eq!(again.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn recovery_is_not_offered_to_admins_or_disabled_accounts() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let admin = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, admin_id) = register_test_account(&p, &admin).await;
+    crate::admin_store::grant_admin(fs, &admin_id, "test").await.unwrap();
+    let token = crate::registration::create_recovery_challenge(fs, &admin).await.unwrap();
+    let r = recover_add(&p, &token, CookieJar::default(), b"admin-recovered").await.unwrap_err();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert!(!recover::recoverable(fs, &admin).await.unwrap());
+
+    let frozen = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let fid = uuid::Uuid::new_v4().to_string();
+    add_passkey(&p, &frozen, &fid, b"frozen-credential").await;
+    crate::account_admin::disable_account(fs, "test", &frozen).await.unwrap();
+    let token = crate::registration::create_recovery_challenge(fs, &frozen).await.unwrap();
+    let r = recover_add(&p, &token, CookieJar::default(), b"frozen-recovered").await.unwrap_err();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn recovery_and_signup_tokens_are_not_interchangeable() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let id = uuid::Uuid::new_v4().to_string();
+    add_passkey(&p, &email, &id, b"some-credential").await;
+    crate::registration::remove_all_credentials(fs, &email).await.unwrap();
+
+    // passkey が 0 本の人に残った復旧の token でも、登録の口は通さない。
+    let recovery = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
+    let req: register::RegPkOptionsReq = serde_json::from_value(json!({ "token": recovery })).unwrap();
+    let r = register::register_passkey_options(State(p.clone()), Json(req)).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
+    let signup = crate::registration::create_email_challenge(fs, &email).await.unwrap();
+    let r = recover_add(&p, &signup, CookieJar::default(), b"x").await.unwrap_err();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn signing_up_again_sends_a_recovery_link_only_when_recoverable() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let recovery_tokens = || async {
+        fs.list_collection("emailChallenges")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|(_, f, _)| crate::firestore::field_str(f, "purpose") == Some("recovery"))
+            .count()
+    };
+    let user = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, _) = register_test_account(&p, &user).await;
+    register::issue_register_email(&p, fs, &user, "192.0.2.1", None).await.unwrap();
+    assert_eq!(recovery_tokens().await, 1);
+
+    let admin = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let aid = uuid::Uuid::new_v4().to_string();
+    add_passkey(&p, &admin, &aid, b"admin-credential").await;
+    crate::admin_store::grant_admin(fs, &aid, "test").await.unwrap();
+    register::issue_register_email(&p, fs, &admin, "192.0.2.2", None).await.unwrap();
+    assert_eq!(recovery_tokens().await, 1, "管理者に復旧のリンクを出した");
+}

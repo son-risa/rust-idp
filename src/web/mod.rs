@@ -31,6 +31,7 @@ mod i18n_tests;
 mod login;
 mod oidc;
 mod pages;
+mod recover;
 mod register;
 #[cfg(test)]
 mod flow_tests;
@@ -190,6 +191,9 @@ pub fn router(provider: Provider) -> Router {
         .route("/account/passkeys/options", post(account::add_options))
         .route("/account/passkeys/verify", post(account::add_verify))
         .route("/account/passkeys/delete", post(account::delete_passkey))
+        .route("/recover", get(recover::recover_page).post(recover::recover_submit))
+        .route("/recover/options", post(recover::recover_options))
+        .route("/recover/verify", post(recover::recover_verify))
         .route("/invites", post(register::invite_create))
         .route("/accounts/disable", post(register::account_disable))
         .route("/invite", get(register::invite_page))
@@ -369,6 +373,7 @@ const SERVER_ERRORS={
  'too many passkeys':'[[You can add up to 10 passkeys. Remove one first.]]',
  'last passkey':'[[You cannot remove your only passkey. Add another passkey first.]]',
  'passkey not found':'[[This passkey was not found. Please reload the page.]]',
+ 'recovery unavailable':'[[A passkey cannot be added with email for this account. Contact the administrator.]]',
  'no challenge':'[[Something went wrong. Please try again.]]',
  'challenge context mismatch':'[[Something went wrong. Please try again.]]',
  'no firestore':'[[Something went wrong. Please try again.]]',
