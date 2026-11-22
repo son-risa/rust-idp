@@ -4,7 +4,11 @@
 [advisories]
 version = 2
 # RustSec advisory DB の CVE をすべて検知する。修正版の無いものを除外するときは、理由を書いてここに足す。
-ignore = []
+ignore = [
+    # url 2.5.8 の Url::origin() が入れ子の blob: URL で stack overflow。rust-op も依存先（reqwest, tower-http）も
+    # Url::origin() を呼ばない。直った 2.5.9 は 2026-11-20 公開で 7 日のクールダウン中。2026-11-27 以降に上げてここから消す。
+    { id = "RUSTSEC-2026-0592", reason = "Url::origin() を呼ばない。url 2.5.9 がクールダウンを抜ける 2026-11-27 に上げる" },
+]
 
 [bans]
 # 同一クレートの複数版（例: getrandom 0.2/0.4）は警告（依存更新で解消を促す。即 fail にはしない）。
