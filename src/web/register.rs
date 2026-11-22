@@ -14,11 +14,25 @@ button{{width:100%;padding:12px;font-size:16px;background:#3367d6;color:#fff;bor
     Html(localize(&html, lang))
 }
 
+#[derive(serde::Deserialize, Default)]
+pub(super) struct SignupQuery {
+    /// ログイン画面から来たときの interaction。送信で token の文書に移す（確かめるのは送信時）。
+    #[serde(default)]
+    uid: String,
+}
+
 pub(super) async fn register_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    Query(q): Query<SignupQuery>,
 ) -> Html<String> {
     let action = p.path("/signup");
+    let uid: String = q.uid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect();
+    let back = if uid.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<p><a href="{}">[[Back to sign in]]</a></p>"#, p.path(&format!("/login/{uid}")))
+    };
     page(
         Lang::from_headers(&headers),
         "[[Sign up]]",
@@ -26,7 +40,8 @@ pub(super) async fn register_form(
             r#"<h1>[[Create an account]]</h1><p>[[We will send a confirmation link to your email address.]]</p>
 <form method="post" action="{action}">
 <input name="email" type="email" placeholder="[[Email address]]" autocomplete="email" autofocus>
-<button type="submit">[[Send confirmation email]]</button></form>"#
+<input type="hidden" name="uid" value="{uid}">
+<button type="submit">[[Send confirmation email]]</button></form>{back}"#
         ),
     )
 }
@@ -34,6 +49,8 @@ pub(super) async fn register_form(
 #[derive(serde::Deserialize)]
 pub(super) struct RegisterForm {
     email: String,
+    #[serde(default)]
+    uid: String,
 }
 
 /// メール確認チャレンジを作り確認メールを送る。Web フォーム/ネイティブ JSON 共通。
@@ -44,6 +61,7 @@ pub(super) async fn issue_register_email(
     email: &str,
     ip: &str,
     lang: Option<Lang>,
+    from: &crate::registration::CameFrom,
 ) -> Result<(), String> {
     if !email.contains('@') || email.len() > 254 {
         return Err("invalid email".into());
@@ -59,7 +77,7 @@ pub(super) async fn issue_register_email(
     match crate::registration::has_passkey(fs, email).await? {
         true => {
             if super::recover::recovery_for(fs, email).await? == super::recover::Recovery::Allowed {
-                let token = crate::registration::create_recovery_challenge(fs, email).await?;
+                let token = crate::registration::create_recovery_challenge_from(fs, email, from).await?;
                 let url = format!("{}{}?t={}", p.origin(), p.path("/recover"), token);
                 if let Err(e) = p.mailer.send_recovery(email, &url, lang).await {
                     tracing::error!("send_recovery failed: {e}");
@@ -69,8 +87,13 @@ pub(super) async fn issue_register_email(
             }
         }
         false => {
-            let token = crate::registration::create_email_challenge(fs, email).await?;
-            let url = format!("{}/r?t={}", p.origin(), token);
+            let token = crate::registration::create_email_challenge_from(fs, email, from).await?;
+            // RP のログインから来た人は Web で登録を済ませて RP に戻る。/r は iPhone で fido2demo アプリに取られる。
+            let url = if from.uid.is_empty() {
+                format!("{}/r?t={}", p.origin(), token)
+            } else {
+                format!("{}{}?token={}", p.origin(), p.path("/signup/verify"), token)
+            };
             if let Err(e) = p.mailer.send_verification(email, &url, lang).await {
                 tracing::error!("send_verification failed: {e}");
             }
@@ -82,6 +105,7 @@ pub(super) async fn issue_register_email(
 pub(super) async fn register_submit(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Form(form): Form<RegisterForm>,
 ) -> Response {
     let email = form.email.trim().to_lowercase();
@@ -90,7 +114,8 @@ pub(super) async fn register_submit(
         None => return plain_error(&localize("[[Something went wrong. Please try again.]]", Lang::from_headers(&headers))),
     };
     let lang = Lang::from_headers(&headers);
-    match issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang)).await {
+    let from = super::came_from(&p, &jar, &form.uid).await;
+    match issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang), &from).await {
         Ok(()) => page(
             lang,
             "[[Sent]]",
@@ -131,7 +156,7 @@ pub(super) async fn register_email_challenge(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    match issue_register_email(&p, fs, &email, &client_ip(&headers), None).await {
+    match issue_register_email(&p, fs, &email, &client_ip(&headers), None, &Default::default()).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) if e == "invalid email" => (StatusCode::BAD_REQUEST, "invalid email").into_response(),
         Err(e) if e == "rate_limited" => {
@@ -220,7 +245,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
+const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
@@ -253,11 +278,13 @@ async function reg(){
   if(isIOS&&res.gpm){
    const link=(href,text)=>{const a=document.createElement('a');a.href=href;a.textContent=text;const p=document.createElement('p');p.append(a);return p;};
    msg.textContent='[[Registration complete. This passkey was saved in Google Password Manager, which may ask for a PIN at sign-in. We recommend also saving a passkey in Passwords (iCloud).]]';
-   msg.append(link(ACCOUNT,'[[Add a passkey in Passwords]]'),link(AFTER||LOGIN,AFTER?'[[Continue]]':'[[Go to sign in]]'));
+   msg.append(link(ACCOUNT,'[[Add a passkey in Passwords]]'),link(AFTER||res.redirect,'[[Continue]]'));
    return;
   }
   if(AFTER){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=AFTER;return;}
-  msg.innerHTML='[[Registration complete.]] <a href="'+LOGIN+'">[[Go to sign in]]</a>';
+  if(res.resume){msg.textContent='[[Registration complete. Taking you to sign in…]]';location.href=res.redirect;return;}
+  msg.textContent='[[Registration complete.]] ';
+  const a=document.createElement('a');a.href=res.redirect;a.textContent='[[Continue]]';msg.append(a);
  }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script></body></html>"##;
@@ -267,7 +294,6 @@ async function reg(){
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
             .replace("__VER__", &p.path("/signup/passkey/verify"))
-            .replace("__LOGIN__", &p.path("/account"))
             .replace("__ACCOUNT__", &p.path("/account"))
             .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or(""))),
     )
@@ -685,6 +711,7 @@ pub(super) async fn register_passkey_verify(
             }
         }
     }
+    let from = crate::registration::came_from(fs, &req.token).await;
     let email1 = match crate::registration::consume_email_challenge(fs, &req.token).await {
         Ok(Some(e)) => e,
         Ok(None) => return (StatusCode::BAD_REQUEST, "invalid or expired token").into_response(),
@@ -735,20 +762,24 @@ pub(super) async fn register_passkey_verify(
     // 戻った先の RP で passkey をもう一度押さずに済み、すぐ別の passkey を足せる。
     // 凍結を確かめられなかったときは張らない（/authorize のセッション利用は凍結を見ない）。
     let active = matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if !a.disabled);
-    let jar = if active {
+    let (jar, redirect) = if active {
         if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
             p.store.delete_session(&old).await;
         }
-        start_session(&p, jar, account_id, now()).await
+        let redirect = super::continue_after_email(&p, &jar, &from, &account_id, false).await;
+        (start_session(&p, jar, account_id, now()).await, redirect)
     } else {
-        jar
+        (jar, super::account_url(&p, &from.client_id, false))
     };
+    // 元のログインの続きなら、画面はそのまま進む。
+    let resume = redirect.contains("/authorize/resume");
     (
         StatusCode::CREATED,
         jar,
         Json(serde_json::json!({
             "ok": true,
-            "redirect": p.path("/"),
+            "redirect": redirect,
+            "resume": resume,
             "gpm": outcome.aaguid == crate::webauthn::GOOGLE_PASSWORD_MANAGER,
         })),
     )

@@ -39,6 +39,21 @@ async fn test_provider() -> Arc<Provider> {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+        })
+        .with_client(Client {
+            client_id: "rp-entry".into(),
+            redirect_uris: vec!["https://rp.example.com/cb".into()],
+            post_logout_redirect_uris: vec![],
+            initiate_login_uri: Some("https://rp.example.com/auth/login".into()),
+            token_endpoint_auth_method: "none".into(),
+            client_secret: None,
+            grant_types: vec!["authorization_code".into()],
+            dpop_bound: false,
+            jwks: vec![],
+            jwks_uri: None,
+            require_par: false,
+            require_pkce: false,
+            id_token_signed_response_alg: None,
         });
     Arc::new(p)
 }
@@ -1198,14 +1213,14 @@ async fn signing_up_again_sends_a_recovery_link_only_when_recoverable() {
     };
     let user = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, _) = register_test_account(&p, &user).await;
-    register::issue_register_email(&p, fs, &user, "192.0.2.1", None).await.unwrap();
+    register::issue_register_email(&p, fs, &user, "192.0.2.1", None, &Default::default()).await.unwrap();
     assert_eq!(recovery_tokens().await, 1);
 
     let admin = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let aid = uuid::Uuid::new_v4().to_string();
     add_passkey(&p, &admin, &aid, b"admin-credential").await;
     crate::admin_store::grant_admin(fs, &aid, "test").await.unwrap();
-    register::issue_register_email(&p, fs, &admin, "192.0.2.2", None).await.unwrap();
+    register::issue_register_email(&p, fs, &admin, "192.0.2.2", None, &Default::default()).await.unwrap();
     assert_eq!(recovery_tokens().await, 1, "管理者に復旧のリンクを出した");
 }
 
@@ -1286,9 +1301,127 @@ async fn the_recovery_page_names_the_account_and_the_request_page_does_not_tell_
         let mut h = HeaderMap::new();
         h.insert("x-forwarded-for", format!("192.0.2.{}", 10 + i).parse().unwrap());
         let form: recover::RecoverForm = serde_json::from_value(json!({ "email": who })).unwrap();
-        let r = recover::recover_submit(State(p.clone()), h, Form(form)).await;
+        let r = recover::recover_submit(State(p.clone()), h, CookieJar::default(), Form(form)).await;
         assert_eq!(r.status(), StatusCode::OK);
         bodies.push(body_text(r).await);
     }
     assert_eq!(bodies[0], bodies[1], "登録済みかどうかで画面が変わる");
+}
+
+/* ===== メールのリンクの後、元のアプリへ戻す ===== */
+
+/// RP の /authorize から来たログイン画面（このブラウザが始めた interaction）と、そのブラウザの cookie。
+async fn sign_in_started_here(p: &Arc<Provider>, client_id: &str) -> (String, CookieJar) {
+    let uid = uuid::Uuid::new_v4().to_string();
+    let (secret, hash) = super::new_browser_binding();
+    p.store
+        .save_interaction(Interaction {
+            uid: uid.clone(),
+            raw_query: format!("response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb"),
+            account_id: None,
+            auth_time: None,
+            request_uri: None,
+            browser_binding: hash,
+        })
+        .await;
+    let jar = CookieJar::default().add(Cookie::new(super::browser_cookie_name(&uid), secret));
+    (uid, jar)
+}
+
+/// /recover のフォームから送り、届いた復旧の token を返す。
+async fn send_recovery_from(p: &Arc<Provider>, email: &str, uid: &str, jar: CookieJar) -> String {
+    let fs = p.firestore.as_ref().unwrap();
+    let mut h = HeaderMap::new();
+    h.insert("x-forwarded-for", format!("198.51.100.{}", uuid::Uuid::new_v4().as_bytes()[0]).parse().unwrap());
+    let form: recover::RecoverForm = serde_json::from_value(json!({ "email": email, "uid": uid })).unwrap();
+    assert_eq!(recover::recover_submit(State(p.clone()), h, jar, Form(form)).await.status(), StatusCode::OK);
+    fs.list_collection("emailChallenges")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(_, f, _)| {
+            crate::firestore::field_str(f, "purpose") == Some("recovery") && crate::firestore::field_str(f, "email") == Some(email)
+        })
+        .map(|(id, _, _)| id)
+        .expect("復旧の token が無い")
+}
+
+#[tokio::test]
+async fn recovery_from_the_sign_in_screen_continues_that_sign_in_in_the_same_browser() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let (uid, jar) = sign_in_started_here(&p, "rp-entry").await;
+
+    let token = send_recovery_from(&p, &email, &uid, jar.clone()).await;
+    let from = crate::registration::came_from(fs, &token).await;
+    assert_eq!((from.uid.as_str(), from.client_id.as_str()), (uid.as_str(), "rp-entry"));
+
+    let (_, resp) = recover_add(&p, &token, jar, b"recovered-here").await.unwrap();
+    let redirect = body_json(resp).await["redirect"].as_str().unwrap().to_string();
+    assert_eq!(redirect, p.path(&format!("/authorize/resume?uid={uid}")));
+    let i = p.store.get_interaction(&uid).await.unwrap();
+    assert_eq!(i.account_id.as_deref(), Some(account_id.as_str()), "ログインが済んでいない");
+}
+
+#[tokio::test]
+async fn recovery_in_another_browser_offers_the_apps_entry_instead() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let (uid, jar) = sign_in_started_here(&p, "rp-entry").await;
+
+    // 送ったのはログインを始めたブラウザ、リンクを開いたのは別のブラウザ。
+    let token = send_recovery_from(&p, &email, &uid, jar).await;
+    let (_, resp) = recover_add(&p, &token, CookieJar::default(), b"recovered-elsewhere").await.unwrap();
+    let here = jar_after(&resp);
+    let redirect = body_json(resp).await["redirect"].as_str().unwrap().to_string();
+    assert_eq!(redirect, format!("{}?recovered=1&client_id=rp-entry", p.path("/account")));
+    assert!(p.store.get_interaction(&uid).await.unwrap().account_id.is_none(), "別のブラウザが元のログインを済ませた");
+
+    let q: account::AccountQuery = serde_json::from_value(json!({ "recovered": "1", "client_id": "rp-entry" })).unwrap();
+    let html = body_text(account::account_page(State(p.clone()), HeaderMap::new(), here.clone(), Query(q)).await).await;
+    assert!(html.contains(r#"href="https://rp.example.com/auth/login?iss="#), "{html}");
+    // 入口の無い client、知らない client にはボタンを出さない。
+    for other in ["test-ciba-rp", "https://evil.example/"] {
+        let q: account::AccountQuery = serde_json::from_value(json!({ "client_id": other })).unwrap();
+        let html = body_text(account::account_page(State(p.clone()), HeaderMap::new(), here.clone(), Query(q)).await).await;
+        assert!(!html.contains(r#"class="primary" href"#), "{other}: {html}");
+    }
+}
+
+#[tokio::test]
+async fn a_sign_in_started_in_another_browser_is_not_carried_by_the_email() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    // 他人の uid を持ち込んでも、その interaction を始めたブラウザでなければ token に残らない。
+    let (uid, _) = sign_in_started_here(&p, "rp-entry").await;
+    let token = send_recovery_from(&p, &email, &uid, CookieJar::default()).await;
+    assert_eq!(crate::registration::came_from(fs, &token).await, Default::default());
+}
+
+#[tokio::test]
+async fn signing_up_from_the_sign_in_screen_continues_that_sign_in() {
+    let p = test_provider().await;
+    let fs = p.firestore.as_ref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (uid, jar) = sign_in_started_here(&p, "rp-entry").await;
+    let from = super::came_from(&p, &jar, &uid).await;
+    let token = crate::registration::create_email_challenge_from(fs, &email, &from).await.unwrap();
+    assert!(crate::registration::peek_invite(fs, &token).await.unwrap().is_none(), "招待として扱われた");
+
+    let options_req: register::RegPkOptionsReq = serde_json::from_value(json!({ "token": token })).unwrap();
+    let opts = body_json(register::register_passkey_options(State(p.clone()), Json(options_req)).await).await;
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(&key, b"signed-up-here", opts["challenge"].as_str().unwrap(), &p.origin(), &p.rp_id());
+    let req: register::RegVerifyReq =
+        serde_json::from_value(json!({ "token": token, "response": { "clientDataJSON": cdj, "attestationObject": att } })).unwrap();
+    let resp = register::register_passkey_verify(State(p.clone()), jar, Json(req)).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let v = body_json(resp).await;
+    assert_eq!(v["redirect"].as_str().unwrap(), p.path(&format!("/authorize/resume?uid={uid}")));
+    assert_eq!(v["resume"], json!(true));
 }

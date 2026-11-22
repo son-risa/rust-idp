@@ -41,18 +41,49 @@ fn token_ok(t: &str) -> bool {
 
 /* ===== email 所有確認チャレンジ ===== */
 
+/// ログイン画面から来たときの、元の interaction（uid）と client。メールの token の文書に持ち、URL には載せない。
+/// 呼び出し側が「このブラウザが始めた、生きた interaction」と確かめたものだけを入れる。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CameFrom {
+    pub uid: String,
+    pub client_id: String,
+}
+
+fn with_came_from(mut fields: serde_json::Value, from: &CameFrom) -> serde_json::Value {
+    if !from.uid.is_empty() {
+        fields["uid"] = firestore::s(&from.uid);
+        fields["clientId"] = firestore::s(&from.client_id);
+    }
+    fields
+}
+
+#[cfg(test)]
 pub async fn create_email_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
+    create_email_challenge_from(fs, email, &CameFrom::default()).await
+}
+
+pub async fn create_email_challenge_from(fs: &Firestore, email: &str, from: &CameFrom) -> Result<String, String> {
     let token = random_token();
-    fs.set_doc(
-        "emailChallenges",
-        &token,
-        json!({
-            "email": firestore::s(email),
-            "expiresAt": firestore::ts(&firestore::rfc3339(now() + EMAIL_TTL_SECS)),
-        }),
-    )
-    .await?;
+    let fields = json!({
+        "email": firestore::s(email),
+        "expiresAt": firestore::ts(&firestore::rfc3339(now() + EMAIL_TTL_SECS)),
+    });
+    fs.set_doc("emailChallenges", &token, with_came_from(fields, from)).await?;
     Ok(token)
+}
+
+/// token の文書が持つ CameFrom。無い・読めないときは空。
+pub async fn came_from(fs: &Firestore, token: &str) -> CameFrom {
+    if !token_ok(token) {
+        return CameFrom::default();
+    }
+    match fs.get_doc("emailChallenges", token).await {
+        Ok(Some(f)) => CameFrom {
+            uid: firestore::field_str(&f, "uid").unwrap_or("").to_string(),
+            client_id: firestore::field_str(&f, "clientId").unwrap_or("").to_string(),
+        },
+        _ => CameFrom::default(),
+    }
 }
 
 /// 招待（RP の管理者が発行を頼む登録リンク）。emailChallenges に置くので、
@@ -92,18 +123,19 @@ pub async fn peek_invite(fs: &Firestore, token: &str) -> Result<Option<(String, 
 }
 
 /// 復旧のリンク（登録済みの人が、メールで確かめて passkey を 1 本足す）。
+#[cfg(test)]
 pub async fn create_recovery_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
+    create_recovery_challenge_from(fs, email, &CameFrom::default()).await
+}
+
+pub async fn create_recovery_challenge_from(fs: &Firestore, email: &str, from: &CameFrom) -> Result<String, String> {
     let token = random_token();
-    fs.set_doc(
-        "emailChallenges",
-        &token,
-        json!({
-            "email": firestore::s(email),
-            "purpose": firestore::s(PURPOSE_RECOVERY),
-            "expiresAt": firestore::ts(&firestore::rfc3339(now() + RECOVERY_TTL_SECS)),
-        }),
-    )
-    .await?;
+    let fields = json!({
+        "email": firestore::s(email),
+        "purpose": firestore::s(PURPOSE_RECOVERY),
+        "expiresAt": firestore::ts(&firestore::rfc3339(now() + RECOVERY_TTL_SECS)),
+    });
+    fs.set_doc("emailChallenges", &token, with_came_from(fields, from)).await?;
     Ok(token)
 }
 

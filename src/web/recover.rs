@@ -75,6 +75,13 @@ fn page(lang: Lang, body: &str) -> Response {
 pub(super) struct RecoverQuery {
     #[serde(default)]
     t: String,
+    /// ログイン画面から来たときの interaction。送信で token の文書に移す（確かめるのは送信時）。
+    #[serde(default)]
+    uid: String,
+}
+
+fn clean_uid(uid: &str) -> String {
+    uid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect()
 }
 
 /// GET /recover: t が無ければメールアドレスを聞く。t があれば、この端末に passkey を足す画面。
@@ -86,6 +93,12 @@ pub(super) async fn recover_page(
     let lang = Lang::from_headers(&headers);
     if q.t.is_empty() {
         let action = p.path("/recover");
+        let uid = clean_uid(&q.uid);
+        let back = if uid.is_empty() {
+            String::new()
+        } else {
+            format!(r#"<p class="small"><a href="{}">[[Back to sign in]]</a></p>"#, p.path(&format!("/login/{uid}")))
+        };
         return page(
             lang,
             &format!(
@@ -93,7 +106,8 @@ pub(super) async fn recover_page(
 <p>[[Enter your email address. We will send a link to add a passkey on this device. When you use it, you are signed out on your other devices.]]</p>
 <form method="post" action="{action}">
 <input name="email" type="email" placeholder="[[Email address]]" autocomplete="email" autofocus>
-<button type="submit">[[Send email]]</button></form>"#
+<input type="hidden" name="uid" value="{uid}">
+<button type="submit">[[Send email]]</button></form>{back}"#
             ),
         );
     }
@@ -115,6 +129,13 @@ pub(super) async fn recover_page(
         Err(e) => return internal("recover_page: peek", &e),
     };
     let token: String = q.t.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    // 既にこの端末に passkey があったときのログイン先。元のログインがまだ在ればそこ、無ければ /account。
+    let from = registration::came_from(fs, &token).await;
+    let login = if !from.uid.is_empty() && p.store.get_interaction(&from.uid).await.is_some() {
+        p.path(&format!("/login/{}", from.uid))
+    } else {
+        super::account_url(&p, &from.client_id, false)
+    };
     let body = r##"<h1>[[Add a passkey on this device]]</h1>
 <p class="small">__EMAIL__</p>
 <p>[[Create a passkey on this device to sign in again. Your other passkeys are kept. When you finish, you are signed out on your other devices.]]</p>
@@ -124,7 +145,7 @@ pub(super) async fn recover_page(
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",ACCOUNT="__ACCOUNT__";
+const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__";
 const isIOS=/iPad|iPhone|iPod/i.test(navigator.userAgent)||(/(Macintosh).*Mobile/i.test(navigator.userAgent));
 document.getElementById('ioshint').hidden=!isIOS;
 const msg=document.getElementById('msg');
@@ -139,11 +160,11 @@ async function add(){
   const cred=await navigator.credentials.create({publicKey:{challenge:b64ToBuf(o.challenge),rp:o.rp,user:{id:b64ToBuf(o.user.id),name:o.user.name,displayName:o.user.displayName},pubKeyCredParams:o.pubKeyCredParams,authenticatorSelection:o.authenticatorSelection,attestation:o.attestation,timeout:o.timeout,excludeCredentials:(o.excludeCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id)}))}});
   const v=await post(VER,{token:TOKEN,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),attestationObject:bufToB64(cred.response.attestationObject)}});
   if(!v.ok){msg.textContent=await errorText(v);return;}
-  location.href=ACCOUNT+'?recovered=1';
+  location.href=(await v.json()).redirect;
  }catch(e){
   if(e&&e.name==='InvalidStateError'){
    // 既に持っている。iOS は保存先を選び直せば足せる場合もあるが、どちらでもログインへ送れるようにする。
-   msg.innerHTML=(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device.]]')+' <a href="'+ACCOUNT+'">[[Sign in with it]]</a>';
+   msg.innerHTML=(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device.]]')+' <a href="'+LOGIN+'">[[Sign in with it]]</a>';
    return;
   }
   msg.textContent=passkeyErrorText(e);
@@ -157,19 +178,23 @@ async function add(){
         .replace("__EMAIL__", &super::admin::esc(&email))
         .replace("__OPT__", &p.path("/recover/options"))
         .replace("__VER__", &p.path("/recover/verify"))
-        .replace("__ACCOUNT__", &p.path("/account"));
-    no_store(html)
+        .replace("__LOGIN__", &login);
+    // ページの URL に token が在る。外へのリンクで Referer に載せない。
+    ([(header::CACHE_CONTROL, "no-store"), (header::REFERRER_POLICY, "no-referrer")], Html(html)).into_response()
 }
 
 #[derive(serde::Deserialize)]
 pub(super) struct RecoverForm {
     email: String,
+    #[serde(default)]
+    uid: String,
 }
 
 /// POST /recover: 登録済みなら復旧のリンク、未登録なら登録のリンクを送る（どちらでも同じ画面を返す）。
 pub(super) async fn recover_submit(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Form(form): Form<RecoverForm>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
@@ -178,7 +203,8 @@ pub(super) async fn recover_submit(
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
     let email = form.email.trim().to_lowercase();
-    match super::register::issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang)).await {
+    let from = super::came_from(&p, &jar, &form.uid).await;
+    match super::register::issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang), &from).await {
         Ok(()) => page(
             lang,
             "<h1>[[Email sent]]</h1><p>[[If this address is registered, we sent a link to add a passkey on this device. Open it on the device you want to use (the link expires in 15 minutes).]]</p>",
@@ -291,6 +317,7 @@ pub(super) async fn recover_verify(
             return (StatusCode::BAD_REQUEST, format!("registration failed: {e}")).into_response();
         }
     };
+    let from = registration::came_from(fs, &req.token).await;
     match registration::consume_recovery(fs, &req.token).await {
         Ok(Some(e)) if e == email => {}
         Ok(_) => return (StatusCode::BAD_REQUEST, "invalid or expired token").into_response(),
@@ -323,8 +350,9 @@ pub(super) async fn recover_verify(
         return (StatusCode::FORBIDDEN, "account disabled").into_response();
     }
     tracing::info!(event = "recover_passkey", sub = %pseudonymize_sub(&account_id));
+    let redirect = super::continue_after_email(&p, &jar, &from, &account_id, true).await;
     let jar = start_session(&p, jar, account_id, now()).await;
-    (jar, (StatusCode::CREATED, Json(serde_json::json!({ "ok": true })))).into_response()
+    (jar, (StatusCode::CREATED, Json(serde_json::json!({ "ok": true, "redirect": redirect })))).into_response()
 }
 
 /// 復旧の時刻を残して passkey を足し、全部のセッションとトークンを失効させ、監査ログに残す。
