@@ -22,7 +22,8 @@ const ISSUER="__ISSUER__";
 function b64url(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 async function start(){
   const v=b64url(crypto.getRandomValues(new Uint8Array(32)));
-  sessionStorage.setItem('pkce_verifier',v);
+  // メールのリンク（別のタブ）でログインを終えても戻れるよう、タブごとの sessionStorage でなく localStorage に置く。
+  localStorage.setItem('pkce_verifier',v);
   const dig=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v));
   const u=new URL(ISSUER+'/authorize');
   u.searchParams.set('client_id','demo-rp');
@@ -230,7 +231,8 @@ async function doRefresh(){
   if(q.get('error')){if(q.get('error_description'))console.error(q.get('error_description'));fail('[[Sign-in could not be completed. (error code: {code})]]'.replace('{code}',()=>q.get('error')));return;}
   const code=q.get('code');
   if(code){
-    const verifier=sessionStorage.getItem('pkce_verifier');
+    const verifier=localStorage.getItem('pkce_verifier');
+    localStorage.removeItem('pkce_verifier');
     const tproof=await dpopProof('POST',ISSUER+'/token');
     const r=await fetch(ISSUER+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','DPoP':tproof},body:new URLSearchParams({grant_type:'authorization_code',code,redirect_uri:ISSUER+'/callback',client_id:'demo-rp',code_verifier:verifier})});
     const tok=await r.json();
