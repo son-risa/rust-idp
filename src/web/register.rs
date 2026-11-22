@@ -201,12 +201,13 @@ pub(super) async fn register_verify_email(
 /// iPhone は AASA(Universal Link)でアプリが横取りするため通常この HTML は出ず、
 /// PC/Mac やアプリ未対応端末ではこのページでブラウザ passkey 登録を完結できる。
 /// `invite_return` が Some なら招待の着地: 端末を問わず Web で登録し、成功したら戻り先へ移る。
-/// script の openApp: iOS=カスタムスキーム / Android=intent URL（fallback付き）。アプリ未起動なら1.5秒後にWebボタン提示。
+/// script の openApp: iOS=カスタムスキーム / Android=intent URL（fallback付き）。Web で続けるボタンは初めから出す。
 fn passkey_register_page(
     p: &Provider,
     lang: Lang,
     token: &str,
     invite_return: Option<&str>,
+    web_only: bool,
 ) -> Html<String> {
     let token: String = token
         .chars()
@@ -232,7 +233,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
  <button class="primary" onclick="openApp()">[[Open in the app]]</button>
  <p class="small">[[If the app is installed, it opens automatically. If it does not, continue on the web with the button below.]]</p>
  <p class="small">[[If you open the app, the name above is not saved. It is saved if you continue on the web.]]</p>
- <div id="fallback" hidden>
+ <div id="fallback">
   <button class="secondary" onclick="reg()">[[Continue on the web]]</button>
   <p class="small">[[It is created as a synced passkey (for example in iCloud Keychain).]]</p>
  </div>
@@ -245,19 +246,17 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER;
+const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER,WEB_ONLY=__WEB_ONLY__;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
 const isIOS=/iPad|iPhone|iPod/i.test(ua)||(/(Macintosh).*Mobile/i.test(ua));
-document.getElementById((!AFTER&&(isAndroid||isIOS))?'mobile':'desktop').hidden=false;
+document.getElementById((!AFTER&&!WEB_ONLY&&(isAndroid||isIOS))?'mobile':'desktop').hidden=false;
 document.getElementById('ioshint').hidden=!isIOS;
 function openApp(){
  const url=isAndroid
   ?('intent://magic?t='+TOKEN+'#Intent;scheme=jp.co.sonrisa.fido2demo;package=jp.co.sonrisa.fido2demo;S.browser_fallback_url='+encodeURIComponent('https://oidc.sonrisa.co.jp/r?t='+TOKEN)+';end')
   :('jp.co.sonrisa.fido2demo://magic?t='+TOKEN);
- const timer=setTimeout(()=>{document.getElementById('fallback').hidden=false;},1500);
- document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(timer);},{once:true});
  location.href=url;
 }
 async function reg(){
@@ -295,7 +294,8 @@ async function reg(){
             .replace("__OPT__", &p.path("/signup/passkey/options"))
             .replace("__VER__", &p.path("/signup/passkey/verify"))
             .replace("__ACCOUNT__", &p.path("/account"))
-            .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or(""))),
+            .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or("")))
+            .replace("__WEB_ONLY__", if web_only { "true" } else { "false" }),
     )
 }
 
@@ -316,7 +316,7 @@ pub(super) async fn magic_redirect(
     headers: HeaderMap,
     Query(q): Query<MagicQuery>,
 ) -> Response {
-    link_landing(&p, Lang::from_headers(&headers), &q.t)
+    link_landing(&p, Lang::from_headers(&headers), &q.t, false)
 }
 
 /// oidc.sonrisa.co.jp は Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
@@ -341,15 +341,16 @@ pub(super) async fn verify_form(
     headers: HeaderMap,
     Query(q): Query<VerifyQuery>,
 ) -> Response {
-    link_landing(&p, Lang::from_headers(&headers), &q.token)
+    // ログイン画面から始めた登録のリンク。アプリへ移すと元のログインに戻れないので Web だけで済ませる。
+    link_landing(&p, Lang::from_headers(&headers), &q.token, true)
 }
 
 /// メールのリンクが途中で切れて token が無いときは、登録画面を出さずにその旨を伝える。
-fn link_landing(p: &Provider, lang: Lang, token: &str) -> Response {
+fn link_landing(p: &Provider, lang: Lang, token: &str, web_only: bool) -> Response {
     if token.is_empty() {
         return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
     }
-    passkey_register_page(p, lang, token, None).into_response()
+    passkey_register_page(p, lang, token, None, web_only).into_response()
 }
 
 /* ===== 招待（RP が発行を頼む、確認メール不要の登録リンク） ===== */
@@ -554,7 +555,7 @@ pub(super) async fn invite_page(
     if matches!(crate::registration::has_passkey(fs, &email).await, Ok(true)) {
         return Redirect::to(&return_to).into_response();
     }
-    passkey_register_page(&p, lang, &q.t, Some(&return_to)).into_response()
+    passkey_register_page(&p, lang, &q.t, Some(&return_to), false).into_response()
 }
 
 /// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
@@ -1187,15 +1188,30 @@ mod invite_tests {
         .await;
         assert!(html.contains(r#"<input id="nm" autocomplete="name" maxlength="80">"#));
         assert!(html.contains("NAME_REQUIRED=!!AFTER"));
-        let plain = passkey_register_page(&p, Lang::En, "tok", None).0;
+        let plain = passkey_register_page(&p, Lang::En, "tok", None, false).0;
         assert!(plain.contains(r#"AFTER="""#), "通常の登録では AFTER が空なので、氏名は任意");
+    }
+
+    /// ログイン画面から始めた登録のリンク（/signup/verify）は、スマホでもアプリへ誘わず Web で済ませる。
+    /// アプリへ移ると元のログインに戻れないため。/r ではアプリを勧めるが、Web で続けるボタンも初めから出す。
+    #[tokio::test]
+    async fn a_sign_up_started_from_the_sign_in_screen_stays_on_the_web() {
+        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()));
+        let from_sign_in = body_text(
+            verify_form(State(p.clone()), HeaderMap::new(), Query(VerifyQuery { token: "tok".into() })).await,
+        )
+        .await;
+        assert!(from_sign_in.contains("WEB_ONLY=true"), "{from_sign_in}");
+        let app_link = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), Query(MagicQuery { t: "tok".into() })).await).await;
+        assert!(app_link.contains("WEB_ONLY=false"));
+        assert!(app_link.contains(r#"<div id="fallback">"#), "Web で続けるボタンが隠れている");
     }
 
     /// iPhone のときだけ、保存先は iCloud がよいと案内する（AMATE の要件の一覧の #3）。
     #[test]
     fn the_registration_page_recommends_icloud_on_iphone() {
         let p = Provider::new("https://idp.example/oidc".to_string());
-        let html = passkey_register_page(&p, Lang::Ja, "tok", None).0;
+        let html = passkey_register_page(&p, Lang::Ja, "tok", None, false).0;
         assert!(html.contains(r#"<p class="small" id="ioshint" hidden>iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。"#), "{html}");
         assert!(html.contains("document.getElementById('ioshint').hidden=!isIOS;"));
     }
