@@ -2,6 +2,7 @@ use super::*;
 
 /* ===== RP デモ（ブラウザ完結の authorization code + PKCE） ===== */
 
+// PKCE verifier は localStorage に置く。メールのリンク（別のタブ）でログインを終えて戻っても、タブごとの sessionStorage では消えているため。
 pub(super) async fn demo_start(State(p): State<Arc<Provider>>, headers: HeaderMap) -> Html<String> {
     let page = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>fido2demo</title>
@@ -22,7 +23,6 @@ const ISSUER="__ISSUER__";
 function b64url(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 async function start(){
   const v=b64url(crypto.getRandomValues(new Uint8Array(32)));
-  // メールのリンク（別のタブ）でログインを終えても戻れるよう、タブごとの sessionStorage でなく localStorage に置く。
   localStorage.setItem('pkce_verifier',v);
   const dig=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v));
   const u=new URL(ISSUER+'/authorize');
