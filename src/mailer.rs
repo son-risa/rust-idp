@@ -48,7 +48,7 @@ pub(crate) fn verification_mail(verify_url: &str, lang: Option<Lang>) -> (String
 </div>"#,
         url = escape(verify_url)
     );
-    compose("[[[rust-op] Verify your email]]", &html, lang)
+    compose("[[[rust-idp] Verify your email]]", &html, lang)
 }
 
 pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, String) {
@@ -61,7 +61,7 @@ pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, 
 </div>"#,
         email = escape(to)
     );
-    compose("[[[rust-op] An account already exists]]", &html, lang)
+    compose("[[[rust-idp] An account already exists]]", &html, lang)
 }
 
 pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String, String) {
@@ -76,7 +76,7 @@ pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String,
         email = escape(to),
         url = escape(url)
     );
-    compose("[[[rust-op] Add a passkey on this device]]", &html, lang)
+    compose("[[[rust-idp] Add a passkey on this device]]", &html, lang)
 }
 
 pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {
@@ -85,7 +85,7 @@ pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {
 <p>[[A passkey was added to your account using a link sent to this email address, and you were signed out on your other devices.]]</p>
 <p>[[If this was not you, someone may be able to read your email. Secure your email account, then sign in with your own passkey and remove the passkey you do not recognize.]]</p>
 </div>"#;
-    compose("[[[rust-op] A passkey was added]]", html, lang)
+    compose("[[[rust-idp] A passkey was added]]", html, lang)
 }
 
 fn escape(s: &str) -> String {
@@ -102,7 +102,7 @@ impl ResendMailer {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            from: "rust-op <noreply@sonrisa.co.jp>".into(),
+            from: "rust-idp <noreply@sonrisa.co.jp>".into(),
             http: crate::http::client(),
         }
     }

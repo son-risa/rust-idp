@@ -283,16 +283,17 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
     ("Can’t use your passkey?", "パスキーを使えないとき"),
     ("is registered. Sign in with your passkey.", "は登録済みです。パスキーでログインしてください。"),
-    ("[rust-op] Add a passkey on this device", "【rust-op】この端末にパスキーを追加する"),
+    ("[rust-idp] Add a passkey on this device", "【rust-idp】この端末にパスキーを追加する"),
     ("If you cannot use your passkey, contact the administrator.", "パスキーを使えない場合は、管理者に問い合わせてください。"),
     (
         "Passkeys cannot be used in this browser. Open the link in Safari or Chrome.",
         "このブラウザではパスキーを使えません。リンクを Safari か Chrome で開いてください。",
     ),
     (
-        "A passkey for this account is already available on this device. Sign in with it.",
-        "このアカウントのパスキーは、この端末で既に使えます。そのパスキーでログインしてください。",
+        "A passkey for this account is already available on this device.",
+        "このアカウントのパスキーは、この端末で既に使えます。",
     ),
+    ("Sign in with it", "そのパスキーでログインする"),
     (
         "This account has no passkey. Sign up again with the same email address.",
         "このアカウントにはパスキーがありません。同じメールアドレスで登録し直してください。",
@@ -334,7 +335,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "この方法でパスキーを追加すると、ほかの端末ではログアウトされます。",
     ),
     ("A passkey was added", "パスキーが追加されました"),
-    ("[rust-op] A passkey was added", "【rust-op】パスキーが追加されました"),
+    ("[rust-idp] A passkey was added", "【rust-idp】パスキーが追加されました"),
     (
         "A passkey was added to your account using a link sent to this email address, and you were signed out on your other devices.",
         "このメールアドレスに送ったリンクを使って、あなたのアカウントにパスキーが追加されました。ほかの端末ではログアウトしています。",
@@ -513,7 +514,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("This screen is shown only once. Copy the token now.", "この画面は一度しか表示されません。今すぐコピーしてください。"),
     ("IAT issuance complete", "IAT発行完了"),
     // mailer.rs
-    ("[rust-op] Verify your email", "【rust-op】メールアドレス確認"),
+    ("[rust-idp] Verify your email", "【rust-idp】メールアドレス確認"),
     ("Verify your email address", "メールアドレス確認"),
     (
         "To finish signing up, create your passkey with the button below. The link expires in 30 minutes.",
@@ -521,7 +522,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ),
     ("Sign up with a passkey", "passkey を作成して登録"),
     ("If you did not request this, ignore this email.", "心当たりがない場合はこのメールを無視してください。"),
-    ("[rust-op] An account already exists", "【rust-op】既に登録済みのアカウントがあります"),
+    ("[rust-idp] An account already exists", "【rust-idp】既に登録済みのアカウントがあります"),
     ("Already registered", "既に登録済みです"),
     ("This email address", "このメールアドレス"),
     (
