@@ -71,6 +71,72 @@ fn started_in_this_browser(jar: &CookieJar, i: &crate::model::Interaction) -> bo
     })
 }
 
+/// ログイン画面から来た uid を、このブラウザが始めた生きた interaction のときだけ受け取る。
+/// 印の無い（古い）interaction は、別のブラウザから他人の uid を持ち込めるので受け取らない。
+async fn came_from(p: &Provider, jar: &CookieJar, uid: &str) -> crate::registration::CameFrom {
+    let none = crate::registration::CameFrom::default;
+    if uid.is_empty() {
+        return none();
+    }
+    let Some(i) = p.store.get_interaction(uid).await else { return none() };
+    if i.browser_binding.is_empty() || !started_in_this_browser(jar, &i) {
+        return none();
+    }
+    // client_id は利用者の入力でなく、/authorize が受けた要求から取る（PAR でも client_id はクエリに在る）。
+    let client_id = serde_urlencoded::from_str::<HashMap<String, String>>(&i.raw_query)
+        .ok()
+        .and_then(|q| q.get("client_id").cloned())
+        .unwrap_or_default();
+    crate::registration::CameFrom { uid: uid.to_string(), client_id }
+}
+
+/// メールのリンクで passkey を作り終えた後の行き先。
+/// 同じブラウザで元の interaction が生きていれば、そのログインを済ませて RP への続き（resume）へ。
+/// でなければ /account。client_id を添え、その client の入口があれば /account がボタンを出す。
+async fn continue_after_email(
+    p: &Provider,
+    jar: &CookieJar,
+    from: &crate::registration::CameFrom,
+    account_id: &str,
+    recovered: bool,
+) -> String {
+    let interaction = if from.uid.is_empty() { None } else { p.store.get_interaction(&from.uid).await };
+    if let Some(i) = interaction
+        && !i.browser_binding.is_empty()
+        && started_in_this_browser(jar, &i)
+        && p.store.complete_interaction(&from.uid, account_id, now()).await
+    {
+        tracing::info!(event = "login_success", sub = %pseudonymize_sub(account_id), via = "email");
+        return p.path(&format!("/authorize/resume?uid={}", from.uid));
+    }
+    account_url(p, &from.client_id, recovered)
+}
+
+fn account_url(p: &Provider, client_id: &str, recovered: bool) -> String {
+    let mut q: Vec<(&str, &str)> = Vec::new();
+    if recovered {
+        q.push(("recovered", "1"));
+    }
+    if !client_id.is_empty() {
+        q.push(("client_id", client_id));
+    }
+    if q.is_empty() {
+        return p.path("/account");
+    }
+    format!("{}?{}", p.path("/account"), serde_urlencoded::to_string(q).unwrap_or_default())
+}
+
+/// client の入口（initiate_login_uri）に iss を付けた URL。入口が無い client は None。
+async fn client_entry(p: &Provider, client_id: &str) -> Option<String> {
+    if client_id.is_empty() {
+        return None;
+    }
+    let entry = p.resolve_client(client_id).await?.initiate_login_uri?;
+    let sep = if entry.contains('?') { '&' } else { '?' };
+    let iss = serde_urlencoded::to_string([("iss", &p.issuer)]).unwrap_or_default();
+    Some(format!("{entry}{sep}{iss}"))
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }

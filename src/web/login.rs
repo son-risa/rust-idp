@@ -20,17 +20,11 @@ pub(super) async fn login_form(
 ) -> Response {
     let lang = Lang::from_headers(&headers);
     if p.store.get_interaction(&uid).await.is_none() {
-        let entry = match &q.client_id {
-            Some(id) => p.resolve_client(id).await.and_then(|c| c.initiate_login_uri),
-            None => None,
-        };
-        let Some(entry) = entry else {
+        let Some(entry) = client_entry(&p, q.client_id.as_deref().unwrap_or("")).await else {
             return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang));
         };
         tracing::info!(event = "login_reinitiated", client_id = q.client_id.as_deref().unwrap_or(""));
-        let sep = if entry.contains('?') { '&' } else { '?' };
-        let iss = serde_urlencoded::to_string([("iss", &p.issuer)]).unwrap_or_default();
-        return Redirect::to(&format!("{entry}{sep}{iss}")).into_response();
+        return Redirect::to(&entry).into_response();
     }
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title>
@@ -103,8 +97,8 @@ async function pkLogin(){
             // 切れた challenge で検証に行かないため。端末が眠ると setInterval も止まるので、画面に戻ったときにも取り直す。
             .replace("__CEREMONY_TTL_SECS__", &crate::registration::CEREMONY_TTL_SECS.to_string())
             .replace("__CANCEL__", &p.path(&format!("/login/{uid}/cancel")))
-            .replace("__REGISTER__", &p.path("/signup"))
-            .replace("__RECOVER__", &p.path("/recover")),
+            .replace("__REGISTER__", &p.path(&format!("/signup?uid={uid}")))
+            .replace("__RECOVER__", &p.path(&format!("/recover?uid={uid}"))),
     )
     .into_response()
 }

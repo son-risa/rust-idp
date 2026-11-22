@@ -81,6 +81,9 @@ async fn me_confirmed(p: &Provider, jar: &CookieJar) -> Result<Me, Response> {
 pub(super) struct AccountQuery {
     #[serde(default)]
     recovered: Option<String>,
+    /// メールのリンクで passkey を作った後、元の RP へ戻るボタンを出すための client。入口が登録済みのときだけ出す。
+    #[serde(default)]
+    client_id: Option<String>,
 }
 
 pub(super) async fn account_page(
@@ -149,9 +152,20 @@ pub(super) async fn account_page(
             } else {
                 ""
             };
+            let back = match super::client_entry(&p, q.client_id.as_deref().unwrap_or("")).await {
+                Some(entry) => {
+                    let host = entry.split("://").nth(1).and_then(|r| r.split(['/', '?', ':']).next()).unwrap_or("");
+                    format!(
+                        r#"<a class="primary" href="{href}">[[Back to the app]]</a><p class="small" style="text-align:center">{host}</p>"#,
+                        href = esc(&entry),
+                        host = esc(host),
+                    )
+                }
+                None => String::new(),
+            };
             (
                 format!(
-                    r#"{recovered}<p class="sub">{email}</p>
+                    r#"{recovered}{back}<p class="sub">{email}</p>
 <ul class="pk">{rows}</ul>
 {gpm_hint}
 <button class="primary" onclick="add()">[[Add a passkey on this device]]</button>
@@ -173,7 +187,7 @@ pub(super) async fn account_page(
 <style>body{font-family:-apple-system,sans-serif;max-width:420px;margin:40px auto;padding:0 16px;color:#222}
 h1{font-size:20px;margin:0 0 8px}p{font-size:14px;line-height:1.6}.sub{color:#5f6368;font-size:13px}
 .small{font-size:12px;color:#5f6368;margin-top:8px}
-button.primary{display:block;width:100%;padding:13px;margin-top:16px;font-size:16px;border:0;border-radius:8px;cursor:pointer;background:#3367d6;color:#fff}
+button.primary,a.primary{display:block;box-sizing:border-box;width:100%;padding:13px;margin-top:16px;font-size:16px;border:0;border-radius:8px;cursor:pointer;background:#3367d6;color:#fff;text-align:center;text-decoration:none}
 button.link{background:none;border:0;color:#c5221f;padding:4px 0;font-size:13px;cursor:pointer}
 ul.pk{list-style:none;padding:0;margin:12px 0}ul.pk li{border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:8px 0}
 .nm{font-size:15px}#msg{font-size:14px;margin-top:14px;min-height:1.4em}</style></head><body>

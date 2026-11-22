@@ -257,11 +257,11 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
 
 #[tokio::test]
 async fn sign_in_and_demo_pages_follow_the_browser_language() {
-    check_page("login", "Passkey でログイン", |h| async move {
+    check_page("login", "パスキーでログイン", |h| async move {
         login_page(h).await
     })
     .await;
-    check_page("demo_start", "Passkey でログイン", |h| async move {
+    check_page("demo_start", "パスキーでログイン", |h| async move {
         pages::demo_start(State(plain()), h).await.0
     })
     .await;
@@ -285,7 +285,7 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
         "'<h1>プロフィール</h1>",
         "{male:'男性'",
         "field('氏名',p.name)",
-        "承認（passkey）",
+        "承認（パスキー）",
         "'セッションが切れました。再度ログインしてください。'",
     ] {
         assert!(html.contains(ja), "{ja}");
@@ -306,18 +306,18 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
 #[tokio::test]
 async fn registration_pages_follow_the_browser_language() {
     check_page("signup form", "ユーザー登録", |h| async move {
-        register::register_form(State(plain()), h).await.0
+        register::register_form(State(plain()), h, Query(Default::default())).await.0
     })
     .await;
     check_page("signup sent", "確認メールを送信しました", |h| async move {
         let (p, _fs) = with_firestore().await;
         let form = Form(serde_urlencoded::from_str("email=new%40example.com").unwrap());
-        body_of(register::register_submit(State(p), h, form).await).await
+        body_of(register::register_submit(State(p), h, CookieJar::default(), form).await).await
     })
     .await;
     check_page(
         "passkey registration (mail link)",
-        "passkey を作成",
+        "パスキーを作成",
         |h| async move {
             let q = serde_urlencoded::from_str("t=abc").unwrap();
             body_of(register::magic_redirect(State(plain()), h, Query(q)).await).await
@@ -326,7 +326,7 @@ async fn registration_pages_follow_the_browser_language() {
     .await;
     check_page(
         "passkey registration (web form)",
-        "passkey を作成",
+        "パスキーを作成",
         |h| async move {
             let q = serde_urlencoded::from_str("token=abc").unwrap();
             body_of(register::verify_form(State(plain()), h, Query(q)).await).await
@@ -374,7 +374,7 @@ async fn the_ciba_approval_page_follows_the_browser_language() {
         },
     )
     .await;
-    check_page("ciba (one pending)", "承認（passkey）", |h| async move {
+    check_page("ciba (one pending)", "承認（パスキー）", |h| async move {
         let p = plain();
         p.ciba
             .create("client-1", "acc-1", "openid", "order-100", None)
@@ -716,7 +716,7 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
         |h| async move {
             let (p, _fs) = with_firestore().await;
             let form = Form(serde_urlencoded::from_str("email=not-an-email").unwrap());
-            body_of(register::register_submit(State(p), h, form).await).await
+            body_of(register::register_submit(State(p), h, CookieJar::default(), form).await).await
         },
     )
     .await;
@@ -778,7 +778,7 @@ async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
             Some("ja"),
             [
                 "<title>ログイン</title>",
-                "Passkey でログイン",
+                "パスキーでログイン",
                 "ログアウトしました",
                 ">ログアウト</a>",
             ],
@@ -1190,7 +1190,7 @@ async fn the_account_page_is_in_the_viewers_language() {
         aaguid: String::new(),
     };
     crate::registration::save_credential(&fs, "u@example.com", "acc-u", &second).await.unwrap();
-    check_page("account (signed out)", "Passkey でログイン", |h| {
+    check_page("account (signed out)", "パスキーでログイン", |h| {
         let p = p.clone();
         async move { body_of(account::account_page(State(p), h, CookieJar::default(), Query(account::AccountQuery::default())).await).await }
     })
@@ -1203,7 +1203,7 @@ async fn the_account_page_is_in_the_viewers_language() {
     .await;
 }
 
-/// /account はログイン中だけログアウトを出し、登録日を持たない passkey に 1970 年を出さない。
+/// /account はログイン中だけログアウトを出し、登録日を持たない パスキーに 1970 年を出さない。
 /// ログアウト後の「ログインへ」は demo RP（/）でなく /account を指す。
 #[tokio::test]
 async fn the_account_page_signs_out_and_hides_unknown_dates() {
