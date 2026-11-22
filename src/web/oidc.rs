@@ -672,8 +672,8 @@ pub(super) async fn end_session(
         return (jar, Redirect::to(&target)).into_response();
     }
 
-    // リダイレクト先指定なし → 完了ページ。
-    let home = p.path("/");
+    // リダイレクト先指定なし → 完了ページ。IdP のホームは /account（/ は demo RP）。
+    let home = p.path("/account");
     let html = format!(
         r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>

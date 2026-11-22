@@ -130,10 +130,15 @@ pub(super) async fn account_page(
                             id = esc(&c.credential_id)
                         )
                     };
+                    // 11-21 の移し替え前の passkey は登録日を持たない（0）。
+                    let created = if c.created_at == 0 {
+                        String::new()
+                    } else {
+                        format!(r#"[[Registered]]: <time data-ts="{}"></time> · "#, c.created_at)
+                    };
                     format!(
-                        r#"<li><div class="nm">{name}</div><div class="sub">[[Registered]]: <time data-ts="{created}"></time> · {last}</div>{remove}</li>"#,
+                        r#"<li><div class="nm">{name}</div><div class="sub">{created}{last}</div>{remove}</li>"#,
                         name = esc(name),
-                        created = c.created_at,
                     )
                 })
                 .collect();
@@ -150,7 +155,8 @@ pub(super) async fn account_page(
 <ul class="pk">{rows}</ul>
 {gpm_hint}
 <button class="primary" onclick="add()">[[Add a passkey on this device]]</button>
-<p class="small">[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.]]</p>"#,
+<p class="small">[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.]]</p>
+<p class="small"><a href="__LOGOUT__">[[Sign out]]</a></p>"#,
                     email = esc(&m.account.email),
                     recovered = if q.recovered.is_some() {
                         r#"<p>[[The passkey was added. Go back to the app or service and sign in again.]]</p>"#
@@ -230,6 +236,7 @@ async function del(id){
     .replace("__ADD_VER__", &p.path("/account/passkeys/verify"))
     .replace("__DEL__", &p.path("/account/passkeys/delete"))
     .replace("__RECOVER__", &p.path("/recover"))
+    .replace("__LOGOUT__", &p.path("/end-session"))
     .replace("__CONFIRMED__", if confirmed { "true" } else { "false" });
     ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response()
 }

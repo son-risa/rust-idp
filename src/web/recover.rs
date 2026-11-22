@@ -140,7 +140,14 @@ async function add(){
   const v=await post(VER,{token:TOKEN,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),attestationObject:bufToB64(cred.response.attestationObject)}});
   if(!v.ok){msg.textContent=await errorText(v);return;}
   location.href=ACCOUNT+'?recovered=1';
- }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device. Sign in with it.]]'):passkeyErrorText(e);}
+ }catch(e){
+  if(e&&e.name==='InvalidStateError'){
+   // 既に持っている。iOS は保存先を選び直せば足せる場合もあるが、どちらでもログインへ送れるようにする。
+   msg.innerHTML=(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device.]]')+' <a href="'+ACCOUNT+'">[[Sign in with it]]</a>';
+   return;
+  }
+  msg.textContent=passkeyErrorText(e);
+ }
 }
 </script>"##
         .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS);

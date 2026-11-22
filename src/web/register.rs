@@ -267,7 +267,7 @@ async function reg(){
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
             .replace("__VER__", &p.path("/signup/passkey/verify"))
-            .replace("__LOGIN__", &p.path("/"))
+            .replace("__LOGIN__", &p.path("/account"))
             .replace("__ACCOUNT__", &p.path("/account"))
             .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or(""))),
     )
@@ -625,7 +625,7 @@ pub(super) fn creation_options(
         .collect();
     serde_json::json!({
         "challenge": challenge,
-        "rp": { "id": p.rp_id(), "name": "rust-op" },
+        "rp": { "id": p.rp_id(), "name": "rust-idp" },
         "user": {
             "id": crate::webauthn::b64e(account_id.as_bytes()),
             "name": email,

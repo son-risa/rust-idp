@@ -653,11 +653,11 @@ fn mails_follow_the_browser_language_and_are_bilingual_without_one() {
             !has_japanese(&subject) && !has_japanese(&html),
             "{name}: 英語のメールに日本語: {subject} {html}"
         );
-        assert!(subject.starts_with("[rust-op] "), "{name}: {subject}");
+        assert!(subject.starts_with("[rust-idp] "), "{name}: {subject}");
         assert!(!html.contains("[["), "{name}");
 
         let (subject, html) = mail(Some(Lang::Ja));
-        assert!(subject.starts_with("【rust-op】"), "{name}: {subject}");
+        assert!(subject.starts_with("【rust-idp】"), "{name}: {subject}");
         assert!(html.contains(ja_heading), "{name}");
 
         let (subject, html) = mail(None);
@@ -1201,4 +1201,41 @@ async fn the_account_page_is_in_the_viewers_language() {
         async move { body_of(account::account_page(State(p), h, jar, Query(account::AccountQuery::default())).await).await }
     })
     .await;
+}
+
+/// /account はログイン中だけログアウトを出し、登録日を持たない passkey に 1970 年を出さない。
+/// ログアウト後の「ログインへ」は demo RP（/）でなく /account を指す。
+#[tokio::test]
+async fn the_account_page_signs_out_and_hides_unknown_dates() {
+    let (p, fs) = with_firestore().await;
+    register(&fs, "u@example.com", "acc-u").await;
+    let legacy = crate::webauthn::RegOutcome {
+        credential_id: "cred-legacy".into(),
+        pub_x: "x".into(),
+        pub_y: "y".into(),
+        sign_count: 0,
+        aaguid: String::new(),
+    };
+    crate::registration::save_credential(&fs, "u@example.com", "acc-u", &legacy).await.unwrap();
+    let mut f = fs.get_doc("credentials", "cred-legacy").await.unwrap().unwrap();
+    f.as_object_mut().unwrap().remove("createdAt");
+    fs.set_doc("credentials", "cred-legacy", f).await.unwrap();
+
+    let logout = format!(r#"href="{}""#, p.path("/end-session"));
+    let out = body_of(
+        account::account_page(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(account::AccountQuery::default())).await,
+    )
+    .await;
+    assert!(!out.contains(&logout), "未ログインでログアウトを出した");
+
+    let jar = login_as(&p, "acc-u").await;
+    let html =
+        body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar, Query(account::AccountQuery::default())).await)
+            .await;
+    assert!(html.contains(&logout), "ログアウトが無い");
+    assert!(!html.contains(r#"data-ts="0""#), "登録日 0 を日付にした");
+
+    let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
+    let done = body_of(oidc::end_session(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(q)).await).await;
+    assert!(done.contains(&format!(r#"href="{}""#, p.path("/account"))), "{done}");
 }
