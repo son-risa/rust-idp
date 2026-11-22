@@ -1289,6 +1289,7 @@ async fn the_recovery_page_names_the_account_and_the_request_page_does_not_tell_
     let page = recover::recover_page(
         State(p.clone()),
         HeaderMap::new(),
+        CookieJar::default(),
         Query(serde_json::from_value(json!({ "t": token })).unwrap()),
     )
     .await;
@@ -1363,6 +1364,33 @@ async fn recovery_from_the_sign_in_screen_continues_that_sign_in_in_the_same_bro
     assert_eq!(redirect, p.path(&format!("/authorize/resume?uid={uid}")));
     let i = p.store.get_interaction(&uid).await.unwrap();
     assert_eq!(i.account_id.as_deref(), Some(account_id.as_str()), "ログインが済んでいない");
+}
+
+/// 既にこの端末に passkey があったとき、復旧の画面はその場でログインする。行き先はリンクを開いたブラウザで決まる。
+#[tokio::test]
+async fn the_recovery_page_signs_in_with_an_existing_passkey_in_place() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let (uid, jar) = sign_in_started_here(&p, "rp-entry").await;
+    let token = send_recovery_from(&p, &email, &uid, jar.clone()).await;
+    let open = |jar: CookieJar| {
+        let p = p.clone();
+        let token = token.clone();
+        async move {
+            let q = Query(serde_json::from_value(json!({ "t": token })).unwrap());
+            body_text(recover::recover_page(State(p), HeaderMap::new(), jar, q).await).await
+        }
+    };
+
+    let same = open(jar).await;
+    assert!(same.contains(&format!(r#"LOGIN_OPT="{}""#, p.path(&format!("/login/{uid}/passkey/options")))), "{same}");
+    assert!(same.contains(r#"LOGIN_DONE="""#), "元のログインの続きは verify の redirect に任せる");
+    assert!(!same.contains("<a href"), "ログイン画面へのリンクでもう一度押させない");
+
+    let other = open(CookieJar::default()).await;
+    assert!(other.contains(&format!(r#"LOGIN_OPT="{}""#, p.path("/account/signin/options"))), "{other}");
+    assert!(other.contains(&format!(r#"LOGIN_DONE="{}?client_id=rp-entry""#, p.path("/account"))), "{other}");
 }
 
 #[tokio::test]

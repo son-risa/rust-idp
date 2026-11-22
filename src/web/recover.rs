@@ -88,6 +88,7 @@ fn clean_uid(uid: &str) -> String {
 pub(super) async fn recover_page(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<RecoverQuery>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
@@ -129,12 +130,17 @@ pub(super) async fn recover_page(
         Err(e) => return internal("recover_page: peek", &e),
     };
     let token: String = q.t.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
-    // 既にこの端末に passkey があったときのログイン先。元のログインがまだ在ればそこ、無ければ /account。
+    // 既にこの端末に passkey があったときは、リンクで画面を移さずにその場でそのパスキーでログインする。
     let from = registration::came_from(fs, &token).await;
-    let login = if !from.uid.is_empty() && p.store.get_interaction(&from.uid).await.is_some() {
-        p.path(&format!("/login/{}", from.uid))
+    // その場でログインする先。元のログインがこのブラウザでまだ在ればそれを終えてアプリへ、無ければ /account へ。
+    let (login_opt, login_ver, login_done) = if !super::came_from(&p, &jar, &from.uid).await.uid.is_empty() {
+        (
+            p.path(&format!("/login/{}/passkey/options", from.uid)),
+            p.path(&format!("/login/{}/passkey/verify", from.uid)),
+            String::new(),
+        )
     } else {
-        super::account_url(&p, &from.client_id, false)
+        (p.path("/account/signin/options"), p.path("/account/signin/verify"), super::account_url(&p, &from.client_id, false))
     };
     let body = r##"<h1>[[Add a passkey on this device]]</h1>
 <p class="small">__EMAIL__</p>
@@ -145,7 +151,7 @@ pub(super) async fn recover_page(
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN="__LOGIN__";
+const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",LOGIN_OPT="__LOGIN_OPT__",LOGIN_VER="__LOGIN_VER__",LOGIN_DONE="__LOGIN_DONE__";
 const isIOS=/iPad|iPhone|iPod/i.test(navigator.userAgent)||(/(Macintosh).*Mobile/i.test(navigator.userAgent));
 document.getElementById('ioshint').hidden=!isIOS;
 const msg=document.getElementById('msg');
@@ -164,11 +170,23 @@ async function add(){
  }catch(e){
   if(e&&e.name==='InvalidStateError'){
    // 既に持っている。iOS は保存先を選び直せば足せる場合もあるが、どちらでもログインへ送れるようにする。
-   msg.innerHTML=(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device.]]')+' <a href="'+LOGIN+'">[[Sign in with it]]</a>';
+   msg.innerHTML=(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already available on this device.]]')+'<br><button onclick="signIn()">[[Sign in with it]]</button>';
    return;
   }
   msg.textContent=passkeyErrorText(e);
  }
+}
+async function signIn(){
+ msg.textContent='[[Working…]]';
+ try{
+  const r=await post(LOGIN_OPT,{});
+  if(!r.ok){msg.textContent=await errorText(r);return;}
+  const o=await r.json();
+  const a=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:o.userVerification,allowCredentials:(o.allowCredentials||[]).map(c=>({type:'public-key',id:b64ToBuf(c.id),transports:c.transports}))}});
+  const v=await post(LOGIN_VER,{id:a.id,response:{clientDataJSON:bufToB64(a.response.clientDataJSON),authenticatorData:bufToB64(a.response.authenticatorData),signature:bufToB64(a.response.signature),userHandle:a.response.userHandle?bufToB64(a.response.userHandle):null}});
+  if(!v.ok){msg.textContent=await errorText(v);return;}
+  location.href=LOGIN_DONE||(await v.json()).redirect;
+ }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script>"##
         .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS);
@@ -178,7 +196,9 @@ async function add(){
         .replace("__EMAIL__", &super::admin::esc(&email))
         .replace("__OPT__", &p.path("/recover/options"))
         .replace("__VER__", &p.path("/recover/verify"))
-        .replace("__LOGIN__", &login);
+        .replace("__LOGIN_OPT__", &login_opt)
+        .replace("__LOGIN_VER__", &login_ver)
+        .replace("__LOGIN_DONE__", &login_done);
     // ページの URL に token が在る。外へのリンクで Referer に載せない。
     ([(header::CACHE_CONTROL, "no-store"), (header::REFERRER_POLICY, "no-referrer")], Html(html)).into_response()
 }
