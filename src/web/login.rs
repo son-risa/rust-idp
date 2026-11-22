@@ -26,6 +26,7 @@ pub(super) async fn login_form(
         tracing::info!(event = "login_reinitiated", client_id = q.client_id.as_deref().unwrap_or(""));
         return Redirect::to(&entry).into_response();
     }
+    // パソコンでは、スマホのパスキーを QR コード（hybrid）で使えることを添える（qrhint）。
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title>
 <style>
@@ -52,6 +53,7 @@ details input{font-size:14px;padding:8px;margin-top:8px}</style>
 <button class="filled" onclick="pkLogin()">[[Sign in]]</button>
 <button class="outlined" onclick="location.href='__REGISTER__'">[[Sign up with email]]</button>
 <p style="font-size:13px;text-align:center;margin-top:12px"><a href="__RECOVER__">[[Can’t use your passkey?]]</a></p>
+<p id="qrhint" style="font-size:12px;color:#5f6368;text-align:center;margin-top:8px" hidden>[[If this computer has no passkey, press sign in and scan the QR code that appears with the phone that has your passkey.]]</p>
 <button class="outlined" onclick="location.href='__CANCEL__'">[[Cancel]]</button>
 <p id="msg"></p>
 <script>
@@ -60,6 +62,7 @@ __SERVER_ERROR_JS__
 const OPT="__OPT__",VER="__VER__";
 const OPT_FRESH_MS=(__CEREMONY_TTL_SECS__-60)*1000;
 const msgEl=document.getElementById('msg');
+document.getElementById('qrhint').hidden=/Android|iPad|iPhone|iPod/i.test(navigator.userAgent)||/(Macintosh).*Mobile/i.test(navigator.userAgent);
 let cachedOpts=null,cachedAt=0;
 async function prefetch(){
   try{const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});cachedOpts=r.ok?await r.json():null;cachedAt=Date.now();}

@@ -105,7 +105,8 @@ pub(super) async fn account_page(
         None => (
             r#"<p>[[Sign in with your passkey to see and add passkeys.]]</p>
 <button class="primary" onclick="signIn().then(ok=>{if(ok)location.reload();})">[[Sign in with a passkey]]</button>
-<p class="small"><a href="__RECOVER__">[[Can’t use your passkey?]]</a></p>"#
+<p class="small"><a href="__RECOVER__">[[Can’t use your passkey?]]</a></p>
+<p class="small" id="qrhint" hidden>[[If this computer has no passkey, press sign in and scan the QR code that appears with the phone that has your passkey.]]</p>"#
                 .to_string(),
             false,
         ),
@@ -165,13 +166,19 @@ pub(super) async fn account_page(
             };
             (
                 format!(
-                    r#"{recovered}{back}<p class="sub">{email}</p>
+                    r#"{recovered}{back}{phone}<p class="sub">{email}</p>
 <ul class="pk">{rows}</ul>
 {gpm_hint}
 <button class="primary" onclick="add()">[[Add a passkey on this device]]</button>
 <p class="small">[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.]]</p>
 <p class="small"><a href="__LOGOUT__">[[Sign out]]</a></p>"#,
                     email = esc(&m.account.email),
+                    // メールのリンクで作り終えて来た（別の端末で始めたかもしれない）ときだけ、元のパソコンでの続け方を添える。
+                    phone = if q.recovered.is_some() || q.client_id.is_some() {
+                        r#"<p class="small" id="phonehint" hidden>[[To continue on your computer, press sign in there and scan the QR code that appears with this phone.]]</p>"#
+                    } else {
+                        ""
+                    },
                     recovered = if q.recovered.is_some() {
                         r#"<p>[[The passkey was added. Go back to the app or service and sign in again.]]</p>"#
                     } else {
@@ -201,6 +208,9 @@ const SIGNIN_OPT="__SIGNIN_OPT__",SIGNIN_VER="__SIGNIN_VER__",ADD_OPT="__ADD_OPT
 let confirmed=__CONFIRMED__;
 const isIOS=/iPad|iPhone|iPod/i.test(navigator.userAgent)||(/(Macintosh).*Mobile/i.test(navigator.userAgent));
 const hint=document.getElementById('gpmhint');if(hint)hint.hidden=!isIOS;
+const isPhone=isIOS||/Android/i.test(navigator.userAgent);
+const qr=document.getElementById('qrhint');if(qr)qr.hidden=isPhone;
+const ph=document.getElementById('phonehint');if(ph)ph.hidden=!isPhone;
 document.querySelectorAll('time[data-ts]').forEach(t=>{t.textContent=new Date(Number(t.dataset.ts)*1000).toLocaleDateString(document.documentElement.lang);});
 const msg=document.getElementById('msg');
 function post(u,b){return fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});}

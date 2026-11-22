@@ -284,6 +284,8 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Please confirm it is you with a passkey again.", "もう一度パスキーで本人確認をしてください。"),
     ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
     ("Can’t use your passkey?", "パスキーを使えないとき"),
+    ("If this computer has no passkey, press sign in and scan the QR code that appears with the phone that has your passkey.", "このパソコンにパスキーが無いときは、ログインを押すと出る QR コードを、パスキーのあるスマホで読み取ってください。"),
+    ("To continue on your computer, press sign in there and scan the QR code that appears with this phone.", "パソコンで続けるときは、パソコンでログインを押すと出る QR コードを、このスマホで読み取ってください。"),
     ("is registered. Sign in with your passkey.", "は登録済みです。パスキーでログインしてください。"),
     ("[rust-idp] Add a passkey on this device", "【rust-idp】この端末にパスキーを追加する"),
     ("If you cannot use your passkey, contact the administrator.", "パスキーを使えない場合は、管理者に問い合わせてください。"),

@@ -74,7 +74,7 @@ where
 const JA_ALLOWED_WORDS: &[&str] = &[
     "passkey", "Passkey", "IAT", "ID", "client", "CIBA", "Web", "iCloud", "Keychain", "scope",
     "openid", "none", "true", "false", "jwks", "kids", "redirect", "host", "delete", "enable",
-    "disable", "iPhone", "Google", "PIN",
+    "disable", "iPhone", "Google", "PIN", "QR",
 ];
 
 /// 句としてだけ許すもの（client のプロファイル名）。語に分ける前に取り除く。
@@ -1238,4 +1238,30 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
     let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
     let done = body_of(oidc::end_session(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(q)).await).await;
     assert!(done.contains(&format!(r#"href="{}""#, p.path("/account"))), "{done}");
+}
+
+/// パソコンのログイン画面には QR コードでスマホのパスキーを使う案内を、メールのリンクで作り終えた
+/// /account には元のパソコンでの続け方を添える（どちらも端末の種類で JS が出し分ける）。
+#[tokio::test]
+async fn sign_in_screens_explain_using_a_phone_passkey_by_qr_code() {
+    let qr = "このパソコンにパスキーが無いときは、ログインを押すと出る QR コードを、パスキーのあるスマホで読み取ってください。";
+    let phone = "パソコンで続けるときは、パソコンでログインを押すと出る QR コードを、このスマホで読み取ってください。";
+    assert!(login_page(accept(Some("ja"))).await.contains(qr));
+
+    let (p, fs) = with_firestore().await;
+    register(&fs, "q@example.com", "acc-q").await;
+    let out = body_of(
+        account::account_page(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(account::AccountQuery::default())).await,
+    )
+    .await;
+    assert!(out.contains(qr), "{out}");
+
+    let jar = login_as(&p, "acc-q").await;
+    let plain =
+        body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar.clone(), Query(account::AccountQuery::default())).await)
+            .await;
+    assert!(!plain.contains(phone), "メールから来ていないのに続け方を出した");
+    let q: account::AccountQuery = serde_urlencoded::from_str("recovered=1").unwrap();
+    let after = body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar, Query(q)).await).await;
+    assert!(after.contains(phone), "{after}");
 }
