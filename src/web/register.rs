@@ -820,6 +820,8 @@ mod invite_tests {
     }
 
     async fn provider(invite_clients: &[&str]) -> Arc<Provider> {
+        // 2026-11-21 に一度だけ登録が 500 で落ち、原因の記録が無かった。落ちた試験の出力に error のログを残す。
+        let _ = tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::WARN).try_init();
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         Arc::new(
