@@ -225,9 +225,14 @@ impl GrantHandler for AuthorizationCodeGrant {
             CodeTake::Reused(c) => (c, true),
             CodeTake::Unknown => return Err(OAuthError::InvalidGrant("code not found or already used".into())),
         };
-        check_code_request(&code, client, form, dpop_jkt.as_deref())?;
         // 再利用の失効は、client・redirect_uri・PKCE・DPoP がすべて合ってから。漏れたコードだけでは
         // （公開 client は client_id を名乗るだけで通るので）正規の利用者の RT を消せないようにする。
+        // 再利用のときは、照合のどの段で落ちたかを文言で明かさない。
+        let checked = check_code_request(&code, client, form, dpop_jkt.as_deref());
+        if reused && checked.is_err() {
+            return Err(OAuthError::InvalidGrant("code not found or already used".into()));
+        }
+        checked?;
         if reused {
             p.store.revoke_code_tokens(code_val).await;
             return Err(OAuthError::InvalidGrant("code not found or already used".into()));
