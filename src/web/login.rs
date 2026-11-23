@@ -12,19 +12,34 @@ pub(super) struct LoginQuery {
 /// 期限切れなら、client に入口（initiate_login_uri）があればそこへ送り直し、
 /// 新しい state・nonce で RP にログインを始め直させる（OIDC Core §4）。古い authorize の
 /// 引数で作り直すと RP 側のセッションと state が合わず callback で弾かれる。
+/// 別のブラウザで始めたログイン（アプリ内ブラウザから Safari へ URL を移した等）も、画面を出すと
+/// パスキーを通した後に完了で断ることになるので、同じく入口へ送ってこのブラウザで始め直させる。
 pub(super) async fn login_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Path(uid): Path<String>,
     Query(q): Query<LoginQuery>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
-    if p.store.get_interaction(&uid).await.is_none() {
+    let Some(interaction) = p.store.get_interaction(&uid).await else {
         let Some(entry) = client_entry(&p, q.client_id.as_deref().unwrap_or("")).await else {
             return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang));
         };
         tracing::info!(event = "login_reinitiated", client_id = q.client_id.as_deref().unwrap_or(""));
         return Redirect::to(&entry).into_response();
+    };
+    if !started_in_this_browser(&jar, &interaction) {
+        // client_id は URL でなく interaction の要求から取る（URL の client_id は誰でも書き換えられる）。
+        let client_id = requested_client_id(&interaction);
+        tracing::info!(event = "login_reinitiated", reason = "another_browser", client_id = %client_id);
+        return match client_entry(&p, &client_id).await {
+            Some(entry) => Redirect::to(&entry).into_response(),
+            None => plain_error(&localize(
+                "[[This sign-in was started in another browser. Please start again from the app.]]",
+                lang,
+            )),
+        };
     }
     // パソコンでは、スマホのパスキーを QR コード（hybrid）で使えることを添える（qrhint）。
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
@@ -325,7 +340,40 @@ mod tests {
 
     async fn resume(p: &Arc<Provider>, uid: &str) -> Response {
         let q = HashMap::from([("uid".to_string(), uid.to_string())]);
-        super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(q)).await
+        super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), bound_jar(uid), Query(q)).await
+    }
+
+    /// 別のブラウザで開いたログイン画面とキャンセルは、入口の無い client では案内を出して止まる。
+    /// キャンセルが RP へ access_denied を返すのも、始めたブラウザからだけ。
+    #[tokio::test]
+    async fn another_browser_gets_no_sign_in_page_and_cannot_cancel() {
+        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()));
+        p.store
+            .save_interaction(Interaction {
+                uid: "U1".into(),
+                raw_query: "client_id=rp-without-entry".into(),
+                account_id: None,
+                auth_time: None,
+                request_uri: None,
+                browser_binding: super::super::browser_binding_hash("b"),
+            })
+            .await;
+        let q: LoginQuery = serde_urlencoded::from_str("").unwrap();
+        let form = login_form(State(p.clone()), HeaderMap::new(), CookieJar::default(), Path("U1".into()), Query(q)).await;
+        assert_eq!(form.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(form.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("another browser"));
+
+        let cancel = super::super::oidc::authorize_cancel(State(p.clone()), HeaderMap::new(), CookieJar::default(), Path("U1".into())).await;
+        assert_eq!(cancel.status(), StatusCode::BAD_REQUEST);
+        assert!(cancel.headers().get(header::LOCATION).is_none());
+    }
+
+    /// 試験の interaction を始めたブラウザの cookie。interaction には browser_binding_hash("b") を置く。
+    fn bound_jar(uid: &str) -> CookieJar {
+        let mut h = HeaderMap::new();
+        h.insert(header::COOKIE, format!("{}=b", super::super::browser_cookie_name(uid)).parse().unwrap());
+        CookieJar::from_headers(&h)
     }
 
     fn gave_code(r: &Response) -> bool {
@@ -345,14 +393,14 @@ mod tests {
                 account_id: None,
                 auth_time: None,
                 request_uri: None,
-                browser_binding: String::new(),
+                browser_binding: super::super::browser_binding_hash("b"),
             })
             .await;
-        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_ok());
+        assert!(finalize_login(&p, bound_jar("U1"), "U1", "acct".into()).await.is_ok());
         let first = resume(&p, "U1").await;
         assert!(gave_code(&first), "1 回目の resume はコードを出す");
 
-        assert!(finalize_login(&p, CookieJar::default(), "U1", "acct".into()).await.is_err(), "遅れた verify は書けない");
+        assert!(finalize_login(&p, bound_jar("U1"), "U1", "acct".into()).await.is_err(), "遅れた verify は書けない");
         assert!(p.store.get_interaction("U1").await.is_none(), "消費済みの interaction は作り直されない");
         let second = resume(&p, "U1").await;
         assert!(!gave_code(&second));

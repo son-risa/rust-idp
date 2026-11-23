@@ -221,7 +221,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("No passkey is registered for this account.", "このアカウントには パスキーが登録されていません。"),
     ("This request has already been handled.", "この要求は既に処理されています。"),
     ("Something went wrong. Please try again.", "問題が起きました。もう一度お試しください。"),
-    ("The passkey was canceled or timed out.", "パスキーの操作が取り消されたか、時間切れになりました。"),
+    (
+        "The passkey was canceled or timed out. If you opened this page inside another app, open it in the standard Safari or Chrome app.",
+        "パスキーの操作が取り消されたか、時間切れになりました。ほかのアプリの中で開いている場合は、標準の Safari / Chrome アプリで開いてください。",
+    ),
     // oidc.rs
     ("You have signed out", "ログアウトしました"),
     ("Go to sign in", "ログインへ"),
