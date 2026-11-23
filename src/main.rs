@@ -269,7 +269,7 @@ async fn main() {
         // Cloud Run は $PORT を 0.0.0.0 で待ち受ける。
         let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
-        tracing::info!("rust-op listening on 0.0.0.0:{port} (issuer={issuer})");
+        tracing::info!("rust-idp listening on 0.0.0.0:{port} (issuer={issuer})");
         axum::serve(listener, app).await.unwrap();
     } else {
         // ローカルは IPv4/IPv6 ループバック両方で待つ。Conformance Tool(Chromium)が
@@ -281,7 +281,7 @@ async fn main() {
             .unwrap_or_else(|| "8080".into());
         let v4 = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
         let app2 = app.clone();
-        tracing::info!("rust-op local listening on 127.0.0.1:{port} and [::1]:{port} (issuer={issuer})");
+        tracing::info!("rust-idp local listening on 127.0.0.1:{port} and [::1]:{port} (issuer={issuer})");
         match tokio::net::TcpListener::bind(format!("[::1]:{port}")).await {
             Ok(v6) => {
                 let _ = tokio::join!(
@@ -299,7 +299,7 @@ async fn main() {
 
 /// 管理者用 Initial Access Token 発行（制御つき DCR）。
 ///
-/// `rust-op mint --redirect-host <host> [--redirect-host ...] [--grant <gt> ...]
+/// `rust-idp mint --redirect-host <host> [--redirect-host ...] [--grant <gt> ...]
 ///     [--profile public|confidential-secret|confidential-key] [--ttl-hours N]`
 ///
 /// --profile は発行するクライアントの認証方式を固定する（省略時 confidential-key = 従来唯一の
@@ -486,7 +486,7 @@ fn resolve_project() -> String {
 
 /// 管理者用クライアント revoke（制御つき DCR）。
 ///
-/// `rust-op revoke-client <client_id>`
+/// `rust-idp revoke-client <client_id>`
 ///
 /// clients/{client_id} を削除する。失効の意味論は [`dcr_store::revoke_client`] 参照
 /// （新規認可・refresh は即停止、発行済み AT は ≤15 分で自然失効）。mint 同様 GCP 内実行前提。
@@ -494,7 +494,7 @@ async fn revoke_client(args: &[String]) {
     let client_id = match args.first() {
         Some(id) if !id.starts_with('-') => id.clone(),
         _ => {
-            eprintln!("revoke-client: usage: rust-op revoke-client <client_id>");
+            eprintln!("revoke-client: usage: rust-idp revoke-client <client_id>");
             std::process::exit(2);
         }
     };
@@ -527,13 +527,13 @@ fn parse_email_arg(cmd: &str, args: &[String]) -> String {
             return v.trim().to_lowercase();
         }
     }
-    eprintln!("{cmd}: usage: rust-op {cmd} --email <email>");
+    eprintln!("{cmd}: usage: rust-idp {cmd} --email <email>");
     std::process::exit(2);
 }
 
 /// 管理者権限の付与（初回シード含む）。
 ///
-/// `rust-op grant-admin --email <email>`
+/// `rust-idp grant-admin --email <email>`
 ///
 /// accounts/{email} から account_id を引いて admins/{account_id} に書く（[`admin_store::grant_admin`]）。
 /// 対象は先に passkey 登録済みであること。mint/revoke-client 同様 GCP 内実行前提。
@@ -585,7 +585,7 @@ async fn resolve_account_id(cmd: &str, fs: &firestore::Firestore, email: &str) -
 
 /// 管理者権限の剥奪。最後の1人は拒否される（[`admin_store::revoke_admin`] 参照）。
 ///
-/// `rust-op revoke-admin --email <email>`
+/// `rust-idp revoke-admin --email <email>`
 async fn revoke_admin_cmd(args: &[String]) {
     let email = parse_email_arg("revoke-admin", args);
     let fs = firestore::Firestore::new(resolve_project());
@@ -618,7 +618,7 @@ async fn revoke_admin_cmd(args: &[String]) {
 /// （access/refresh token は対象外。TTL が短くローテーションするため。
 /// [`account_admin::disable_account`] 参照）。
 ///
-/// `rust-op disable-account --email <email>`
+/// `rust-idp disable-account --email <email>`
 async fn disable_account_cmd(args: &[String]) {
     let email = parse_email_arg("disable-account", args);
     let fs = firestore::Firestore::new(resolve_project());
@@ -656,7 +656,7 @@ async fn disable_account_cmd(args: &[String]) {
 
 /// アカウント凍結の解除。
 ///
-/// `rust-op enable-account --email <email>`
+/// `rust-idp enable-account --email <email>`
 async fn enable_account_cmd(args: &[String]) {
     let email = parse_email_arg("enable-account", args);
     let fs = firestore::Firestore::new(resolve_project());
@@ -743,8 +743,8 @@ async fn secret_hash_from_manager_verified(fs: &firestore::Firestore, name: &'st
 /// （逆に --apply は常に Secret Manager アクセスが要る。FIRESTORE_EMULATOR_HOST を立てた
 /// だけのローカル実行では --apply できない）。
 ///
-/// `rust-op migrate-static-clients`          # ドライラン
-/// `rust-op migrate-static-clients --apply`  # 実行
+/// `rust-idp migrate-static-clients`          # ドライラン
+/// `rust-idp migrate-static-clients --apply`  # 実行
 ///
 /// dcr_store::save_client は create_if_absent なので、既に移行済みのclient_idに対する
 /// 再実行は上書きせずエラーになる（静かな上書きを防ぐ。再移行したい場合はFirestore側の
@@ -806,8 +806,8 @@ async fn migrate_static_clients_cmd(args: &[String]) {
 /// accounts/{email} のフィールドに 1 本だけ持っていた passkey を credentials/{credentialId} へ写す。
 /// 何度流してもよい（移し終えたアカウントは飛ばす）。古いフィールドは消さない。
 ///
-/// `rust-op migrate-credentials`          # ドライラン（移すアカウントの数を出す）
-/// `rust-op migrate-credentials --apply`  # 実行
+/// `rust-idp migrate-credentials`          # ドライラン（移すアカウントの数を出す）
+/// `rust-idp migrate-credentials --apply`  # 実行
 async fn migrate_credentials_cmd(args: &[String]) {
     let apply = args.iter().any(|a| a == "--apply");
     let fs = firestore::Firestore::new(resolve_project());
