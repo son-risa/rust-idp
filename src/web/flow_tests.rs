@@ -1477,7 +1477,9 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
     let p = test_provider().await;
     let fs = p.firestore.as_ref().unwrap().clone();
     let me = format!("me-{}@example.com", uuid::Uuid::new_v4());
-    let other = format!("other-{}@example.com", uuid::Uuid::new_v4());
+    // & がエスケープされることを確かめるために入れる
+    let other = format!("other&{}@example.com", uuid::Uuid::new_v4());
+    let other_html = other.replace('&', "&amp;");
     let (_, _, my_id) = register_test_account(&p, &me).await;
     let open_recovery = |jar: CookieJar, email: String| {
         let p = p.clone();
@@ -1490,15 +1492,35 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
     };
     let asked = open_recovery(session_jar(&p, &my_id, 0).await, other.clone()).await;
     assert!(asked.contains("Switch accounts?") && asked.contains(r#"<div id="main" hidden>"#), "{asked}");
-    assert!(asked.contains(&format!("<strong>{me}</strong>")) && asked.contains(&format!("<strong>{other}</strong>")));
+    assert!(asked.contains(&format!("<strong>{me}</strong>")) && asked.contains(&format!("<strong>{other_html}</strong>")), "{asked}");
     for (jar, email) in [(session_jar(&p, &my_id, 0).await, me.clone()), (CookieJar::default(), other.clone())] {
         let plain = open_recovery(jar, email).await;
         assert!(!plain.contains("Switch accounts?") && plain.contains(r#"<div id="main" >"#), "{plain}");
     }
 
-    let newcomer = format!("new-{}@example.com", uuid::Uuid::new_v4());
+    // 宛先に置換の印を書かれても、ほかの置換に展開されない
+    let newcomer = format!("__TOKEN__{}@example.com", uuid::Uuid::new_v4());
     let signup = crate::registration::create_email_challenge(&fs, &newcomer).await.unwrap();
-    let q = Query(serde_json::from_value(json!({ "token": signup })).unwrap());
-    let page = body_text(register::verify_form(State(p.clone()), HeaderMap::new(), session_jar(&p, &my_id, 0).await, q).await).await;
-    assert!(page.contains("Switch accounts?") && page.contains(&format!("<strong>{newcomer}</strong>")), "{page}");
+    let verify = |jar: CookieJar| {
+        let q = Query(serde_json::from_value(json!({ "token": signup.clone() })).unwrap());
+        register::verify_form(State(p.clone()), HeaderMap::new(), jar, q)
+    };
+    let page = body_text(verify(session_jar(&p, &my_id, 0).await).await).await;
+    assert!(page.contains("Switch accounts?") && page.contains(r#"<div id="main" hidden>"#), "{page}");
+    assert!(page.contains(&format!("<strong>{newcomer}</strong>")), "{page}");
+    // ログインしていない人には確認を出さないが、誰のパスキーを作るかは見せる
+    let page = body_text(verify(CookieJar::default()).await).await;
+    assert!(!page.contains("Switch accounts?") && page.contains(r#"<div id="main" >"#), "{page}");
+    assert!(page.contains(&format!("<p><strong>{newcomer}</strong></p>")), "{page}");
+
+    let q = Query(serde_json::from_value(json!({ "t": signup.clone() })).unwrap());
+    let page = body_text(register::magic_redirect(State(p.clone()), HeaderMap::new(), session_jar(&p, &my_id, 0).await, q).await).await;
+    assert!(page.contains("Switch accounts?") && page.contains(r#"<div id="main" hidden>"#), "/r: {page}");
+
+    let invited = format!("invited-{}@example.com", uuid::Uuid::new_v4());
+    let t = crate::registration::create_invite_challenge(&fs, &invited, "https://rp.example.com/after").await.unwrap();
+    let q = Query(serde_json::from_value(json!({ "t": t })).unwrap());
+    let page = body_text(register::invite_page(State(p.clone()), HeaderMap::new(), session_jar(&p, &my_id, 0).await, q).await).await;
+    assert!(page.contains("Switch accounts?") && page.contains(r#"<div id="main" hidden>"#), "invite: {page}");
+    assert!(page.contains(&format!("<strong>{me}</strong>")) && page.contains(&format!("<strong>{invited}</strong>")), "{page}");
 }

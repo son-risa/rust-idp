@@ -99,15 +99,22 @@ fn requested_client_id(i: &crate::model::Interaction) -> String {
 async fn signed_in_as_other(p: &Provider, jar: &CookieJar, target_email: &str) -> Option<String> {
     let fs = p.firestore.as_ref()?;
     let session = p.store.get_session(jar.get(SID_COOKIE)?.value()).await?;
-    let email = crate::registration::find_email_by_account_id(fs, &session.account_id).await.ok()??;
+    let email = match crate::registration::find_email_by_account_id(fs, &session.account_id).await {
+        Ok(e) => e?,
+        Err(e) => {
+            tracing::warn!("signed_in_as_other: {e}");
+            return None;
+        }
+    };
     (!email.eq_ignore_ascii_case(target_email)).then_some(email)
 }
 
 /// signed_in_as_other のときに、passkey を作る画面（id="main"）の前に出す確認。
 /// 押すまで main は隠しておく。文の訳は呼び手の localize に任せ、アドレスはその後で差し込む。
+/// アドレスに `__TOKEN__` などの印を書かれても展開されないよう、fill_switch_notice はほかの置換の後に呼ぶ。
 const SWITCH_NOTICE: &str = r#"<div id="switch"><h1>[[Switch accounts?]]</h1>
 <p>[[This browser is signed in as {current}.]]</p>
-<p>[[If you continue, it will be signed in as {target} instead. Continue only if you asked for this email yourself.]]</p>
+<p>[[If you continue, it will be signed in as {target} instead. Continue only if you expected this email.]]</p>
 <button class="primary" onclick="document.getElementById('switch').hidden=true;document.getElementById('main').hidden=false">[[Continue]]</button></div>"#;
 
 fn fill_switch_notice(html: String, current: &str, target: &str) -> String {

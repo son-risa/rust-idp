@@ -202,14 +202,16 @@ pub(super) async fn register_verify_email(
 /// PC/Mac やアプリ未対応端末ではこのページでブラウザ passkey 登録を完結できる。
 /// `invite_return` が Some なら招待の着地: 端末を問わず Web で登録し、成功したら戻り先へ移る。
 /// script の openApp: iOS=カスタムスキーム / Android=intent URL（fallback付き）。Web で続けるボタンは初めから出す。
-/// switch は、このブラウザが別のアカウントでログイン中のときの（そのアドレス, リンクのアドレス）。
+/// target はリンクの宛先。分かれば見出しの下に出す（ログインしていない人にも、誰のパスキーを作るかを見せる）。
+/// current は、このブラウザが別のアカウントでログイン中のときのそのアドレス。
 fn passkey_register_page(
     p: &Provider,
     lang: Lang,
     token: &str,
     invite_return: Option<&str>,
     web_only: bool,
-    switch: Option<(String, String)>,
+    target: Option<&str>,
+    current: Option<String>,
 ) -> Html<String> {
     let token: String = token
         .chars()
@@ -227,7 +229,7 @@ button,.btn{display:block;width:100%;padding:13px;margin-top:12px;font-size:16px
 #msg{font-size:14px;margin-top:14px;min-height:1.4em}#fallback{margin-top:16px}
 label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:4px;font-size:16px}</style></head><body>
 __SWITCH__<div id="main" __MAIN_HIDDEN__><h1>[[Create a passkey]]</h1>
-<label for="nm" id="nml">[[Name]]</label>
+__TARGET__<label for="nm" id="nml">[[Name]]</label>
 <input id="nm" autocomplete="name" maxlength="80">
 <p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
 <div id="mobile" hidden>
@@ -291,19 +293,18 @@ async function reg(){
 </script></body></html>"##;
     let body = body
         .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS)
-        .replace("__SWITCH__", if switch.is_some() { super::SWITCH_NOTICE } else { "" })
-        .replace("__MAIN_HIDDEN__", if switch.is_some() { "hidden" } else { "" });
-    let (current, target) = switch.unwrap_or_default();
-    Html(
-        super::fill_switch_notice(localize(&body, lang), &current, &target)
+        .replace("__SWITCH__", if current.is_some() { super::SWITCH_NOTICE } else { "" })
+        .replace("__MAIN_HIDDEN__", if current.is_some() { "hidden" } else { "" })
+        .replace("__TARGET__", if target.is_some() { "<p>{target}</p>\n" } else { "" });
+    let html = localize(&body, lang)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
             .replace("__VER__", &p.path("/signup/passkey/verify"))
             .replace("__ACCOUNT__", &p.path("/account"))
             .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or("")))
-            .replace("__WEB_ONLY__", if web_only { "true" } else { "false" }),
-    )
+            .replace("__WEB_ONLY__", if web_only { "true" } else { "false" });
+    Html(super::fill_switch_notice(html, current.as_deref().unwrap_or(""), target.unwrap_or("")))
 }
 
 /// `<script>` に埋め込む JS の文字列リテラル。JSON の文字列表現に、`</script>` を閉じさせない `<` の退避を足す。
@@ -360,14 +361,17 @@ async fn link_landing(p: &Provider, jar: &CookieJar, lang: Lang, token: &str, we
         return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
     }
     let target = match &p.firestore {
-        Some(fs) => crate::registration::peek_email_challenge(fs, token).await.ok().flatten(),
+        Some(fs) => crate::registration::peek_email_challenge(fs, token).await.unwrap_or_else(|e| {
+            tracing::warn!("peek_email_challenge: {e}");
+            None
+        }),
         None => None,
     };
-    let switch = match target {
-        Some(t) => super::signed_in_as_other(p, jar, &t).await.map(|c| (c, t)),
+    let current = match &target {
+        Some(t) => super::signed_in_as_other(p, jar, t).await,
         None => None,
     };
-    passkey_register_page(p, lang, token, None, web_only, switch).into_response()
+    passkey_register_page(p, lang, token, None, web_only, target.as_deref(), current).into_response()
 }
 
 /* ===== 招待（RP が発行を頼む、確認メール不要の登録リンク） ===== */
@@ -573,8 +577,8 @@ pub(super) async fn invite_page(
     if matches!(crate::registration::has_passkey(fs, &email).await, Ok(true)) {
         return Redirect::to(&return_to).into_response();
     }
-    let switch = super::signed_in_as_other(&p, &jar, &email).await.map(|c| (c, email));
-    passkey_register_page(&p, lang, &q.t, Some(&return_to), false, switch).into_response()
+    let current = super::signed_in_as_other(&p, &jar, &email).await;
+    passkey_register_page(&p, lang, &q.t, Some(&return_to), false, Some(&email), current).into_response()
 }
 
 /// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
@@ -1197,7 +1201,7 @@ mod invite_tests {
         .await;
         assert!(html.contains(r#"<input id="nm" autocomplete="name" maxlength="80">"#));
         assert!(html.contains("NAME_REQUIRED=!!AFTER"));
-        let plain = passkey_register_page(&p, Lang::En, "tok", None, false, None).0;
+        let plain = passkey_register_page(&p, Lang::En, "tok", None, false, None, None).0;
         assert!(plain.contains(r#"AFTER="""#), "通常の登録では AFTER が空なので、氏名は任意");
     }
 
@@ -1220,7 +1224,7 @@ mod invite_tests {
     #[test]
     fn the_registration_page_recommends_icloud_on_iphone() {
         let p = Provider::new("https://idp.example/oidc".to_string());
-        let html = passkey_register_page(&p, Lang::Ja, "tok", None, false, None).0;
+        let html = passkey_register_page(&p, Lang::Ja, "tok", None, false, None, None).0;
         assert!(html.contains(r#"<p class="small" id="ioshint" hidden>iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。"#), "{html}");
         assert!(html.contains("document.getElementById('ioshint').hidden=!isIOS;"));
     }
