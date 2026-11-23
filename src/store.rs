@@ -131,6 +131,20 @@ pub trait Store: Send + Sync {
     async fn sweep_expired(&self) {}
 }
 
+/// コードの再利用で、そのコードから出た RT を失効させる。RT は回されて後継に替わっているかもしれないので、
+/// 系列ごと失効させる（RT の再利用検知と同じ札）。系列が分からないときは、その RT だけ消す。
+pub(crate) async fn revoke_issued_refresh<S: Store + ?Sized>(store: &S, rt: &str) {
+    match store.get_refresh_token(rt).await {
+        Ok(Some(t)) if !t.family_id.is_empty() => store.revoke_refresh_family(&t.family_id, rt).await,
+        Ok(_) => {
+            if let Err(e) = store.revoke_refresh_token(rt).await {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
+            }
+        }
+        Err(e) => tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}"),
+    }
+}
+
 /// MemoryStore 内部のコード記録。使用済みフラグと発行トークンを保持し、再利用失効に使う。
 struct CodeRecord {
     code: AuthorizationCode,
@@ -243,7 +257,7 @@ impl Store for MemoryStore {
                 self.access_tokens.lock().unwrap().remove(&at);
             }
             if let Some(rt) = rt {
-                self.refresh_tokens.lock().unwrap().remove(&rt);
+                revoke_issued_refresh(self, &rt).await;
             }
         }
         Ok(None)

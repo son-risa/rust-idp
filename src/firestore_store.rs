@@ -216,10 +216,8 @@ impl Store for FirestoreStore {
             {
                 tracing::error!(event = "code_reuse_revoke_failed", kind = "access", "{e}");
             }
-            if let Some(rt) = fs_h::field_str(&f, "issuedRefreshToken")
-                && let Err(e) = self.fs.delete_doc("refreshTokens", rt).await
-            {
-                tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
+            if let Some(rt) = fs_h::field_str(&f, "issuedRefreshToken") {
+                crate::store::revoke_issued_refresh(self, rt).await;
             }
             return Ok(None);
         }

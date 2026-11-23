@@ -738,6 +738,41 @@ mod tests {
         assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
     }
 
+    /// A4: コードの再利用を見つけたら、そのコードから出た RT が回された後でも、後継の RT ごと使えなくする。
+    async fn code_reuse_after_rotation_revokes_the_rotated_refresh_token(p: Provider) {
+        let c = client("rp");
+        let mut code = base_code("C1", "rp");
+        code.scope = "openid offline_access".into();
+        p.store.save_code(code).await.unwrap();
+        let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
+        let first = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
+        let rt0 = first.refresh_token.unwrap();
+        let rotated = RefreshTokenGrant
+            .handle(&p, &c, &form(&[("refresh_token", rt0.as_str())]), Some("KEY-A".into()))
+            .await
+            .unwrap()
+            .refresh_token
+            .unwrap();
+
+        let again = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await;
+        assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
+        let after = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", rotated.as_str())]), Some("KEY-A".into())).await;
+        assert!(matches!(after, Err(OAuthError::InvalidGrant(_))), "回された後の RT が使えた: {:?}", after.map(|r| r.refresh_token));
+    }
+
+    #[tokio::test]
+    async fn code_reuse_after_rotation_revokes_the_rotated_refresh_token_in_memory() {
+        code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider()).await;
+    }
+
+    #[tokio::test]
+    async fn code_reuse_after_rotation_revokes_the_rotated_refresh_token_in_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
+        code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider().with_store(store)).await;
+    }
+
     #[tokio::test]
     async fn auth_code_issued_to_another_client_rejected() {
         let p = provider();
