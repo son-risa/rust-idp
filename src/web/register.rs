@@ -202,12 +202,14 @@ pub(super) async fn register_verify_email(
 /// PC/Mac やアプリ未対応端末ではこのページでブラウザ passkey 登録を完結できる。
 /// `invite_return` が Some なら招待の着地: 端末を問わず Web で登録し、成功したら戻り先へ移る。
 /// script の openApp: iOS=カスタムスキーム / Android=intent URL（fallback付き）。Web で続けるボタンは初めから出す。
+/// switch は、このブラウザが別のアカウントでログイン中のときの（そのアドレス, リンクのアドレス）。
 fn passkey_register_page(
     p: &Provider,
     lang: Lang,
     token: &str,
     invite_return: Option<&str>,
     web_only: bool,
+    switch: Option<(String, String)>,
 ) -> Html<String> {
     let token: String = token
         .chars()
@@ -224,7 +226,7 @@ button,.btn{display:block;width:100%;padding:13px;margin-top:12px;font-size:16px
 .small{font-size:12px;color:#5f6368;margin-top:8px}
 #msg{font-size:14px;margin-top:14px;min-height:1.4em}#fallback{margin-top:16px}
 label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:4px;font-size:16px}</style></head><body>
-<h1>[[Create a passkey]]</h1>
+__SWITCH__<div id="main" __MAIN_HIDDEN__><h1>[[Create a passkey]]</h1>
 <label for="nm" id="nml">[[Name]]</label>
 <input id="nm" autocomplete="name" maxlength="80">
 <p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
@@ -242,7 +244,7 @@ label{display:block;font-size:14px;margin-top:12px}input{display:block;width:100
  <p>[[Create a passkey with this device (for example with biometrics) to finish signing up.]]</p>
  <button class="primary" onclick="reg()">[[Create a passkey and sign up]]</button>
 </div>
-<p id="msg"></p>
+<p id="msg"></p></div>
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
@@ -287,8 +289,13 @@ async function reg(){
  }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script></body></html>"##;
+    let body = body
+        .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS)
+        .replace("__SWITCH__", if switch.is_some() { super::SWITCH_NOTICE } else { "" })
+        .replace("__MAIN_HIDDEN__", if switch.is_some() { "hidden" } else { "" });
+    let (current, target) = switch.unwrap_or_default();
     Html(
-        localize(&body.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), lang)
+        super::fill_switch_notice(localize(&body, lang), &current, &target)
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
@@ -314,9 +321,10 @@ pub(super) struct MagicQuery {
 pub(super) async fn magic_redirect(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<MagicQuery>,
 ) -> Response {
-    link_landing(&p, Lang::from_headers(&headers), &q.t, false)
+    link_landing(&p, &jar, Lang::from_headers(&headers), &q.t, false).await
 }
 
 /// oidc.sonrisa.co.jp は Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
@@ -339,18 +347,27 @@ pub(super) struct VerifyQuery {
 pub(super) async fn verify_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<VerifyQuery>,
 ) -> Response {
     // ログイン画面から始めた登録のリンク。アプリへ移すと元のログインに戻れないので Web だけで済ませる。
-    link_landing(&p, Lang::from_headers(&headers), &q.token, true)
+    link_landing(&p, &jar, Lang::from_headers(&headers), &q.token, true).await
 }
 
 /// メールのリンクが途中で切れて token が無いときは、登録画面を出さずにその旨を伝える。
-fn link_landing(p: &Provider, lang: Lang, token: &str, web_only: bool) -> Response {
+async fn link_landing(p: &Provider, jar: &CookieJar, lang: Lang, token: &str, web_only: bool) -> Response {
     if token.is_empty() {
         return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
     }
-    passkey_register_page(p, lang, token, None, web_only).into_response()
+    let target = match &p.firestore {
+        Some(fs) => crate::registration::peek_email_challenge(fs, token).await.ok().flatten(),
+        None => None,
+    };
+    let switch = match target {
+        Some(t) => super::signed_in_as_other(p, jar, &t).await.map(|c| (c, t)),
+        None => None,
+    };
+    passkey_register_page(p, lang, token, None, web_only, switch).into_response()
 }
 
 /* ===== 招待（RP が発行を頼む、確認メール不要の登録リンク） ===== */
@@ -517,6 +534,7 @@ pub(super) async fn account_disable(
 pub(super) async fn invite_page(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Query(q): Query<MagicQuery>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
@@ -555,7 +573,8 @@ pub(super) async fn invite_page(
     if matches!(crate::registration::has_passkey(fs, &email).await, Ok(true)) {
         return Redirect::to(&return_to).into_response();
     }
-    passkey_register_page(&p, lang, &q.t, Some(&return_to), false).into_response()
+    let switch = super::signed_in_as_other(&p, &jar, &email).await.map(|c| (c, email));
+    passkey_register_page(&p, lang, &q.t, Some(&return_to), false, switch).into_response()
 }
 
 /// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
@@ -909,10 +928,7 @@ mod invite_tests {
         assert!(url.starts_with("https://idp.example/invite?t="), "{url}");
         let token = token_of(&url);
 
-        let page = invite_page(
-            State(p.clone()),
-            HeaderMap::new(),
-            Query(MagicQuery { t: token.clone() }),
+        let page = invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token.clone() }),
         )
         .await;
         assert_eq!(page.status(), StatusCode::OK);
@@ -932,10 +948,7 @@ mod invite_tests {
         );
         assert_eq!(claims.get("name"), Some(&serde_json::json!("招待 太郎")), "登録で入れた氏名が RP に渡る");
 
-        let again = invite_page(
-            State(p.clone()),
-            HeaderMap::new(),
-            Query(MagicQuery { t: token }),
+        let again = invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token }),
         )
         .await;
         assert_eq!(
@@ -1117,10 +1130,7 @@ mod invite_tests {
         let token = crate::registration::create_email_challenge(fs, "a@example.com")
             .await
             .unwrap();
-        let resp = invite_page(
-            State(p.clone()),
-            HeaderMap::new(),
-            Query(MagicQuery { t: token }),
+        let resp = invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1180,17 +1190,14 @@ mod invite_tests {
         let resp = invite(&p, basic("amate", "s3cret"), "page@example.com", &format!("{RP_ORIGIN}/auth/login")).await;
         let token = token_of(body_json(resp).await["url"].as_str().unwrap());
         let html = body_text(
-            invite_page(
-                State(p.clone()),
-                HeaderMap::new(),
-                Query(MagicQuery { t: token }),
+            invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token }),
             )
             .await,
         )
         .await;
         assert!(html.contains(r#"<input id="nm" autocomplete="name" maxlength="80">"#));
         assert!(html.contains("NAME_REQUIRED=!!AFTER"));
-        let plain = passkey_register_page(&p, Lang::En, "tok", None, false).0;
+        let plain = passkey_register_page(&p, Lang::En, "tok", None, false, None).0;
         assert!(plain.contains(r#"AFTER="""#), "通常の登録では AFTER が空なので、氏名は任意");
     }
 
@@ -1200,11 +1207,11 @@ mod invite_tests {
     async fn a_sign_up_started_from_the_sign_in_screen_stays_on_the_web() {
         let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()));
         let from_sign_in = body_text(
-            verify_form(State(p.clone()), HeaderMap::new(), Query(VerifyQuery { token: "tok".into() })).await,
+            verify_form(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(VerifyQuery { token: "tok".into() })).await,
         )
         .await;
         assert!(from_sign_in.contains("WEB_ONLY=true"), "{from_sign_in}");
-        let app_link = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), Query(MagicQuery { t: "tok".into() })).await).await;
+        let app_link = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
         assert!(app_link.contains("WEB_ONLY=false"));
         assert!(app_link.contains(r#"<div id="fallback">"#), "Web で続けるボタンが隠れている");
     }
@@ -1213,7 +1220,7 @@ mod invite_tests {
     #[test]
     fn the_registration_page_recommends_icloud_on_iphone() {
         let p = Provider::new("https://idp.example/oidc".to_string());
-        let html = passkey_register_page(&p, Lang::Ja, "tok", None, false).0;
+        let html = passkey_register_page(&p, Lang::Ja, "tok", None, false, None).0;
         assert!(html.contains(r#"<p class="small" id="ioshint" hidden>iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。"#), "{html}");
         assert!(html.contains("document.getElementById('ioshint').hidden=!isIOS;"));
     }

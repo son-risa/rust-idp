@@ -439,6 +439,13 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Client not found", "クライアントが見つかりません"),
     ("Choose a client profile", "プロファイルを選んでください"),
     ("Please sign in.", "ログインしてください。"),
+    // mod.rs SWITCH_NOTICE
+    ("Switch accounts?", "アカウントを切り替えますか？"),
+    ("This browser is signed in as {current}.", "このブラウザは {current} でログインしています。"),
+    (
+        "If you continue, it will be signed in as {target} instead. Continue only if you asked for this email yourself.",
+        "続けると {target} に切り替わります。このメールを自分で頼んだときだけ続けてください。",
+    ),
     ("Only admins can open this page.", "このページは管理者だけが開けます。"),
     ("The admin console is not available.", "管理コンソールは使えません。"),
     ("User", "ユーザー"),

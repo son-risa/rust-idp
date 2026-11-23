@@ -323,7 +323,7 @@ async fn registration_pages_follow_the_browser_language() {
         "パスキーを作成",
         |h| async move {
             let q = serde_urlencoded::from_str("t=abc").unwrap();
-            body_of(register::magic_redirect(State(plain()), h, Query(q)).await).await
+            body_of(register::magic_redirect(State(plain()), h, CookieJar::default(), Query(q)).await).await
         },
     )
     .await;
@@ -332,21 +332,18 @@ async fn registration_pages_follow_the_browser_language() {
         "パスキーを作成",
         |h| async move {
             let q = serde_urlencoded::from_str("token=abc").unwrap();
-            body_of(register::verify_form(State(plain()), h, Query(q)).await).await
+            body_of(register::verify_form(State(plain()), h, CookieJar::default(), Query(q)).await).await
         },
     )
     .await;
     check_page("invite expired", "この招待は使えません", |h| async move {
         let (p, _fs) = with_firestore().await;
         let q = serde_urlencoded::from_str("t=nope").unwrap();
-        body_of(register::invite_page(State(p), h, Query(q)).await).await
+        body_of(register::invite_page(State(p), h, CookieJar::default(), Query(q)).await).await
     })
     .await;
     let ja = body_of(
-        register::magic_redirect(
-            State(plain()),
-            accept(Some("ja")),
-            Query(serde_urlencoded::from_str("t=a").unwrap()),
+        register::magic_redirect(State(plain()), accept(Some("ja")), CookieJar::default(), Query(serde_urlencoded::from_str("t=a").unwrap()),
         )
         .await,
     )
