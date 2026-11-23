@@ -3,6 +3,9 @@ use super::*;
 /* ===== RP デモ（ブラウザ完結の authorization code + PKCE） ===== */
 
 // PKCE verifier は localStorage に置く。メールのリンク（別のタブ）でログインを終えて戻っても、タブごとの sessionStorage では消えているため。
+// ?next=admin は管理画面の require_admin が付ける。sessionStorage に印を残し、demo_callback が
+// コードを引き換えた後に管理画面へ戻す。管理画面は sid で入る（sid は login が引き換えの前に張る）ので、
+// 引き換えの成否は問わない。サインインが error で終わったときは印を消す。
 pub(super) async fn demo_start(State(p): State<Arc<Provider>>, headers: HeaderMap) -> Html<String> {
     let page = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>fido2demo</title>
@@ -21,6 +24,7 @@ h1{font-size:1.3rem;font-weight:500;margin:18px 0 28px}
 <script>
 const ISSUER="__ISSUER__";
 function b64url(buf){return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+if(new URLSearchParams(location.search).get('next')==='admin')sessionStorage.setItem('next','admin');
 async function start(){
   const v=b64url(crypto.getRandomValues(new Uint8Array(32)));
   localStorage.setItem('pkce_verifier',v);
@@ -227,6 +231,7 @@ async function doRefresh(){
 }
 (async()=>{
   const q=new URLSearchParams(location.search);
+  if(q.get('error')){sessionStorage.removeItem('next');}
   if(q.get('error')==='access_denied'){fail('[[Sign-in was canceled.]]');return;}
   if(q.get('error')){if(q.get('error_description'))console.error(q.get('error_description'));fail('[[Sign-in could not be completed. (error code: {code})]]'.replace('{code}',()=>q.get('error')));return;}
   const code=q.get('code');
@@ -237,6 +242,7 @@ async function doRefresh(){
     const r=await fetch(ISSUER+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','DPoP':tproof},body:new URLSearchParams({grant_type:'authorization_code',code,redirect_uri:ISSUER+'/callback',client_id:'demo-rp',code_verifier:verifier})});
     const tok=await r.json();
     if(tok.access_token){saveTokens(tok);try{history.replaceState({},'',location.pathname);}catch(_){}}
+    if(sessionStorage.getItem('next')==='admin'){sessionStorage.removeItem('next');location.replace(ISSUER+'/admin');return;}
   }
   const res=await fetchUserinfo(true);
   if(res){const prof=await fetchProfile();renderProfile(res.ui,prof,res.tok);pollCiba();setInterval(pollCiba,4000);return;}

@@ -1,23 +1,37 @@
 use super::*;
 
-/// ログイン済セッションが管理者か確認する。未ログインは 401、非管理者は 403、
-/// Firestore 未接続（ローカル既定構成）は 503 で fail-closed にする。
+/// 管理画面の handler 用。未ログインはサインイン画面へ送り、それ以外は check_admin のとおり。
+/// サインインの後の戻り先は管理画面のトップに固定する（開いていた URL を持ち回らないので、
+/// 戻り先を外から差し込まれる余地が無い）。
 pub(super) async fn require_admin(p: &Provider, jar: &CookieJar, lang: Lang) -> Result<String, Response> {
-    let account_id = session_account(p, jar)
-        .await
-        .ok_or_else(|| text(StatusCode::UNAUTHORIZED, lang, "[[Please sign in.]]"))?;
+    check_admin(p, jar, lang).await.map_err(|denied| {
+        denied.unwrap_or_else(|| Redirect::to(&format!("{}?next=admin", sign_in_page(p))).into_response())
+    })
+}
+
+/// ログイン済セッションが管理者か確認する。未ログインは Err(None)、非管理者は 403、
+/// Firestore 未接続（ローカル既定構成）は 503 で fail-closed にする。
+/// Firestore を先に見る: 未接続の構成では demo-rp も解決できず、サインインへ送っても行き止まりになる。
+async fn check_admin(p: &Provider, jar: &CookieJar, lang: Lang) -> Result<String, Option<Response>> {
     let fs = p
         .firestore
         .as_ref()
-        .ok_or_else(|| text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]"))?;
+        .ok_or_else(|| Some(text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]")))?;
+    let account_id = session_account(p, jar).await.ok_or(None)?;
     match crate::admin_store::is_admin(fs, &account_id).await {
         Ok(true) => Ok(account_id),
-        Ok(false) => Err(text(StatusCode::FORBIDDEN, lang, "[[Only admins can open this page.]]")),
+        Ok(false) => Err(Some(text(StatusCode::FORBIDDEN, lang, "[[Only admins can open this page.]]"))),
         Err(e) => {
             tracing::error!("require_admin: is_admin check failed for {account_id}: {e}");
-            Err(text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]"))
+            Err(Some(text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]")))
         }
     }
+}
+
+/// サインイン画面（demo_start）の道。base_path があるときの `/oidc/` は `/oidc` へ転送され、
+/// その転送はクエリを落とすので、末尾のスラッシュを付けない。
+fn sign_in_page(p: &Provider) -> String {
+    if p.base_path.is_empty() { "/".to_string() } else { p.base_path.clone() }
 }
 
 /// require_admin を通した上で &Firestore も返す（ほぼ全ハンドラが両方必要とする共通パターン）。
@@ -32,11 +46,14 @@ async fn require_admin_fs<'p>(
     Ok((account_id, fs))
 }
 
-/// 疎通確認用: 自分が管理者として認識されているかを返す。
+/// 疎通確認用: 自分が管理者として認識されているかを返す。JSON の口なので、未ログインは
+/// サインイン画面へ送らずに 401 を返す（転送を追う呼び手が 200 の HTML を成功と取り違える）。
 pub(super) async fn whoami(State(p): State<Arc<Provider>>, headers: HeaderMap, jar: CookieJar) -> Response {
-    match require_admin(&p, &jar, Lang::from_headers(&headers)).await {
+    let lang = Lang::from_headers(&headers);
+    match check_admin(&p, &jar, lang).await {
         Ok(account_id) => Json(serde_json::json!({ "account_id": account_id })).into_response(),
-        Err(r) => r,
+        Err(Some(r)) => r,
+        Err(None) => text(StatusCode::UNAUTHORIZED, lang, "[[Please sign in.]]"),
     }
 }
 
@@ -1197,10 +1214,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn require_admin_401_when_not_logged_in() {
+    async fn require_admin_sends_a_signed_out_visitor_to_the_sign_in_page() {
         let (p, _fs) = provider_with_firestore().await;
         let err = require_admin(&p, &CookieJar::default(), Lang::En).await.unwrap_err();
-        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(err.status(), StatusCode::SEE_OTHER);
+        let loc = err.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert_eq!(loc, "/?next=admin");
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_admin_url_lands_on_the_sign_in_page_with_the_return_mark() {
+        for (base, path, expected) in [
+            ("/oidc", "/oidc/admin/users", "/oidc?next=admin"),
+            ("", "/admin/users", "/?next=admin"),
+        ] {
+            let (p, _fs) = provider_with_firestore().await;
+            let app = router(p.with_base_path(base));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+            let resp = client.get(format!("http://{addr}{path}")).send().await.unwrap();
+            assert_eq!(resp.status().as_u16(), 303, "{base:?}");
+            let loc = resp.headers()["location"].to_str().unwrap().to_string();
+            assert_eq!(loc, expected);
+            // 転送の先でクエリが落ちずにサインイン画面が出る。
+            let page = client.get(format!("http://{addr}{loc}")).send().await.unwrap();
+            assert_eq!(page.status().as_u16(), 200, "{base:?}");
+            assert!(page.text().await.unwrap().contains("get('next')==='admin'"), "{base:?}");
+            // JSON の疎通確認の口は転送せずに 401。
+            let whoami = client.get(format!("http://{addr}{}", path.replace("/users", "/whoami"))).send().await.unwrap();
+            assert_eq!(whoami.status().as_u16(), 401, "{base:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_profile_page_returns_to_the_admin_console_only_after_the_code_is_exchanged() {
+        let html = crate::web::pages::demo_callback(
+            State(Arc::new(Provider::new("https://idp.example/oidc".to_string()))),
+            HeaderMap::new(),
+        )
+        .await
+        .0;
+        let exchange = html.find("grant_type:'authorization_code'").expect("コードの引き換えがある");
+        let back = html
+            .find("if(sessionStorage.getItem('next')==='admin'){sessionStorage.removeItem('next');location.replace(ISSUER+'/admin');return;}")
+            .expect("管理画面へ戻す行がある");
+        assert!(exchange < back);
+        assert!(html.contains("if(q.get('error')){sessionStorage.removeItem('next');"));
     }
 
     #[tokio::test]
@@ -1269,6 +1330,8 @@ mod tests {
         )
         .await;
         assert!(resp.status().is_redirection());
+        let loc = resp.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert!(loc.ends_with("/admin/users/acc-other"), "{loc}");
     }
 
     async fn register(fs: &crate::firestore::Firestore, email: &str, account_id: &str) {
