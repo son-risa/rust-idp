@@ -218,7 +218,7 @@ async fn register(fs: &Firestore, email: &str, account_id: &str) {
         .unwrap();
 }
 
-fn client(id: &str) -> crate::model::Client {
+pub(super) fn client(id: &str) -> crate::model::Client {
     crate::model::Client {
         client_id: id.into(),
         redirect_uris: vec!["https://rp.example.com/cb".into()],
@@ -1163,15 +1163,16 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     let live = http.get(format!("http://{addr}{to}")).header("cookie", &ix).send().await.unwrap();
     assert_eq!(live.status(), 200);
 
-    // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、画面を出さずに入口へ送る。
-    // URL の client_id を書き換えても、行き先は interaction の要求の client の入口。
+    // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、ログイン画面の代わりに入口へのリンクを出す。
+    // 自動では送らない（cookie を保存しないブラウザで回り続けないため）。
+    // URL の client_id を書き換えても、リンクは interaction の要求の client の入口。
     let tampered = to.replace("client_id=rp-entry", "client_id=other");
     let elsewhere = http.get(format!("http://{addr}{tampered}")).send().await.unwrap();
-    assert_eq!(elsewhere.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        elsewhere.headers()[reqwest::header::LOCATION],
-        "https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc"
-    );
+    assert_eq!(elsewhere.status(), StatusCode::OK);
+    assert!(elsewhere.headers().get(reqwest::header::LOCATION).is_none());
+    let body = elsewhere.text().await.unwrap();
+    assert!(body.contains(r#"href="https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc""#), "{body}");
+    assert!(!body.contains("passkey/verify"), "ログイン画面を出していない");
 
     let expired = http
         .get(format!("http://{addr}/oidc/login/gone?client_id=rp-entry"))

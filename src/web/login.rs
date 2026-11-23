@@ -13,7 +13,8 @@ pub(super) struct LoginQuery {
 /// 新しい state・nonce で RP にログインを始め直させる（OIDC Core §4）。古い authorize の
 /// 引数で作り直すと RP 側のセッションと state が合わず callback で弾かれる。
 /// 別のブラウザで始めたログイン（アプリ内ブラウザから Safari へ URL を移した等）も、画面を出すと
-/// パスキーを通した後に完了で断ることになるので、同じく入口へ送ってこのブラウザで始め直させる。
+/// パスキーを通した後に完了で断ることになるので、入口へのリンクを出してこのブラウザで始め直させる。
+/// 自動で送らないのは、cookie を保存しないブラウザでは入口 → /authorize → ここ を回り続けるため。
 pub(super) async fn login_form(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
@@ -32,9 +33,20 @@ pub(super) async fn login_form(
     if !started_in_this_browser(&jar, &interaction) {
         // client_id は URL でなく interaction の要求から取る（URL の client_id は誰でも書き換えられる）。
         let client_id = requested_client_id(&interaction);
-        tracing::info!(event = "login_reinitiated", reason = "another_browser", client_id = %client_id);
+        tracing::info!(event = "login_from_another_browser", client_id = %client_id);
         return match client_entry(&p, &client_id).await {
-            Some(entry) => Redirect::to(&entry).into_response(),
+            Some(entry) => Html(localize(
+                &format!(
+                    r#"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title></head>
+<body style="font-family:-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:56px 24px;text-align:center">
+<p>[[This sign-in was started in another browser.]]</p>
+<p><a href="{}">[[Sign in again in this browser]]</a></p></body></html>"#,
+                    super::admin::esc(&entry)
+                ),
+                lang,
+            ))
+            .into_response(),
             None => plain_error(&localize(
                 "[[This sign-in was started in another browser. Please start again from the app.]]",
                 lang,
@@ -343,30 +355,60 @@ mod tests {
         super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), bound_jar(uid), Query(q)).await
     }
 
-    /// 別のブラウザで開いたログイン画面とキャンセルは、入口の無い client では案内を出して止まる。
-    /// キャンセルが RP へ access_denied を返すのも、始めたブラウザからだけ。
-    #[tokio::test]
-    async fn another_browser_gets_no_sign_in_page_and_cannot_cancel() {
-        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()));
+    const RP_QUERY: &str = "response_type=code&client_id=rp&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb\
+        &scope=openid&state=s&nonce=n&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256";
+
+    async fn provider_with_interaction(binding: String) -> Arc<Provider> {
+        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()).with_client(super::super::i18n_tests::client("rp")));
         p.store
             .save_interaction(Interaction {
                 uid: "U1".into(),
-                raw_query: "client_id=rp-without-entry".into(),
+                raw_query: RP_QUERY.into(),
                 account_id: None,
                 auth_time: None,
                 request_uri: None,
-                browser_binding: super::super::browser_binding_hash("b"),
+                browser_binding: binding,
             })
             .await;
-        let q: LoginQuery = serde_urlencoded::from_str("").unwrap();
-        let form = login_form(State(p.clone()), HeaderMap::new(), CookieJar::default(), Path("U1".into()), Query(q)).await;
-        assert_eq!(form.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(form.into_body(), usize::MAX).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("another browser"));
+        p
+    }
 
-        let cancel = super::super::oidc::authorize_cancel(State(p.clone()), HeaderMap::new(), CookieJar::default(), Path("U1".into())).await;
-        assert_eq!(cancel.status(), StatusCode::BAD_REQUEST);
-        assert!(cancel.headers().get(header::LOCATION).is_none());
+    async fn form_of(p: &Arc<Provider>, jar: CookieJar) -> (StatusCode, String) {
+        let q: LoginQuery = serde_urlencoded::from_str("").unwrap();
+        let r = login_form(State(p.clone()), HeaderMap::new(), jar, Path("U1".into()), Query(q)).await;
+        let status = r.status();
+        let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    /// 別のブラウザで開いたログイン画面は、入口の無い client では案内を出して止まる。
+    /// キャンセルが RP へ access_denied を返すのも、始めたブラウザからだけ。
+    #[tokio::test]
+    async fn another_browser_gets_no_sign_in_page_and_cannot_cancel() {
+        let p = provider_with_interaction(super::super::browser_binding_hash("b")).await;
+        let (status, body) = form_of(&p, CookieJar::default()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("another browser"), "{body}");
+        assert_eq!(form_of(&p, bound_jar("U1")).await.0, StatusCode::OK);
+
+        let cancel = |jar: CookieJar| super::super::oidc::authorize_cancel(State(p.clone()), HeaderMap::new(), jar, Path("U1".into()));
+        let elsewhere = cancel(CookieJar::default()).await;
+        assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST);
+        assert!(elsewhere.headers().get(header::LOCATION).is_none());
+        let here = cancel(bound_jar("U1")).await;
+        let loc = here.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        assert!(loc.starts_with("https://rp.example.com/cb?") && loc.contains("error=access_denied"), "{loc}");
+    }
+
+    /// 印の無い interaction は、cookie が何であっても始めたブラウザと見なさない。
+    #[tokio::test]
+    async fn an_interaction_without_a_binding_is_never_from_this_browser() {
+        let p = provider_with_interaction(String::new()).await;
+        let mut h = HeaderMap::new();
+        h.insert(header::COOKIE, format!("{}=", super::super::browser_cookie_name("U1")).parse().unwrap());
+        let jar = CookieJar::from_headers(&h);
+        assert_ne!(form_of(&p, jar.clone()).await.0, StatusCode::OK);
+        assert_eq!(finalize_login(&p, jar, "U1", "acct".into()).await.err(), Some("started in another browser"));
     }
 
     /// 試験の interaction を始めたブラウザの cookie。interaction には browser_binding_hash("b") を置く。

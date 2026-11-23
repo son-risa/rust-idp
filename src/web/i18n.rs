@@ -203,6 +203,8 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("This account is disabled.", "このアカウントは凍結されています。"),
     ("This account needs to be registered again.", "このアカウントは登録し直す必要があります。"),
     ("This sign-in has expired. Please start again.", "ログインの有効期限が切れました。最初からやり直してください。"),
+    ("This sign-in was started in another browser.", "このログインは別のブラウザで始められたものです。"),
+    ("Sign in again in this browser", "このブラウザでログインし直す"),
     (
         "This sign-in was started in another browser. Please start again from the app.",
         "このログインは別のブラウザで始められたものです。アプリからもう一度始めてください。",
