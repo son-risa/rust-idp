@@ -142,12 +142,13 @@ pub(super) async fn recover_page(
     } else {
         (p.path("/account/signin/options"), p.path("/account/signin/verify"), super::account_url(&p, &from.client_id, false))
     };
-    let body = r##"<h1>[[Add a passkey on this device]]</h1>
-<p class="small">__EMAIL__</p>
+    let current = super::signed_in_as_other(&p, &jar, &email).await;
+    let body = r##"__SWITCH__<div id="main" __MAIN_HIDDEN__><h1>[[Add a passkey on this device]]</h1>
+<p>{target}</p>
 <p>[[Create a passkey on this device to sign in again. Your other passkeys are kept. When you finish, you are signed out on your other devices.]]</p>
 <p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
 <button onclick="add()">[[Create a passkey]]</button>
-<p id="msg"></p>
+<p id="msg"></p></div>
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
@@ -189,16 +190,18 @@ async function signIn(){
  }catch(e){msg.textContent=passkeyErrorText(e);}
 }
 </script>"##
-        .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS);
+        .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS)
+        .replace("__SWITCH__", if current.is_some() { super::SWITCH_NOTICE } else { "" })
+        .replace("__MAIN_HIDDEN__", if current.is_some() { "hidden" } else { "" });
     let html = shell(lang, &body)
         .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
         .replace("__TOKEN__", &token)
-        .replace("__EMAIL__", &super::admin::esc(&email))
         .replace("__OPT__", &p.path("/recover/options"))
         .replace("__VER__", &p.path("/recover/verify"))
         .replace("__LOGIN_OPT__", &login_opt)
         .replace("__LOGIN_VER__", &login_ver)
         .replace("__LOGIN_DONE__", &login_done);
+    let html = super::fill_switch_notice(html, current.as_deref().unwrap_or(""), &email);
     // ページの URL に token が在る。外へのリンクで Referer に載せない。
     ([(header::CACHE_CONTROL, "no-store"), (header::REFERRER_POLICY, "no-referrer")], Html(html)).into_response()
 }
