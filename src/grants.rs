@@ -157,6 +157,22 @@ async fn discard_unissued(p: &Provider, refresh: Option<&str>, access: Option<&s
 
 pub struct AuthorizationCodeGrant;
 
+/// A3: 凍結したアカウントには、凍結の直前に出たコード・承認済みの CIBA・RT のどこからも発行しない。
+/// 凍結の失効（account_admin::revoke_all）はコードと CIBA の要求を消さず、RT の回しと競りうるので、
+/// 発行の時にも見る。Firestore を使わない構成（テスト・PoC）には凍結が無いので見ない。
+async fn ensure_account_active(p: &Provider, account_id: &str) -> Result<(), OAuthError> {
+    let Some(fs) = &p.firestore else {
+        return Ok(());
+    };
+    // accountsByUuid の逆引きは書き損ねても登録を通す作りで、消したアカウントでは先に消えるので使わない。
+    // accounts を accountId で直に引き、無ければ（消した後も）断る。
+    let found = fs.query_eq("accounts", "accountId", account_id).await.map_err(OAuthError::ServerError)?;
+    if found.is_empty() || found.iter().any(|(_, f)| crate::firestore::field_bool(f, "disabled").unwrap_or(false)) {
+        return Err(OAuthError::InvalidGrant("account is disabled or deleted".into()));
+    }
+    Ok(())
+}
+
 /// コードと token 要求の照合。初回の交換と、再利用の失効の前の両方で使う。
 fn check_code_request(
     code: &AuthorizationCode,
@@ -237,6 +253,7 @@ impl GrantHandler for AuthorizationCodeGrant {
             p.store.revoke_code_tokens(code_val).await;
             return Err(OAuthError::InvalidGrant("code not found or already used".into()));
         }
+        ensure_account_active(p, &code.account_id).await?;
 
         let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
         let (access_token, id_token) = issue_access_and_id(
@@ -357,6 +374,10 @@ impl GrantHandler for RefreshTokenGrant {
                 "refresh token reuse detected; token family revoked".into(),
             ));
         }
+        if pre.auth_time.is_some_and(|t| t.saturating_add(crate::store::REFRESH_ABSOLUTE_MAX_SECS) < now()) {
+            return Err(OAuthError::InvalidGrant("refresh token is past its absolute lifetime; sign in again".into()));
+        }
+        ensure_account_active(p, &pre.account_id).await?;
 
         // scope の縮小は許可、拡大は拒否（RFC 6749 §6）。指定なしは元の scope を踏襲。
         let scope = match form.get("scope") {
@@ -492,6 +513,8 @@ impl GrantHandler for CibaGrant {
             CibaStatus::Approved => {
                 // CIBA は単回。Approved→削除を CAS で原子化し、並行 poll での二重発行を防ぐ。
                 // 消費に成功した呼び出しだけがトークンを発行できる。
+                // 消費の前に見る。読みに失敗して 5xx を返しても、承認は残り RP が試し直せる。
+                ensure_account_active(p, &req.account).await?;
                 let req = p
                     .ciba
                     .consume_if_approved(auth_req_id)
@@ -562,7 +585,7 @@ mod tests {
             nonce: None,
             code_challenge: None,
             code_challenge_method: None,
-            auth_time: 0,
+            auth_time: now(),
             acr: None,
             dpop_jkt: None,
             resource: None,
@@ -602,6 +625,71 @@ mod tests {
         let new_rt = p.store.get_refresh_token(r.refresh_token.as_deref().unwrap()).await.unwrap().unwrap();
         assert_eq!(new_rt.acr, None);
         assert_eq!(p.store.get_access_token(&r.access_token).await.unwrap().unwrap().acr, None);
+    }
+
+    /// A3: ログインから 90 日を過ぎた RT は、回し続けていても使えない。
+    #[tokio::test]
+    async fn refresh_past_the_absolute_lifetime_is_refused() {
+        let p = provider();
+        let c = client("mobile-rp");
+        let limit = crate::store::REFRESH_ABSOLUTE_MAX_SECS;
+        for (tok, age, ok) in [("RT-young", limit - 3600, true), ("RT-old", limit + 3600, false)] {
+            let t = RefreshToken { auth_time: Some(now() - age), ..rt_bound(tok, "mobile-rp", "openid offline_access", "KEY-A") };
+            p.store.save_refresh_token(t).await.unwrap();
+            let r = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", tok)]), Some("KEY-A".into())).await;
+            assert_eq!(r.is_ok(), ok, "{tok}: {:?}", r.err());
+        }
+    }
+
+    /// A3: 凍結の直前に出たコード・凍結の前の RT・承認済みの CIBA から、凍結の後に発行しない。
+    #[tokio::test]
+    async fn a_disabled_account_gets_no_tokens_from_a_code_a_refresh_token_or_ciba() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let outcome = crate::webauthn::RegOutcome { credential_id: "cred-1".into(), pub_x: "x".into(), pub_y: "y".into(), sign_count: 0, aaguid: String::new() };
+        crate::registration::save_credential(&fs, "u@example.com", "acc-1", &outcome).await.unwrap();
+        use crate::ciba::CibaStore;
+        let ciba = std::sync::Arc::new(crate::ciba::MemoryCibaStore::default());
+        let req_id = ciba.create("mobile-rp", "acc-1", "openid", "msg", None).await.unwrap();
+        ciba.transition_if_pending(req_id.as_str(), CibaStatus::Approved).await.unwrap();
+        let p = provider().with_firestore(fs.clone()).with_ciba(ciba);
+        let c = client("mobile-rp");
+
+        let mut code = base_code("C1", "mobile-rp");
+        code.account_id = "acc-1".into();
+        p.store.save_code(code).await.unwrap();
+        let rt = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A") };
+        p.store.save_refresh_token(rt).await.unwrap();
+        let refresh = form(&[("refresh_token", "RT1")]);
+        // 凍結の前は使える（RT は回さずに確かめるため、別の RT で見る）。
+        let rt2 = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT2", "mobile-rp", "openid offline_access", "KEY-A") };
+        p.store.save_refresh_token(rt2).await.unwrap();
+        assert!(RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT2")]), Some("KEY-A".into())).await.is_ok());
+
+        crate::registration::set_disabled(&fs, "u@example.com", true).await.unwrap();
+        assert_no_tokens(&p, &c, &refresh, req_id.as_str()).await;
+
+        // 消した後も（逆引きが消えても）出さない。
+        crate::account_admin::delete_account(&fs, "cli", "u@example.com").await.unwrap();
+        let mut code = base_code("C1", "mobile-rp");
+        code.account_id = "acc-1".into();
+        let p2 = provider().with_firestore(fs.clone());
+        p2.store.save_code(code).await.unwrap();
+        let rt = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A") };
+        p2.store.save_refresh_token(rt).await.unwrap();
+        let code_r = AuthorizationCodeGrant.handle(&p2, &c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
+        assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "deleted code: {:?}", code_r.map(|r| r.access_token));
+        let rt_r = RefreshTokenGrant.handle(&p2, &c, &refresh, Some("KEY-A".into())).await;
+        assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "deleted refresh: {:?}", rt_r.map(|r| r.access_token));
+    }
+
+    async fn assert_no_tokens(p: &Provider, c: &Client, refresh: &HashMap<String, String>, req_id: &str) {
+        let code_r = AuthorizationCodeGrant.handle(p, c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
+        assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "code: {:?}", code_r.map(|r| r.access_token));
+        let rt_r = RefreshTokenGrant.handle(p, c, refresh, Some("KEY-A".into())).await;
+        assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "refresh: {:?}", rt_r.map(|r| r.access_token));
+        let ciba_r = CibaGrant.handle(p, c, &form(&[("auth_req_id", req_id)]), None).await;
+        assert!(matches!(ciba_r, Err(OAuthError::InvalidGrant(_))), "ciba: {:?}", ciba_r.map(|r| r.access_token));
     }
 
     /// client_secret_basic の confidential client（client 認証が防壁。DPoP 束縛は任意）。
