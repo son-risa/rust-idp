@@ -203,6 +203,8 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("This account is disabled.", "このアカウントは凍結されています。"),
     ("This account needs to be registered again.", "このアカウントは登録し直す必要があります。"),
     ("This sign-in has expired. Please start again.", "ログインの有効期限が切れました。最初からやり直してください。"),
+    ("This sign-in was started in another browser.", "このログインは別のブラウザで始められたものです。"),
+    ("Sign in again in this browser", "このブラウザでログインし直す"),
     (
         "This sign-in was started in another browser. Please start again from the app.",
         "このログインは別のブラウザで始められたものです。アプリからもう一度始めてください。",
@@ -221,7 +223,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("No passkey is registered for this account.", "このアカウントには パスキーが登録されていません。"),
     ("This request has already been handled.", "この要求は既に処理されています。"),
     ("Something went wrong. Please try again.", "問題が起きました。もう一度お試しください。"),
-    ("The passkey was canceled or timed out.", "パスキーの操作が取り消されたか、時間切れになりました。"),
+    (
+        "The passkey was canceled or timed out. If you opened this page inside another app, open it in the standard Safari or Chrome app.",
+        "パスキーの操作が取り消されたか、時間切れになりました。ほかのアプリの中で開いている場合は、標準の Safari / Chrome アプリで開いてください。",
+    ),
     // oidc.rs
     ("You have signed out", "ログアウトしました"),
     ("Go to sign in", "ログインへ"),

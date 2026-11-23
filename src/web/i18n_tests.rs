@@ -161,11 +161,14 @@ async fn login_page(h: HeaderMap) -> String {
             account_id: None,
             auth_time: None,
             request_uri: None,
-            browser_binding: String::new(),
+            browser_binding: super::browser_binding_hash("b-1"),
         })
         .await;
     let q: login::LoginQuery = serde_urlencoded::from_str("").unwrap();
-    body_of(login::login_form(State(p), h, Path("uid-1".into()), Query(q)).await).await
+    let mut ch = HeaderMap::new();
+    ch.insert(header::COOKIE, format!("{}=b-1", super::browser_cookie_name("uid-1")).parse().unwrap());
+    let jar = CookieJar::from_headers(&ch);
+    body_of(login::login_form(State(p), h, jar, Path("uid-1".into()), Query(q)).await).await
 }
 
 /// 開いたまま置いたログイン画面が、切れた challenge で検証に行かないこと（10-20 に本番で 400 になった件）。
@@ -215,7 +218,7 @@ async fn register(fs: &Firestore, email: &str, account_id: &str) {
         .unwrap();
 }
 
-fn client(id: &str) -> crate::model::Client {
+pub(super) fn client(id: &str) -> crate::model::Client {
     crate::model::Client {
         client_id: id.into(),
         redirect_uris: vec!["https://rp.example.com/cb".into()],
@@ -756,7 +759,7 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
         "cancel of an unknown sign-in",
         "最初からやり直してください",
         |h| async move {
-            body_of(oidc::authorize_cancel(State(plain()), h, Path("missing".into())).await).await
+            body_of(oidc::authorize_cancel(State(plain()), h, CookieJar::default(), Path("missing".into())).await).await
         },
     )
     .await;
@@ -1104,7 +1107,7 @@ async fn expired_sign_in_is_sent_back_to_the_client_login_entry() {
         let p = p.clone();
         async move {
             let q: login::LoginQuery = serde_urlencoded::from_str(query).unwrap();
-            login::login_form(State(p), accept(lang), Path("gone".into()), Query(q)).await
+            login::login_form(State(p), accept(lang), CookieJar::default(), Path("gone".into()), Query(q)).await
         }
     };
 
@@ -1156,8 +1159,20 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
         .unwrap();
     let to = resp.headers()[reqwest::header::LOCATION].to_str().unwrap().to_string();
     assert!(to.starts_with("/oidc/login/") && to.ends_with("?client_id=rp-entry"), "{to}");
-    let live = http.get(format!("http://{addr}{to}")).send().await.unwrap();
+    let ix = resp.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_string();
+    let live = http.get(format!("http://{addr}{to}")).header("cookie", &ix).send().await.unwrap();
     assert_eq!(live.status(), 200);
+
+    // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、ログイン画面の代わりに入口へのリンクを出す。
+    // 自動では送らない（cookie を保存しないブラウザで回り続けないため）。
+    // URL の client_id を書き換えても、リンクは interaction の要求の client の入口。
+    let tampered = to.replace("client_id=rp-entry", "client_id=other");
+    let elsewhere = http.get(format!("http://{addr}{tampered}")).send().await.unwrap();
+    assert_eq!(elsewhere.status(), StatusCode::OK);
+    assert!(elsewhere.headers().get(reqwest::header::LOCATION).is_none());
+    let body = elsewhere.text().await.unwrap();
+    assert!(body.contains(r#"href="https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc""#), "{body}");
+    assert!(!body.contains("passkey/verify"), "ログイン画面を出していない");
 
     let expired = http
         .get(format!("http://{addr}/oidc/login/gone?client_id=rp-entry"))

@@ -93,6 +93,14 @@ fn make_auth_ceremony(
     )
 }
 
+/// その interaction を始めたブラウザが送ってくる cookie（interaction には browser_binding_hash("b") を置く）。
+/// 応答に Set-Cookie として出し直さないよう、送られてきた形（from_headers）で作る。
+fn bound_jar(uid: &str) -> CookieJar {
+    let mut h = HeaderMap::new();
+    h.insert(header::COOKIE, format!("{}=b", super::browser_cookie_name(uid)).parse().unwrap());
+    CookieJar::from_headers(&h)
+}
+
 async fn body_json(resp: Response) -> serde_json::Value {
     let status = resp.status();
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -195,7 +203,7 @@ async fn email_login_with_credential(
             account_id: None,
             auth_time: None,
             request_uri: None,
-            browser_binding: String::new(),
+            browser_binding: super::browser_binding_hash("b"),
         })
         .await;
 
@@ -212,7 +220,7 @@ async fn email_login_with_credential(
     }))
     .unwrap();
     let verify =
-        login::login_passkey_verify(State(p.clone()), CookieJar::default(), Path(uid.clone()), Json(verify_req))
+        login::login_passkey_verify(State(p.clone()), bound_jar(&uid), Path(uid.clone()), Json(verify_req))
             .await;
     (uid, verify)
 }
@@ -226,7 +234,7 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
             account_id: None,
             auth_time: None,
             request_uri: None,
-            browser_binding: String::new(),
+            browser_binding: super::browser_binding_hash("b"),
         })
         .await;
 
@@ -245,7 +253,7 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
     }))
     .unwrap();
     let verify =
-        login::login_passkey_verify(State(p.clone()), CookieJar::default(), Path(uid.clone()), Json(verify_req))
+        login::login_passkey_verify(State(p.clone()), bound_jar(&uid), Path(uid.clone()), Json(verify_req))
             .await;
     let status = verify.status();
     let body = body_json(verify).await;
@@ -324,7 +332,7 @@ async fn disabled_account_cannot_login() {
             account_id: None,
             auth_time: None,
             request_uri: None,
-            browser_binding: String::new(),
+            browser_binding: super::browser_binding_hash("b"),
         })
         .await;
 
@@ -341,7 +349,7 @@ async fn disabled_account_cannot_login() {
     }))
     .unwrap();
     let verify =
-        login::login_passkey_verify(State(p.clone()), CookieJar::default(), Path(uid.clone()), Json(verify_req))
+        login::login_passkey_verify(State(p.clone()), bound_jar(&uid), Path(uid.clone()), Json(verify_req))
             .await;
     assert_eq!(verify.status(), StatusCode::FORBIDDEN, "disabled account should be rejected");
 }
@@ -613,7 +621,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
             account_id: None,
             auth_time: None,
             request_uri: None,
-            browser_binding: String::new(),
+            browser_binding: super::browser_binding_hash("b"),
         })
         .await;
     let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({})).unwrap();
@@ -629,7 +637,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
     }))
     .unwrap();
     let by_handle =
-        login::login_passkey_verify(State(p.clone()), CookieJar::default(), Path(uid.clone()), Json(verify_req)).await;
+        login::login_passkey_verify(State(p.clone()), bound_jar(&uid), Path(uid.clone()), Json(verify_req)).await;
     assert_eq!(by_handle.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
 

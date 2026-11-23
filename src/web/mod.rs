@@ -60,10 +60,10 @@ fn browser_binding_hash(secret: &str) -> String {
 }
 
 /// このブラウザがその interaction を始めたブラウザか。
+/// 印の無い interaction は通さない（印は 11-20 の #92 から必ず張っている）。
 fn started_in_this_browser(jar: &CookieJar, i: &crate::model::Interaction) -> bool {
-    // この照合を入れる前に作られた interaction は印を持たない。最大 1 時間（INTERACTION_TTL_SECS）で消えるので通す。
     if i.browser_binding.is_empty() {
-        return true;
+        return false;
     }
     jar.get(&browser_cookie_name(&i.uid)).is_some_and(|c| {
         use subtle::ConstantTimeEq;
@@ -72,22 +72,25 @@ fn started_in_this_browser(jar: &CookieJar, i: &crate::model::Interaction) -> bo
 }
 
 /// ログイン画面から来た uid を、このブラウザが始めた生きた interaction のときだけ受け取る。
-/// 印の無い（古い）interaction は、別のブラウザから他人の uid を持ち込めるので受け取らない。
 async fn came_from(p: &Provider, jar: &CookieJar, uid: &str) -> crate::registration::CameFrom {
     let none = crate::registration::CameFrom::default;
     if uid.is_empty() {
         return none();
     }
     let Some(i) = p.store.get_interaction(uid).await else { return none() };
-    if i.browser_binding.is_empty() || !started_in_this_browser(jar, &i) {
+    if !started_in_this_browser(jar, &i) {
         return none();
     }
-    // client_id は利用者の入力でなく、/authorize が受けた要求から取る（PAR でも client_id はクエリに在る）。
-    let client_id = serde_urlencoded::from_str::<HashMap<String, String>>(&i.raw_query)
+    crate::registration::CameFrom { uid: uid.to_string(), client_id: requested_client_id(&i) }
+}
+
+/// interaction の元の要求の client_id。利用者の入力でなく、/authorize が受けた要求から取る
+/// （PAR でも client_id はクエリに在る）。
+fn requested_client_id(i: &crate::model::Interaction) -> String {
+    serde_urlencoded::from_str::<HashMap<String, String>>(&i.raw_query)
         .ok()
         .and_then(|q| q.get("client_id").cloned())
-        .unwrap_or_default();
-    crate::registration::CameFrom { uid: uid.to_string(), client_id }
+        .unwrap_or_default()
 }
 
 /// メールのリンクで passkey を作り終えた後の行き先。
@@ -102,7 +105,6 @@ async fn continue_after_email(
 ) -> String {
     let interaction = if from.uid.is_empty() { None } else { p.store.get_interaction(&from.uid).await };
     if let Some(i) = interaction
-        && !i.browser_binding.is_empty()
         && started_in_this_browser(jar, &i)
         && p.store.complete_interaction(&from.uid, account_id, now()).await
     {
@@ -454,7 +456,7 @@ const SERVER_ERRORS={
  'DPoP':'[[Your session has expired. Please sign in again.]]'
 };
 async function errorText(r){const t=await r.text();const k=Object.keys(SERVER_ERRORS).find(k=>t===k||t.startsWith(k+': '));if(k)return SERVER_ERRORS[k];console.error(t);return '[[Something went wrong. Please try again.]]';}
-function passkeyErrorText(e){if(e&&e.name==='NotAllowedError')return '[[The passkey was canceled or timed out.]]';console.error(e);return '[[Something went wrong. Please try again.]]';}
+function passkeyErrorText(e){if(e&&e.name==='NotAllowedError')return '[[The passkey was canceled or timed out. If you opened this page inside another app, open it in the standard Safari or Chrome app.]]';console.error(e);return '[[Something went wrong. Please try again.]]';}
 "##;
 
 #[derive(serde::Deserialize)]

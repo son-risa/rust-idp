@@ -271,6 +271,7 @@ pub(super) async fn authorize_resume(
 pub(super) async fn authorize_cancel(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
+    jar: CookieJar,
     Path(uid): Path<String>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
@@ -278,6 +279,9 @@ pub(super) async fn authorize_cancel(
         Some(i) => i,
         None => return plain_error(&localize("[[This sign-in has expired. Please start again.]]", lang)),
     };
+    if !started_in_this_browser(&jar, &interaction) {
+        return plain_error(&localize("[[This sign-in was started in another browser. Please start again from the app.]]", lang));
+    }
     let params: AuthParams = match serde_urlencoded::from_str(&interaction.raw_query) {
         Ok(p) => p,
         Err(e) => return app_error(lang, "server_error", &format!("invalid stored query: {e}")),
