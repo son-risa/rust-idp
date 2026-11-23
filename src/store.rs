@@ -90,10 +90,12 @@ pub trait Store: Send + Sync {
     async fn delete_session(&self, sid: &str);
 
     async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()>;
-    /// 認可コードを消費する。初回は使用済みマークして返す。
-    /// 再利用（既に使用済み）を検出したら、そのコードで発行したトークンを失効させ None を返す
-    /// （RFC 6749 §4.1.2: コード再利用時は発行済みトークンを revoke すべき）。
-    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>>;
+    /// 認可コードを消費する。初回は使用済みマークして Fresh で返す。期限内の使用済みは Reused で返す。
+    /// 失効はここではしない。漏れたコードだけで正規の利用者の RT を消せないよう、呼び出し側が
+    /// client・redirect_uri・PKCE・DPoP の照合を済ませてから `revoke_code_tokens` を呼ぶ。
+    async fn take_code(&self, code: &str) -> StoreResult<CodeTake>;
+    /// コード再利用時に、そのコードで発行したトークンを失効させる（RFC 6749 §4.1.2）。
+    async fn revoke_code_tokens(&self, code: &str);
     /// 発行した access/refresh token をコードに紐付ける（再利用時の失効対象を記録）。
     async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()>;
 
@@ -129,6 +131,32 @@ pub trait Store: Send + Sync {
     /// In-memory 実装のみ意味を持つ(Firestore 等は TTL ポリシーで自己失効するため)。
     /// Provider の定期タスクが呼ぶ。
     async fn sweep_expired(&self) {}
+}
+
+/// コードの再利用で、そのコードから出た RT を失効させる。RT は回されて後継に替わっているかもしれないので、
+/// 系列ごと失効させる（RT の再利用検知と同じ札）。系列が分からないときは、その RT だけ消す。
+pub(crate) async fn revoke_issued_refresh<S: Store + ?Sized>(store: &S, rt: &str) {
+    match store.get_refresh_token(rt).await {
+        Ok(Some(t)) if !t.family_id.is_empty() => store.revoke_refresh_family(&t.family_id, rt).await,
+        Ok(_) => {
+            if let Err(e) = store.revoke_refresh_token(rt).await {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
+            }
+        }
+        Err(e) => {
+            // 系列は引けないが、少なくともその RT は消す。
+            tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh_family", "{e}");
+            if let Err(e) = store.revoke_refresh_token(rt).await {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
+            }
+        }
+    }
+}
+
+pub enum CodeTake {
+    Fresh(AuthorizationCode),
+    Reused(AuthorizationCode),
+    Unknown,
 }
 
 /// MemoryStore 内部のコード記録。使用済みフラグと発行トークンを保持し、再利用失効に使う。
@@ -217,36 +245,35 @@ impl Store for MemoryStore {
         );
         Ok(())
     }
-    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> {
-        // 失効対象を lock 内で収集し、lock 解放後にトークンマップを触る（ロック順序固定）。
-        let revoke = {
-            let mut codes = self.codes.lock().unwrap();
-            let Some(entry) = codes.get_mut(code) else {
-                return Ok(None);
-            };
-            if !entry.alive() {
-                // 期限切れコードは未知と同義。lazy 削除して None。
-                codes.remove(code);
-                return Ok(None);
-            }
-            let rec = &mut entry.value;
-            if rec.used {
-                let r = (rec.issued_access.take(), rec.issued_refresh.take());
-                Some(r)
-            } else {
-                rec.used = true;
-                return Ok(Some(rec.code.clone()));
-            }
+    async fn take_code(&self, code: &str) -> StoreResult<CodeTake> {
+        let mut codes = self.codes.lock().unwrap();
+        let Some(entry) = codes.get_mut(code) else {
+            return Ok(CodeTake::Unknown);
         };
-        if let Some((at, rt)) = revoke {
-            if let Some(at) = at {
-                self.access_tokens.lock().unwrap().remove(&at);
-            }
-            if let Some(rt) = rt {
-                self.refresh_tokens.lock().unwrap().remove(&rt);
-            }
+        if !entry.alive() {
+            // 期限切れコードは未知と同義。lazy 削除する。
+            codes.remove(code);
+            return Ok(CodeTake::Unknown);
         }
-        Ok(None)
+        let rec = &mut entry.value;
+        if rec.used {
+            return Ok(CodeTake::Reused(rec.code.clone()));
+        }
+        rec.used = true;
+        Ok(CodeTake::Fresh(rec.code.clone()))
+    }
+    async fn revoke_code_tokens(&self, code: &str) {
+        // 失効対象を lock 内で収集し、lock 解放後にトークンマップを触る（ロック順序固定）。
+        let (at, rt) = match self.codes.lock().unwrap().get_mut(code) {
+            Some(e) => (e.value.issued_access.take(), e.value.issued_refresh.take()),
+            None => return,
+        };
+        if let Some(at) = at {
+            self.access_tokens.lock().unwrap().remove(&at);
+        }
+        if let Some(rt) = rt {
+            revoke_issued_refresh(self, &rt).await;
+        }
     }
     async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()> {
         if let Some(entry) = self.codes.lock().unwrap().get_mut(code) {
@@ -495,11 +522,13 @@ mod tests {
         s.link_issued_tokens("C1", "AT1", Some("RT1")).await.unwrap();
 
         // 初回消費は成功し、発行トークンは生きている。
-        assert!(s.take_code("C1").await.unwrap().is_some());
+        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Fresh(_)));
         assert!(s.get_access_token("AT1").await.unwrap().is_some());
 
-        // 再利用は拒否（None）され、発行済みトークンが失効する。
-        assert!(s.take_code("C1").await.unwrap().is_none());
+        // 再利用は Reused と分かるだけで、失効は revoke_code_tokens を呼んだときに起きる。
+        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Reused(_)));
+        assert!(s.get_access_token("AT1").await.unwrap().is_some());
+        s.revoke_code_tokens("C1").await;
         assert!(s.get_access_token("AT1").await.unwrap().is_none());
         assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
     }
@@ -507,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_code_returns_none() {
         let s = MemoryStore::default();
-        assert!(s.take_code("nope").await.unwrap().is_none());
+        assert!(matches!(s.take_code("nope").await.unwrap(), CodeTake::Unknown));
     }
 
     #[tokio::test]
