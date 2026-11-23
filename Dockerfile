@@ -16,7 +16,7 @@ RUN touch src/main.rs && cargo build --release
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /app/target/release/rust-op /usr/local/bin/rust-op
+COPY --from=build /app/target/release/rust-idp /usr/local/bin/rust-idp
 ENV PORT=8080
 EXPOSE 8080
-CMD ["rust-op"]
+CMD ["rust-idp"]

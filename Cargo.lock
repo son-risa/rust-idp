@@ -1428,7 +1428,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-op"
+name = "rust-idp"
 version = "0.1.0"
 dependencies = [
  "async-trait",

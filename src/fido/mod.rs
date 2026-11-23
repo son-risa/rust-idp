@@ -69,7 +69,7 @@ impl FidoState {
         let rp_id = std::env::var("FIDO_RP_ID").unwrap_or_else(|_| "localhost".into());
         let origin = std::env::var("FIDO_ORIGIN")
             .unwrap_or_else(|_| format!("http://{rp_id}"));
-        let rp_name = std::env::var("FIDO_RP_NAME").unwrap_or_else(|_| "rust-op FIDO2".into());
+        let rp_name = std::env::var("FIDO_RP_NAME").unwrap_or_else(|_| "rust-idp FIDO2".into());
         let store: Arc<dyn FidoStore> = if std::env::var("K_SERVICE").is_ok() {
             let project = std::env::var("GCLOUD_PROJECT")
                 .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
