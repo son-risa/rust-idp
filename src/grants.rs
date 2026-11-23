@@ -164,18 +164,13 @@ async fn ensure_account_active(p: &Provider, account_id: &str) -> Result<(), OAu
     let Some(fs) = &p.firestore else {
         return Ok(());
     };
-    let email = crate::registration::find_email_by_account_id(fs, account_id)
-        .await
-        .map_err(OAuthError::ServerError)?;
-    // 逆引きは登録時に書き損ねても登録を通す作りなので、無いときは止めない。
-    let Some(email) = email else {
-        tracing::warn!(event = "account_index_missing", sub = %crate::web::pseudonymize_sub(account_id));
-        return Ok(());
-    };
-    match crate::registration::get_account(fs, &email).await.map_err(OAuthError::ServerError)? {
-        Some(a) if !a.disabled => Ok(()),
-        _ => Err(OAuthError::InvalidGrant("account is disabled".into())),
+    // accountsByUuid の逆引きは書き損ねても登録を通す作りで、消したアカウントでは先に消えるので使わない。
+    // accounts を accountId で直に引き、無ければ（消した後も）断る。
+    let found = fs.query_eq("accounts", "accountId", account_id).await.map_err(OAuthError::ServerError)?;
+    if found.is_empty() || found.iter().any(|(_, f)| crate::firestore::field_bool(f, "disabled").unwrap_or(false)) {
+        return Err(OAuthError::InvalidGrant("account is disabled or deleted".into()));
     }
+    Ok(())
 }
 
 /// コードと token 要求の照合。初回の交換と、再利用の失効の前の両方で使う。
@@ -518,13 +513,14 @@ impl GrantHandler for CibaGrant {
             CibaStatus::Approved => {
                 // CIBA は単回。Approved→削除を CAS で原子化し、並行 poll での二重発行を防ぐ。
                 // 消費に成功した呼び出しだけがトークンを発行できる。
+                // 消費の前に見る。読みに失敗して 5xx を返しても、承認は残り RP が試し直せる。
+                ensure_account_active(p, &req.account).await?;
                 let req = p
                     .ciba
                     .consume_if_approved(auth_req_id)
                     .await
                     .map_err(OAuthError::ServerError)?
                     .ok_or_else(|| OAuthError::InvalidGrant("auth_req_id already used".into()))?;
-                ensure_account_active(p, &req.account).await?;
                 let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
                 let (access_token, id_token) =
                     issue_access_and_id(p, &client.client_id, &req.account, &req.scope, None, None, None, dpop_jkt, client.id_token_signed_response_alg.as_deref(), None, req.authorization_details.as_deref())
@@ -671,11 +667,28 @@ mod tests {
         assert!(RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT2")]), Some("KEY-A".into())).await.is_ok());
 
         crate::registration::set_disabled(&fs, "u@example.com", true).await.unwrap();
-        let code_r = AuthorizationCodeGrant.handle(&p, &c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
+        assert_no_tokens(&p, &c, &refresh, req_id.as_str()).await;
+
+        // 消した後も（逆引きが消えても）出さない。
+        crate::account_admin::delete_account(&fs, "cli", "u@example.com").await.unwrap();
+        let mut code = base_code("C1", "mobile-rp");
+        code.account_id = "acc-1".into();
+        let p2 = provider().with_firestore(fs.clone());
+        p2.store.save_code(code).await.unwrap();
+        let rt = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A") };
+        p2.store.save_refresh_token(rt).await.unwrap();
+        let code_r = AuthorizationCodeGrant.handle(&p2, &c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
+        assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "deleted code: {:?}", code_r.map(|r| r.access_token));
+        let rt_r = RefreshTokenGrant.handle(&p2, &c, &refresh, Some("KEY-A".into())).await;
+        assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "deleted refresh: {:?}", rt_r.map(|r| r.access_token));
+    }
+
+    async fn assert_no_tokens(p: &Provider, c: &Client, refresh: &HashMap<String, String>, req_id: &str) {
+        let code_r = AuthorizationCodeGrant.handle(p, c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
         assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "code: {:?}", code_r.map(|r| r.access_token));
-        let rt_r = RefreshTokenGrant.handle(&p, &c, &refresh, Some("KEY-A".into())).await;
+        let rt_r = RefreshTokenGrant.handle(p, c, refresh, Some("KEY-A".into())).await;
         assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "refresh: {:?}", rt_r.map(|r| r.access_token));
-        let ciba_r = CibaGrant.handle(&p, &c, &form(&[("auth_req_id", req_id.as_str())]), None).await;
+        let ciba_r = CibaGrant.handle(p, c, &form(&[("auth_req_id", req_id)]), None).await;
         assert!(matches!(ciba_r, Err(OAuthError::InvalidGrant(_))), "ciba: {:?}", ciba_r.map(|r| r.access_token));
     }
 
