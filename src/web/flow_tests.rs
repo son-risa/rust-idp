@@ -518,6 +518,14 @@ async fn ciba_flow_uses_account_id_consistently() {
     assert_eq!(stored.account, account_id, "CIBA 要求の account に email が残っている");
     assert_ne!(stored.account, email);
 
+    // 未解決のうちに同じ RP が同じ人へ要求し直しても、新しい要求（と push）は作らず同じ auth_req_id を返す。
+    let mut again = HashMap::new();
+    again.insert("client_id".to_string(), "test-ciba-rp".to_string());
+    again.insert("login_hint".to_string(), email.clone());
+    again.insert("scope".to_string(), "openid".to_string());
+    let body = body_json(ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(again)).await).await;
+    assert_eq!(body["auth_req_id"].as_str(), Some(auth_req_id.as_str()), "重複よけが効いていない: {body:?}");
+
     // 承認オプション → 承認（UV 必須）。
     let opts = ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone())).await;
     assert_eq!(opts.status(), StatusCode::OK);
