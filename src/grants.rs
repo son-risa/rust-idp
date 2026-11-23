@@ -174,7 +174,7 @@ impl GrantHandler for AuthorizationCodeGrant {
             .ok_or_else(|| OAuthError::InvalidRequest("code required".into()))?;
         let code = p
             .store
-            .take_code(code_val)
+            .take_code(code_val, &client.client_id)
             .await?
             .ok_or_else(|| OAuthError::InvalidGrant("code not found or already used".into()))?;
 
@@ -760,6 +760,42 @@ mod tests {
         assert!(matches!(after, Err(OAuthError::InvalidGrant(_))), "回された後の RT が使えた: {:?}", after.map(|r| r.refresh_token));
     }
 
+    /// 漏れた使用済みのコードを、別の client が出し直しても、期限切れの後に出し直しても、正規の利用者の RT は消えない。
+    async fn a_leaked_used_code_cannot_revoke_the_owners_refresh_token(p: Provider) {
+        let c = client("rp");
+        for (code_id, expires_in) in [("C-other", 600), ("C-expired", 1)] {
+            let mut code = base_code(code_id, "rp");
+            code.scope = "openid offline_access".into();
+            code.expires_at = now() + expires_in;
+            p.store.save_code(code).await.unwrap();
+            let f = form(&[("code", code_id), ("redirect_uri", "https://rp/cb")]);
+            let rt = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap().refresh_token.unwrap();
+            if code_id == "C-expired" {
+                tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+                let again = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await;
+                assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
+            } else {
+                let evil = AuthorizationCodeGrant.handle(&p, &client("evil"), &f, None).await;
+                assert!(matches!(evil, Err(OAuthError::InvalidGrant(_))));
+            }
+            let still = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", rt.as_str())]), Some("KEY-A".into())).await;
+            assert!(still.is_ok(), "{code_id}: 正規の利用者の RT が消えた: {:?}", still.err());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_leaked_used_code_cannot_revoke_the_owners_refresh_token_in_memory() {
+        a_leaked_used_code_cannot_revoke_the_owners_refresh_token(provider()).await;
+    }
+
+    #[tokio::test]
+    async fn a_leaked_used_code_cannot_revoke_the_owners_refresh_token_in_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
+        a_leaked_used_code_cannot_revoke_the_owners_refresh_token(provider().with_store(store)).await;
+    }
+
     #[tokio::test]
     async fn code_reuse_after_rotation_revokes_the_rotated_refresh_token_in_memory() {
         code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider()).await;
@@ -987,7 +1023,7 @@ mod tests {
         async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
         async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
         async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> { self.inner.save_code(c).await }
-        async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> { self.inner.take_code(code).await }
+        async fn take_code(&self, code: &str, client_id: &str) -> StoreResult<Option<AuthorizationCode>> { self.inner.take_code(code, client_id).await }
         async fn link_issued_tokens(&self, code: &str, at: &str, rt: Option<&str>) -> StoreResult<()> { self.inner.link_issued_tokens(code, at, rt).await }
         async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> { self.inner.save_access_token(t).await }
         async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> { self.inner.get_access_token(token).await }

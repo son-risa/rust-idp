@@ -194,7 +194,7 @@ impl Store for FirestoreStore {
         Ok(self.fs.set_doc("authCodes", &c.code, f).await?)
     }
 
-    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> {
+    async fn take_code(&self, code: &str, client_id: &str) -> StoreResult<Option<AuthorizationCode>> {
         if !issued_shape(code) {
             return Ok(None);
         }
@@ -208,7 +208,14 @@ impl Store for FirestoreStore {
             .and_then(|v| v.get("booleanValue"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // 期限切れのコードは未知と同じ（MemoryStore と揃える）。文書が残っていても失効は走らせない。
+        if fs_h::field_ts_secs(&f, "expiresAt").is_none_or(|t| t < now()) {
+            return Ok(None);
+        }
         if used {
+            if fs_h::field_str(&f, "clientId") != Some(client_id) {
+                return Ok(None);
+            }
             // 再利用: このコードで発行したトークンを失効させ拒否する（RFC 6749 §4.1.2）。
             // 消せなかったときも、このコードは使わせない（None）。消し損ねたトークンはログで追う。
             if let Some(at) = fs_h::field_str(&f, "issuedAccessToken")
@@ -622,8 +629,8 @@ mod tests {
             expires_at: now + 600,
         })
         .await.unwrap();
-        assert_eq!(s.take_code("C1").await.unwrap().map(|c| c.client_id), Some("cl".to_string()));
-        assert!(s.take_code("C1").await.unwrap().is_none());
+        assert_eq!(s.take_code("C1", "cl").await.unwrap().map(|c| c.client_id), Some("cl".to_string()));
+        assert!(s.take_code("C1", "cl").await.unwrap().is_none());
     }
 
     async fn store() -> FirestoreStore {
@@ -715,7 +722,7 @@ mod tests {
                     fake.fail_once_with(m, col, None, axum::http::StatusCode::BAD_REQUEST);
                 }
             }
-            assert!(s.take_code(&bad).await.unwrap().is_none());
+            assert!(s.take_code(&bad, "cl").await.unwrap().is_none());
             assert!(s.get_access_token(&bad).await.unwrap().is_none());
             assert!(s.get_refresh_token(&bad).await.unwrap().is_none());
             assert!(!s.mark_refresh_used(&bad, None).await.unwrap());

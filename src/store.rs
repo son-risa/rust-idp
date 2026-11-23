@@ -93,7 +93,9 @@ pub trait Store: Send + Sync {
     /// 認可コードを消費する。初回は使用済みマークして返す。
     /// 再利用（既に使用済み）を検出したら、そのコードで発行したトークンを失効させ None を返す
     /// （RFC 6749 §4.1.2: コード再利用時は発行済みトークンを revoke すべき）。
-    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>>;
+    /// 失効させるのは、まだ期限内のコードを、受け取った client 自身が出し直したときだけ。漏れた使用済みの
+    /// コードを第三者が別の client で出して、正規の利用者の RT を消せないようにする。
+    async fn take_code(&self, code: &str, client_id: &str) -> StoreResult<Option<AuthorizationCode>>;
     /// 発行した access/refresh token をコードに紐付ける（再利用時の失効対象を記録）。
     async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()>;
 
@@ -141,7 +143,13 @@ pub(crate) async fn revoke_issued_refresh<S: Store + ?Sized>(store: &S, rt: &str
                 tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
             }
         }
-        Err(e) => tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}"),
+        Err(e) => {
+            // 系列は引けないが、少なくともその RT は消す。
+            tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh_family", "{e}");
+            if let Err(e) = store.revoke_refresh_token(rt).await {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
+            }
+        }
     }
 }
 
@@ -231,7 +239,7 @@ impl Store for MemoryStore {
         );
         Ok(())
     }
-    async fn take_code(&self, code: &str) -> StoreResult<Option<AuthorizationCode>> {
+    async fn take_code(&self, code: &str, client_id: &str) -> StoreResult<Option<AuthorizationCode>> {
         // 失効対象を lock 内で収集し、lock 解放後にトークンマップを触る（ロック順序固定）。
         let revoke = {
             let mut codes = self.codes.lock().unwrap();
@@ -245,6 +253,9 @@ impl Store for MemoryStore {
             }
             let rec = &mut entry.value;
             if rec.used {
+                if rec.code.client_id != client_id {
+                    return Ok(None);
+                }
                 let r = (rec.issued_access.take(), rec.issued_refresh.take());
                 Some(r)
             } else {
@@ -509,11 +520,11 @@ mod tests {
         s.link_issued_tokens("C1", "AT1", Some("RT1")).await.unwrap();
 
         // 初回消費は成功し、発行トークンは生きている。
-        assert!(s.take_code("C1").await.unwrap().is_some());
+        assert!(s.take_code("C1", "cl").await.unwrap().is_some());
         assert!(s.get_access_token("AT1").await.unwrap().is_some());
 
         // 再利用は拒否（None）され、発行済みトークンが失効する。
-        assert!(s.take_code("C1").await.unwrap().is_none());
+        assert!(s.take_code("C1", "cl").await.unwrap().is_none());
         assert!(s.get_access_token("AT1").await.unwrap().is_none());
         assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
     }
@@ -521,7 +532,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_code_returns_none() {
         let s = MemoryStore::default();
-        assert!(s.take_code("nope").await.unwrap().is_none());
+        assert!(s.take_code("nope", "cl").await.unwrap().is_none());
     }
 
     #[tokio::test]
