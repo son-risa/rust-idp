@@ -150,7 +150,6 @@ mod tests {
             nonce: None,
             prompt: None,
             max_age: None,
-            acr_values: None,
             response_mode: None,
             code_challenge: Some("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".into()),
             code_challenge_method: Some("S256".into()),

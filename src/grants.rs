@@ -385,7 +385,8 @@ impl GrantHandler for RefreshTokenGrant {
                     scope: scope.clone(),
                     resource: pre.resource.clone(),
                     jkt: pre.jkt.clone(),
-                    acr: pre.acr.clone(),
+                    // A2: 前に要求の写しで入った acr を回し続けないよう、引き継がない。
+                    acr: None,
                     auth_time: pre.auth_time,
                     family_id: pre.family_id.clone(),
                     used: false,
@@ -396,8 +397,8 @@ impl GrantHandler for RefreshTokenGrant {
         // AT も古い RT を使用済みにする前に作る。後で作ると、AT の保存の失敗で古い RT だけが使用済みになり、
         // RP が古い RT で試し直したときに再利用として系列ごと失効する。
         let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
-        // 認証コンテキスト(acr/auth_time)は再認証しないので元の RT から引き継ぐ。
-        let (access_token, id_token) = match issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, pre.acr.as_deref(), dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None).await {
+        // auth_time は再認証しないので元の RT から引き継ぐ。acr は出さない（A2: 満たしたと言える値が無い）。
+        let (access_token, id_token) = match issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, None, dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None).await {
             Ok(x) => x,
             Err(e) => {
                 discard_unissued(p, new_refresh.as_deref(), None).await;
@@ -588,6 +589,19 @@ mod tests {
     /// DPoP 鍵に束縛された refresh token（public client の通常経路）。
     fn rt_bound(token: &str, client_id: &str, scope: &str, jkt: &str) -> RefreshToken {
         RefreshToken { jkt: Some(jkt.into()), ..rt(token, client_id, scope) }
+    }
+
+    /// A2: 前に要求の写しで acr が入った RT を回しても、新しい RT・AT に acr を引き継がない。
+    #[tokio::test]
+    async fn refresh_does_not_carry_over_an_old_acr() {
+        let p = provider();
+        let c = client("mobile-rp");
+        let old = RefreshToken { acr: Some("urn:mace:incommon:iap:bronze".into()), ..rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A") };
+        p.store.save_refresh_token(old).await.unwrap();
+        let r = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT0")]), Some("KEY-A".into())).await.unwrap();
+        let new_rt = p.store.get_refresh_token(r.refresh_token.as_deref().unwrap()).await.unwrap().unwrap();
+        assert_eq!(new_rt.acr, None);
+        assert_eq!(p.store.get_access_token(&r.access_token).await.unwrap().unwrap().acr, None);
     }
 
     /// client_secret_basic の confidential client（client 認証が防壁。DPoP 束縛は任意）。

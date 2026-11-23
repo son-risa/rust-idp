@@ -19,7 +19,6 @@ pub(super) async fn discovery(State(p): State<Arc<Provider>>) -> Json<serde_json
         "scopes_supported": ["openid", "profile", "email", "address", "phone", "offline_access"],
         "claims_supported": crate::claims::all_supported_claims(),
         "claims_parameter_supported": false,
-        "acr_values_supported": ["0", "1", "urn:mace:incommon:iap:bronze"],
         "token_endpoint_auth_methods_supported": p.client_auth.keys().collect::<Vec<_>>(),
         "code_challenge_methods_supported": ["S256"],
         "dpop_signing_alg_values_supported": ["ES256"],
@@ -361,13 +360,10 @@ async fn issue_code(
             code_challenge: req.params.code_challenge.clone(),
             code_challenge_method: req.params.code_challenge_method.clone(),
             auth_time: auth_time.unwrap_or_else(now),
-            // 要求された acr_values の先頭を、満たした acr として返す（PoC）。
-            acr: req
-                .params
-                .acr_values
-                .as_deref()
-                .and_then(|s| s.split_whitespace().next())
-                .map(|s| s.to_string()),
+            // acr_values は任意の要求なので受け流す（AuthParams に持たない）。ログインで UV を求めて
+            // いないので、満たした acr として言える値が無い。要求をそのまま写すと、確かめていない
+            // 保証を名乗ることになる（Fable の査読 A2）。
+            acr: None,
             dpop_jkt: req.params.dpop_jkt.clone(),
             resource: req.params.resource.clone(),
             expires_at: now() + 60,
@@ -1198,7 +1194,6 @@ mod tests {
                 nonce: None,
                 prompt: None,
                 max_age: None,
-                acr_values: None,
                 response_mode: None,
                 code_challenge: None,
                 code_challenge_method: None,
@@ -1214,6 +1209,14 @@ mod tests {
         let second = location(issue_code(&p, &req, "acct".into(), None).await);
         assert!(first.contains("code="), "{first}");
         assert!(!second.contains("code=") && second.contains("error=invalid_request"), "{second}");
+    }
+
+    /// A2: ログインで UV を求めていないので、満たせる acr を名乗らない。
+    #[tokio::test]
+    async fn discovery_does_not_advertise_acr_values() {
+        let p = Arc::new(Provider::new("https://op.example"));
+        let Json(d) = discovery(State(p)).await;
+        assert!(d.get("acr_values_supported").is_none(), "{d}");
     }
 
     /// 失効できなかったのに 200 を返すと、RP はトークンが死んだと思い込む。503 で試し直させる。

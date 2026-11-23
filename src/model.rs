@@ -62,7 +62,6 @@ pub struct AuthParams {
     pub nonce: Option<String>,
     pub prompt: Option<String>,
     pub max_age: Option<String>,
-    pub acr_values: Option<String>,
     pub response_mode: Option<String>,
     pub code_challenge: Option<String>,
     pub code_challenge_method: Option<String>,
