@@ -725,6 +725,15 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
 #[tokio::test]
 async fn sign_in_and_admin_refusals_follow_the_browser_language() {
     check_text(
+        "admin whoami without sign-in",
+        "ログインしてください。",
+        |h| async move {
+            let (p, _fs) = with_firestore().await;
+            body_of(admin::whoami(State(p), h, CookieJar::default()).await).await
+        },
+    )
+    .await;
+    check_text(
         "admin without Firestore",
         "管理コンソールは使えません。",
         |h| async move {

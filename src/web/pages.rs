@@ -4,7 +4,8 @@ use super::*;
 
 // PKCE verifier は localStorage に置く。メールのリンク（別のタブ）でログインを終えて戻っても、タブごとの sessionStorage では消えているため。
 // ?next=admin は管理画面の require_admin が付ける。sessionStorage に印を残し、demo_callback が
-// コードを引き換えた後に管理画面へ戻す。
+// コードを引き換えた後に管理画面へ戻す。管理画面は sid で入る（sid は login が引き換えの前に張る）ので、
+// 引き換えの成否は問わない。サインインが error で終わったときは印を消す。
 pub(super) async fn demo_start(State(p): State<Arc<Provider>>, headers: HeaderMap) -> Html<String> {
     let page = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>fido2demo</title>
@@ -230,6 +231,7 @@ async function doRefresh(){
 }
 (async()=>{
   const q=new URLSearchParams(location.search);
+  if(q.get('error')){sessionStorage.removeItem('next');}
   if(q.get('error')==='access_denied'){fail('[[Sign-in was canceled.]]');return;}
   if(q.get('error')){if(q.get('error_description'))console.error(q.get('error_description'));fail('[[Sign-in could not be completed. (error code: {code})]]'.replace('{code}',()=>q.get('error')));return;}
   const code=q.get('code');

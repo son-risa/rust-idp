@@ -433,6 +433,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("User not found", "ユーザーが見つかりません"),
     ("Client not found", "クライアントが見つかりません"),
     ("Choose a client profile", "プロファイルを選んでください"),
+    ("Please sign in.", "ログインしてください。"),
     ("Only admins can open this page.", "このページは管理者だけが開けます。"),
     ("The admin console is not available.", "管理コンソールは使えません。"),
     ("User", "ユーザー"),
