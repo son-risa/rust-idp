@@ -725,14 +725,6 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
 #[tokio::test]
 async fn sign_in_and_admin_refusals_follow_the_browser_language() {
     check_text(
-        "admin without sign-in",
-        "ログインしてください。",
-        |h| async move {
-            body_of(admin::users_list(State(plain()), h, CookieJar::default()).await).await
-        },
-    )
-    .await;
-    check_text(
         "admin without Firestore",
         "管理コンソールは使えません。",
         |h| async move {
@@ -1086,15 +1078,6 @@ async fn own_errors_and_rp_facing_rejections_pass_through_unchanged() {
         .await
         .unwrap()
         .starts_with("Form requests must have"));
-
-    let resp = client
-        .get(format!("http://{addr}/oidc/admin/users"))
-        .header("accept-language", "ja")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status().as_u16(), 401);
-    assert_eq!(resp.text().await.unwrap(), "ログインしてください。");
 }
 
 /// 期限切れのログイン画面: 入口のある client ならそこへ iss つきで送り直し、

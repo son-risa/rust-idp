@@ -1,11 +1,13 @@
 use super::*;
 
-/// ログイン済セッションが管理者か確認する。未ログインは 401、非管理者は 403、
+/// ログイン済セッションが管理者か確認する。未ログインはサインイン画面へ送り、非管理者は 403、
 /// Firestore 未接続（ローカル既定構成）は 503 で fail-closed にする。
+/// サインインの後の戻り先は管理画面のトップに固定する（開いていた URL を持ち回らないので、
+/// 戻り先を外から差し込まれる余地が無い）。
 pub(super) async fn require_admin(p: &Provider, jar: &CookieJar, lang: Lang) -> Result<String, Response> {
     let account_id = session_account(p, jar)
         .await
-        .ok_or_else(|| text(StatusCode::UNAUTHORIZED, lang, "[[Please sign in.]]"))?;
+        .ok_or_else(|| Redirect::to(&format!("{}?next=admin", sign_in_page(p))).into_response())?;
     let fs = p
         .firestore
         .as_ref()
@@ -18,6 +20,12 @@ pub(super) async fn require_admin(p: &Provider, jar: &CookieJar, lang: Lang) -> 
             Err(text(StatusCode::SERVICE_UNAVAILABLE, lang, "[[The admin console is not available.]]"))
         }
     }
+}
+
+/// サインイン画面（demo_start）の道。base_path があるときの `/oidc/` は `/oidc` へ転送され、
+/// その転送はクエリを落とすので、末尾のスラッシュを付けない。
+fn sign_in_page(p: &Provider) -> String {
+    if p.base_path.is_empty() { "/".to_string() } else { p.base_path.clone() }
 }
 
 /// require_admin を通した上で &Firestore も返す（ほぼ全ハンドラが両方必要とする共通パターン）。
@@ -1197,10 +1205,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn require_admin_401_when_not_logged_in() {
+    async fn require_admin_sends_a_signed_out_visitor_to_the_sign_in_page() {
         let (p, _fs) = provider_with_firestore().await;
         let err = require_admin(&p, &CookieJar::default(), Lang::En).await.unwrap_err();
-        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(err.status(), StatusCode::SEE_OTHER);
+        let loc = err.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert_eq!(loc, format!("{}?next=admin", sign_in_page(&p)));
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_admin_url_lands_on_the_sign_in_page_with_the_return_mark() {
+        let app = router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let resp = client.get(format!("http://{addr}/oidc/admin/users")).send().await.unwrap();
+        assert_eq!(resp.status().as_u16(), 303);
+        let loc = resp.headers()["location"].to_str().unwrap().to_string();
+        assert_eq!(loc, "/oidc?next=admin");
+        // 転送の先でクエリが落ちずにサインイン画面が出る。
+        let page = client.get(format!("http://{addr}{loc}")).send().await.unwrap();
+        assert_eq!(page.status().as_u16(), 200);
+        assert!(page.text().await.unwrap().contains("get('next')==='admin'"));
     }
 
     #[tokio::test]
