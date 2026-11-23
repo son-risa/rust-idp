@@ -192,7 +192,7 @@ pub(super) async fn backchannel_auth(
     };
     // login_hint は passkey 登録済みアカウントであること（未登録は即拒否）。
     // account_id は以後、CIBA 要求本体・発行トークンの sub・FCM 宛先解決すべてに使う
-    // （login_hint = email は RP 起点のヒントとして dedup/レート制限のキーにのみ残す）。
+    // （login_hint = email は RP 起点のヒントとしてレート制限のキーにのみ残す）。
     // disabled なアカウントは unknown と同じ扱いにする(別分岐にしない): 凍結先へ push を
     // 送って pending 要求を作る無駄を避けつつ、認証済みRPへも「unknown」以上の情報は返さない。
     // passkey が 0 本のアカウントも unknown と同じ（承認できる人がいない）。
@@ -213,8 +213,8 @@ pub(super) async fn backchannel_auth(
         }
     };
     // dedup: 同 (client_id, account) に未解決の pending があれば、新規発行も push もせず
-    // 既存の auth_req_id を返す（冪等）。連発時の端末スパム抑止。
-    match p.ciba.find_pending_for(&client.client_id, &login_hint).await {
+    // 既存の auth_req_id を返す（冪等）。連発時の端末スパム抑止。要求は account_id で保存しているので、探すのも account_id。
+    match p.ciba.find_pending_for(&client.client_id, &account_id).await {
         Ok(Some(existing)) => {
             let remaining = existing.expires_at.saturating_sub(now_secs());
             return (
