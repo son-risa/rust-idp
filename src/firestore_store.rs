@@ -5,7 +5,7 @@
 
 use crate::firestore::{self as fs_h, Firestore};
 use crate::model::*;
-use crate::store::{Store, StoreResult};
+use crate::store::{CodeTake, Store, StoreResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -31,6 +31,24 @@ pub(crate) const REVOKE_MAX_RTS: usize = 1000;
 
 fn doc_expired(fields: &Value) -> bool {
     fs_h::field_ts_secs(fields, "expiresAt").unwrap_or(0) < now()
+}
+
+fn code_from_fields(code: &str, f: &Value) -> AuthorizationCode {
+    AuthorizationCode {
+        code: code.to_string(),
+        client_id: fs_h::field_str(f, "clientId").unwrap_or("").to_string(),
+        account_id: fs_h::field_str(f, "accountId").unwrap_or("").to_string(),
+        redirect_uri: fs_h::field_str(f, "redirectUri").unwrap_or("").to_string(),
+        scope: fs_h::field_str(f, "scope").unwrap_or("").to_string(),
+        nonce: fs_h::field_str(f, "nonce").map(str::to_string),
+        code_challenge: fs_h::field_str(f, "codeChallenge").map(str::to_string),
+        code_challenge_method: fs_h::field_str(f, "codeChallengeMethod").map(str::to_string),
+        auth_time: fs_h::field_u64(f, "authTime").unwrap_or(0),
+        acr: fs_h::field_str(f, "acr").map(str::to_string),
+        dpop_jkt: fs_h::field_str(f, "dpopJkt").map(str::to_string),
+        resource: fs_h::field_str(f, "resource").map(str::to_string),
+        expires_at: fs_h::field_ts_secs(f, "expiresAt").unwrap_or(0),
+    }
 }
 
 /// refreshTokens の fields から RefreshToken を復元する（take/get 共通）。
@@ -194,61 +212,53 @@ impl Store for FirestoreStore {
         Ok(self.fs.set_doc("authCodes", &c.code, f).await?)
     }
 
-    async fn take_code(&self, code: &str, client_id: &str) -> StoreResult<Option<AuthorizationCode>> {
+    async fn take_code(&self, code: &str) -> StoreResult<CodeTake> {
         if !issued_shape(code) {
-            return Ok(None);
+            return Ok(CodeTake::Unknown);
         }
         // updateTime CAS で単回消費を原子化する。get→write の間に別リクエストが消費した
         // 場合は CAS が負け、二重発行を防ぐ（consume_mandate_if_unused / CIBA と同型）。
         let Some((mut f, update_time)) = self.fs.get_doc_with_update_time("authCodes", code).await? else {
-            return Ok(None);
+            return Ok(CodeTake::Unknown);
         };
+        // 期限切れのコードは未知と同じ（MemoryStore の alive と同じく、期限ちょうども切れとする）。
+        if fs_h::field_ts_secs(&f, "expiresAt").unwrap_or(0) <= now() {
+            return Ok(CodeTake::Unknown);
+        }
         let used = f
             .get("used")
             .and_then(|v| v.get("booleanValue"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        // 期限切れのコードは未知と同じ（MemoryStore と揃える）。文書が残っていても失効は走らせない。
-        if fs_h::field_ts_secs(&f, "expiresAt").is_none_or(|t| t < now()) {
-            return Ok(None);
-        }
         if used {
-            if fs_h::field_str(&f, "clientId") != Some(client_id) {
-                return Ok(None);
-            }
-            // 再利用: このコードで発行したトークンを失効させ拒否する（RFC 6749 §4.1.2）。
-            // 消せなかったときも、このコードは使わせない（None）。消し損ねたトークンはログで追う。
-            if let Some(at) = fs_h::field_str(&f, "issuedAccessToken")
-                && let Err(e) = self.fs.delete_doc("accessTokens", at).await
-            {
-                tracing::error!(event = "code_reuse_revoke_failed", kind = "access", "{e}");
-            }
-            if let Some(rt) = fs_h::field_str(&f, "issuedRefreshToken") {
-                crate::store::revoke_issued_refresh(self, rt).await;
-            }
-            return Ok(None);
+            return Ok(CodeTake::Reused(code_from_fields(code, &f)));
         }
-        // 初回消費: used=true を CAS で書く。並行消費に負けたら None を返す。
+        // 初回消費: used=true を CAS で書く。並行消費に負けたら再利用と同じに扱う。
         f["used"] = fs_h::b(true);
         if !self.fs.set_doc_if_unchanged("authCodes", code, f.clone(), &update_time).await? {
-            return Ok(None);
+            return Ok(CodeTake::Reused(code_from_fields(code, &f)));
         }
-        // 期限チェックは grant 側（code.expires_at）。ここでは復元のみ。
-        Ok(Some(AuthorizationCode {
-            code: code.to_string(),
-            client_id: fs_h::field_str(&f, "clientId").unwrap_or("").to_string(),
-            account_id: fs_h::field_str(&f, "accountId").unwrap_or("").to_string(),
-            redirect_uri: fs_h::field_str(&f, "redirectUri").unwrap_or("").to_string(),
-            scope: fs_h::field_str(&f, "scope").unwrap_or("").to_string(),
-            nonce: fs_h::field_str(&f, "nonce").map(str::to_string),
-            code_challenge: fs_h::field_str(&f, "codeChallenge").map(str::to_string),
-            code_challenge_method: fs_h::field_str(&f, "codeChallengeMethod").map(str::to_string),
-            auth_time: fs_h::field_u64(&f, "authTime").unwrap_or(0),
-            acr: fs_h::field_str(&f, "acr").map(str::to_string),
-            dpop_jkt: fs_h::field_str(&f, "dpopJkt").map(str::to_string),
-            resource: fs_h::field_str(&f, "resource").map(str::to_string),
-            expires_at: fs_h::field_ts_secs(&f, "expiresAt").unwrap_or(0),
-        }))
+        Ok(CodeTake::Fresh(code_from_fields(code, &f)))
+    }
+
+    async fn revoke_code_tokens(&self, code: &str) {
+        // 消せなかったトークンはログで追う（呼び出し側はどのみちコードを拒否する）。
+        let f = match self.fs.get_doc("authCodes", code).await {
+            Ok(Some(f)) => f,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::error!(event = "code_reuse_revoke_failed", kind = "code", "{e}");
+                return;
+            }
+        };
+        if let Some(at) = fs_h::field_str(&f, "issuedAccessToken")
+            && let Err(e) = self.fs.delete_doc("accessTokens", at).await
+        {
+            tracing::error!(event = "code_reuse_revoke_failed", kind = "access", "{e}");
+        }
+        if let Some(rt) = fs_h::field_str(&f, "issuedRefreshToken") {
+            crate::store::revoke_issued_refresh(self, rt).await;
+        }
     }
 
     async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()> {
@@ -629,8 +639,8 @@ mod tests {
             expires_at: now + 600,
         })
         .await.unwrap();
-        assert_eq!(s.take_code("C1", "cl").await.unwrap().map(|c| c.client_id), Some("cl".to_string()));
-        assert!(s.take_code("C1", "cl").await.unwrap().is_none());
+        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Fresh(c) if c.client_id == "cl"));
+        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Reused(_)));
     }
 
     async fn store() -> FirestoreStore {
@@ -722,7 +732,7 @@ mod tests {
                     fake.fail_once_with(m, col, None, axum::http::StatusCode::BAD_REQUEST);
                 }
             }
-            assert!(s.take_code(&bad, "cl").await.unwrap().is_none());
+            assert!(matches!(s.take_code(&bad).await.unwrap(), CodeTake::Unknown));
             assert!(s.get_access_token(&bad).await.unwrap().is_none());
             assert!(s.get_refresh_token(&bad).await.unwrap().is_none());
             assert!(!s.mark_refresh_used(&bad, None).await.unwrap());

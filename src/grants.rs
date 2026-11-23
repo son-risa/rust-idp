@@ -4,7 +4,8 @@
 use crate::ciba::CibaStatus;
 use crate::error::OAuthError;
 use crate::jws::b64url;
-use crate::model::{AccessToken, Client, RefreshToken, TokenResponse};
+use crate::model::{AccessToken, AuthorizationCode, Client, RefreshToken, TokenResponse};
+use crate::store::CodeTake;
 use crate::provider::Provider;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -156,6 +157,53 @@ async fn discard_unissued(p: &Provider, refresh: Option<&str>, access: Option<&s
 
 pub struct AuthorizationCodeGrant;
 
+/// コードと token 要求の照合。初回の交換と、再利用の失効の前の両方で使う。
+fn check_code_request(
+    code: &AuthorizationCode,
+    client: &Client,
+    form: &HashMap<String, String>,
+    dpop_jkt: Option<&str>,
+) -> Result<(), OAuthError> {
+    if code.client_id != client.client_id {
+        return Err(OAuthError::InvalidGrant("code issued to another client".into()));
+    }
+    if code.expires_at < now() {
+        return Err(OAuthError::InvalidGrant("authorization code expired".into()));
+    }
+
+    let redirect_uri = form
+        .get("redirect_uri")
+        .ok_or_else(|| OAuthError::InvalidRequest("redirect_uri required".into()))?;
+    if *redirect_uri != code.redirect_uri {
+        return Err(OAuthError::InvalidGrant("redirect_uri mismatch".into()));
+    }
+
+    // PKCE 検証 (S256)。
+    if let Some(challenge) = &code.code_challenge {
+        let verifier = form
+            .get("code_verifier")
+            .ok_or_else(|| OAuthError::InvalidGrant("code_verifier required".into()))?;
+        let computed = b64url(Sha256::digest(verifier.as_bytes()));
+        if &computed != challenge {
+            return Err(OAuthError::InvalidGrant("PKCE verification failed".into()));
+        }
+    }
+
+    // DPoP key binding (RFC 9449 §10): PAR/authorize で dpop_jkt 指定時は
+    // token の DPoP proof の jkt と一致必須。不一致は invalid_dpop_proof。
+    if let Some(want_jkt) = &code.dpop_jkt {
+        match dpop_jkt {
+            Some(got) if got == want_jkt => {}
+            _ => {
+                return Err(OAuthError::InvalidDpopProof(
+                    "DPoP proof jkt does not match dpop_jkt bound at authorization".into(),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl GrantHandler for AuthorizationCodeGrant {
     fn grant_type(&self) -> &'static str {
@@ -172,48 +220,17 @@ impl GrantHandler for AuthorizationCodeGrant {
         let code_val = form
             .get("code")
             .ok_or_else(|| OAuthError::InvalidRequest("code required".into()))?;
-        let code = p
-            .store
-            .take_code(code_val, &client.client_id)
-            .await?
-            .ok_or_else(|| OAuthError::InvalidGrant("code not found or already used".into()))?;
-
-        if code.client_id != client.client_id {
-            return Err(OAuthError::InvalidGrant("code issued to another client".into()));
-        }
-        if code.expires_at < now() {
-            return Err(OAuthError::InvalidGrant("authorization code expired".into()));
-        }
-
-        let redirect_uri = form
-            .get("redirect_uri")
-            .ok_or_else(|| OAuthError::InvalidRequest("redirect_uri required".into()))?;
-        if *redirect_uri != code.redirect_uri {
-            return Err(OAuthError::InvalidGrant("redirect_uri mismatch".into()));
-        }
-
-        // PKCE 検証 (S256)。
-        if let Some(challenge) = &code.code_challenge {
-            let verifier = form
-                .get("code_verifier")
-                .ok_or_else(|| OAuthError::InvalidGrant("code_verifier required".into()))?;
-            let computed = b64url(Sha256::digest(verifier.as_bytes()));
-            if &computed != challenge {
-                return Err(OAuthError::InvalidGrant("PKCE verification failed".into()));
-            }
-        }
-
-        // DPoP key binding (RFC 9449 §10): PAR/authorize で dpop_jkt 指定時は
-        // token の DPoP proof の jkt と一致必須。不一致は invalid_dpop_proof。
-        if let Some(want_jkt) = &code.dpop_jkt {
-            match &dpop_jkt {
-                Some(got) if got == want_jkt => {}
-                _ => {
-                    return Err(OAuthError::InvalidDpopProof(
-                        "DPoP proof jkt does not match dpop_jkt bound at authorization".into(),
-                    ))
-                }
-            }
+        let (code, reused) = match p.store.take_code(code_val).await? {
+            CodeTake::Fresh(c) => (c, false),
+            CodeTake::Reused(c) => (c, true),
+            CodeTake::Unknown => return Err(OAuthError::InvalidGrant("code not found or already used".into())),
+        };
+        check_code_request(&code, client, form, dpop_jkt.as_deref())?;
+        // 再利用の失効は、client・redirect_uri・PKCE・DPoP がすべて合ってから。漏れたコードだけでは
+        // （公開 client は client_id を名乗るだけで通るので）正規の利用者の RT を消せないようにする。
+        if reused {
+            p.store.revoke_code_tokens(code_val).await;
+            return Err(OAuthError::InvalidGrant("code not found or already used".into()));
         }
 
         let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
@@ -760,20 +777,27 @@ mod tests {
         assert!(matches!(after, Err(OAuthError::InvalidGrant(_))), "回された後の RT が使えた: {:?}", after.map(|r| r.refresh_token));
     }
 
-    /// 漏れた使用済みのコードを、別の client が出し直しても、期限切れの後に出し直しても、正規の利用者の RT は消えない。
+    /// 漏れた使用済みのコードを、別の client が出し直しても、同じ client を名乗って verifier 無しで出し直しても、
+    /// 期限切れの後に出し直しても、正規の利用者の RT は消えない。
     async fn a_leaked_used_code_cannot_revoke_the_owners_refresh_token(p: Provider) {
         let c = client("rp");
-        for (code_id, expires_in) in [("C-other", 600), ("C-expired", 1)] {
+        for (code_id, expires_in) in [("C-other", 600), ("C-no-verifier", 600), ("C-expired", 2)] {
             let mut code = base_code(code_id, "rp");
             code.scope = "openid offline_access".into();
             code.expires_at = now() + expires_in;
+            code.code_challenge = Some(b64url(Sha256::digest(b"VERIFIER")));
             p.store.save_code(code).await.unwrap();
-            let f = form(&[("code", code_id), ("redirect_uri", "https://rp/cb")]);
+            let f = form(&[("code", code_id), ("redirect_uri", "https://rp/cb"), ("code_verifier", "VERIFIER")]);
             let rt = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap().refresh_token.unwrap();
             if code_id == "C-expired" {
-                tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(3100)).await;
                 let again = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await;
                 assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
+            } else if code_id == "C-no-verifier" {
+                // 公開 client は client_id を名乗るだけで通る。コードだけ持つ第三者は verifier を出せない。
+                let bare = form(&[("code", code_id), ("redirect_uri", "https://rp/cb")]);
+                let evil = AuthorizationCodeGrant.handle(&p, &c, &bare, None).await;
+                assert!(matches!(evil, Err(OAuthError::InvalidGrant(_))));
             } else {
                 let evil = AuthorizationCodeGrant.handle(&p, &client("evil"), &f, None).await;
                 assert!(matches!(evil, Err(OAuthError::InvalidGrant(_))));
@@ -1023,7 +1047,8 @@ mod tests {
         async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
         async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
         async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> { self.inner.save_code(c).await }
-        async fn take_code(&self, code: &str, client_id: &str) -> StoreResult<Option<AuthorizationCode>> { self.inner.take_code(code, client_id).await }
+        async fn take_code(&self, code: &str) -> StoreResult<crate::store::CodeTake> { self.inner.take_code(code).await }
+        async fn revoke_code_tokens(&self, code: &str) { self.inner.revoke_code_tokens(code).await }
         async fn link_issued_tokens(&self, code: &str, at: &str, rt: Option<&str>) -> StoreResult<()> { self.inner.link_issued_tokens(code, at, rt).await }
         async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> { self.inner.save_access_token(t).await }
         async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> { self.inner.get_access_token(token).await }
