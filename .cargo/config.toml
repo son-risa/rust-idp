@@ -1,4 +1,6 @@
 [registry]
-# 出て 7 日未満の版は解決に使わない（乗っ取られた版は数日で見つかって取り下げられることが多い）。
-# すぐ要るときは CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update <crate> --precise <版>。
-global-min-publish-age = "7 days"
+# 出て 3 日未満の版は解決に使わない。2026 年の乗っ取り（axios 約 3 時間、crates.io の arrayref など
+# 86〜107 分、Red Hat の npm 約 3 日）は、どれも 3 日以内に見つかって取り下げられた。
+# 安全の直し（RUSTSEC の対象を rust-idp が実際に使っているとき）だけは、差分を読んでから公開 2 日で入れる:
+#   CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update <crate> --precise <版>
+global-min-publish-age = "3 days"
