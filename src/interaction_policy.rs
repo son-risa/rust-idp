@@ -104,7 +104,6 @@ mod tests {
             nonce: None,
             prompt: prompt.map(str::to_string),
             max_age: max_age.map(str::to_string),
-            acr_values: None,
             response_mode: None,
             code_challenge: None,
             code_challenge_method: None,
