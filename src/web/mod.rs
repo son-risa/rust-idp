@@ -36,13 +36,25 @@ mod register;
 #[cfg(test)]
 mod flow_tests;
 
-const SID_COOKIE: &str = "sid";
+/// ブラウザは、`__Host-` の cookie を Secure・Path=/・Domain 無しの Set-Cookie でしか張らず、消しもしない。
+#[cfg(test)]
+fn assert_host_cookie(set: &str) {
+    let c = Cookie::parse(set.to_string()).unwrap();
+    assert!(c.name().starts_with("__Host-"), "{set}");
+    assert_eq!(c.secure(), Some(true), "{set}");
+    assert_eq!(c.path(), Some("/"), "{set}");
+    assert_eq!(c.domain(), None, "{set}");
+}
+
+/// `__Host-` の名前は、Secure・Path=/・Domain 無しでしか張れない。sonrisa.co.jp の別のサブドメインから
+/// `Domain=sonrisa.co.jp` で同じ名前の cookie を植えられない（Fable の査読 H2）。消すときも同じ属性が要る。
+const SID_COOKIE: &str = "__Host-sid";
 
 /// ログインを始めたブラウザの印。`/authorize` が interaction ごとに張り、login の完了と resume で照合する。
 /// 照合が無いと、攻撃者が自分で始めた `/login/{uid}` を被害者に踏ませ、被害者の認証の直後に resume を取って
 /// 被害者として RP に入れる。名前を uid ごとに分けるのは、別のタブで並行して始めたログインを上書きしないため。
 fn browser_cookie_name(uid: &str) -> String {
-    format!("ix_{uid}")
+    format!("__Host-ix_{uid}")
 }
 
 /// cookie に入れる値と、interaction に残すそのハッシュ。
@@ -338,7 +350,37 @@ pub fn router(provider: Provider) -> Router {
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
     app.layer(axum::middleware::from_fn(localize_rejections))
+        .layer(axum::middleware::from_fn(drop_encoded_cookie_names))
         .layer(axum::middleware::from_fn(request_trace))
+}
+
+/// 名前に `%` を含む cookie を、ハンドラが読む前に Cookie の見出しから落とす。
+/// CookieJar は名前も %-符号から戻して読む（cookie crate の percent-encode）。`__Host%2Dsid` は `__Host-` で始まらないので
+/// ブラウザは別のサブドメインからの `Domain=` 付きでも受け取るが、読むと `__Host-sid` になり、`__Host-` の守りを迂回される。
+async fn drop_encoded_cookie_names(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    // bytes のまま組に分ける。ASCII でない組が 1 つあるだけで見出しごと読めなくなると、別のサブドメインから
+    // 植えた 1 つで印とセッションを読ませなくできるので、その組だけを落とす。
+    let pairs: Vec<String> = req
+        .headers()
+        .get_all(header::COOKIE)
+        .iter()
+        .flat_map(|v| v.as_bytes().split(|b| *b == b';'))
+        // ASCII だけかを先に見る。str::trim は Unicode の空白も削るので、先に削ると `\u{2000}__Host-sid` が
+        // `__Host-sid` として残る（ブラウザは `__Host-` で始まらない名前として受け取る）。
+        .filter(|kv| kv.iter().all(|b| *b == b'\t' || (0x20..0x7f).contains(b)))
+        .filter_map(|kv| std::str::from_utf8(kv).ok())
+        .map(|kv| kv.trim_matches([' ', '\t']))
+        .filter(|kv| !kv.is_empty())
+        .filter(|kv| !kv.split('=').next().unwrap_or("").contains('%'))
+        .map(str::to_string)
+        .collect();
+    req.headers_mut().remove(header::COOKIE);
+    if !pairs.is_empty()
+        && let Ok(v) = header::HeaderValue::from_str(&pairs.join("; "))
+    {
+        req.headers_mut().insert(header::COOKIE, v);
+    }
+    next.run(req).await
 }
 
 /// axum の Query・Path・Form の取り出しの失敗は英語の説明を text/plain の本文に入れて返すので、

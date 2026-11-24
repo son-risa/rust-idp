@@ -262,7 +262,7 @@ pub(super) async fn authorize_resume(
     if !p.store.consume_interaction(uid).await {
         return expired();
     }
-    let done = Cookie::build(browser_cookie_name(uid)).path("/").build();
+    let done = Cookie::build(browser_cookie_name(uid)).path("/").secure(true).build();
     (jar.remove(done), issue_code(&p, &req, account_id, interaction.auth_time).await).into_response()
 }
 
@@ -639,7 +639,7 @@ pub(super) async fn end_session(
     if let Some(sid) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
         p.store.delete_session(&sid).await;
     }
-    let jar = jar.remove(Cookie::build((SID_COOKIE, "")).path("/").build());
+    let jar = jar.remove(Cookie::build((SID_COOKIE, "")).path("/").secure(true).build());
 
     // post_logout_redirect_uri は client 登録値のみ許可（オープンリダイレクト防止）。
     let client_id = q

@@ -1160,6 +1160,35 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     let live = http.get(format!("http://{addr}{to}")).header("cookie", &ix).send().await.unwrap();
     assert_eq!(live.status(), 200);
 
+    // 名前を %-符号で書いた cookie は、`__Host-` の印として読まない（別のサブドメインから植えられるため）。
+    // 本物の印と並んでも、植えたほうが勝たない。
+    let sign_in = |cookie: String| {
+        let http = http.clone();
+        let url = format!("http://{addr}{to}");
+        async move { http.get(url).header("cookie", cookie).send().await.unwrap().text().await.unwrap().contains("passkey/verify") }
+    };
+    let (name, value) = ix.split_once('=').unwrap();
+    assert!(!sign_in(format!("{}={value}", name.replacen("__", "%5F%5F", 1))).await);
+    assert!(!sign_in(format!("{}={value}", name.replacen('-', "%2D", 1))).await);
+    assert!(sign_in(format!("{ix}; {}=planted", name.replacen('-', "%2D", 1))).await);
+    assert!(sign_in(format!("{}=planted; {ix}", name.replacen('-', "%2D", 1))).await);
+    // 名前の前の Unicode の空白も、削って `__Host-` の名前にしない。
+    for sp in ['\u{a0}', '\u{2000}', '\u{3000}'] {
+        let planted = reqwest::header::HeaderValue::from_bytes(format!("{ix}; {sp}{name}=planted").as_bytes()).unwrap();
+        let page = http.get(format!("http://{addr}{to}")).header("cookie", planted).send().await.unwrap().text().await.unwrap();
+        assert!(page.contains("passkey/verify"), "{sp:?}");
+        let alone = reqwest::header::HeaderValue::from_bytes(format!("{sp}{ix}").as_bytes()).unwrap();
+        let page = http.get(format!("http://{addr}{to}")).header("cookie", alone).send().await.unwrap().text().await.unwrap();
+        assert!(!page.contains("passkey/verify"), "{sp:?}");
+    }
+    // ASCII でない cookie が並んでも、本物の印は読む。見出しが 2 行に分かれて来ても、どちらの行も読む。
+    let (url, h) = (format!("http://{addr}{to}"), http.clone());
+    let raw = reqwest::header::HeaderValue::from_bytes(format!("x=\u{e9}; {ix}").as_bytes()).unwrap();
+    let mixed = h.get(&url).header("cookie", raw).send().await.unwrap().text().await.unwrap();
+    assert!(mixed.contains("passkey/verify"), "{mixed}");
+    let split = h.get(&url).header("cookie", format!("{}=planted", name.replacen('-', "%2D", 1))).header("cookie", ix.as_str());
+    assert!(split.send().await.unwrap().text().await.unwrap().contains("passkey/verify"));
+
     // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、ログイン画面の代わりに入口へのリンクを出す。
     // 自動では送らない（cookie を保存しないブラウザで回り続けないため）。
     // URL の client_id を書き換えても、リンクは interaction の要求の client の入口。
@@ -1239,6 +1268,14 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
     assert!(html.contains(&logout), "ログアウトが無い");
     assert!(!html.contains(r#"data-ts="0""#), "登録日 0 を日付にした");
 
+    // ログアウトは sid を消す。`__Host-` の cookie は、張ったときと同じ属性でないとブラウザが消さない。
+    let mut h = HeaderMap::new();
+    h.insert(axum::http::header::COOKIE, "__Host-sid=x".parse().unwrap());
+    let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
+    let out = oidc::end_session(State(p.clone()), accept(None), CookieJar::from_headers(&h), Query(q)).await;
+    let set = out.headers()[axum::http::header::SET_COOKIE].to_str().unwrap().to_string();
+    assert!(set.starts_with("__Host-sid=;"), "{set}");
+    super::assert_host_cookie(&set);
     let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
     let done = body_of(oidc::end_session(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(q)).await).await;
     assert!(done.contains(&format!(r#"href="{}""#, p.path("/account"))), "{done}");

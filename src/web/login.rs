@@ -490,8 +490,10 @@ mod tests {
         let q = HashMap::from([("uid".to_string(), "U1".to_string())]);
         let own = super::super::oidc::authorize_resume(State(p.clone()), HeaderMap::new(), starter, Query(q)).await;
         assert!(gave_code(&own));
-        let cleared = own.headers().get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok()).any(|c| c.starts_with("ix_U1=;"));
-        assert!(cleared, "使い終えた印の cookie を消す");
+        let cleared: Vec<&str> =
+            own.headers().get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok()).filter(|c| c.starts_with("__Host-ix_U1=;")).collect();
+        assert_eq!(cleared.len(), 1, "使い終えた印の cookie を消す");
+        super::super::assert_host_cookie(cleared[0]);
     }
 
     /// `/authorize` は interaction ごとに印の cookie を張り、interaction にはそのハッシュだけを残す。
@@ -503,6 +505,7 @@ mod tests {
         let loc = r.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
         let uid = loc.split("/login/").nth(1).and_then(|s| s.split('?').next()).expect("login へ送る").to_string();
         let set = r.headers().get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).expect("cookie を張る").to_string();
+        super::super::assert_host_cookie(&set);
         let c = Cookie::parse(set).unwrap();
         assert_eq!(c.name(), super::super::browser_cookie_name(&uid));
         assert_eq!(c.http_only(), Some(true));
