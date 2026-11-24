@@ -1239,6 +1239,14 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
     assert!(html.contains(&logout), "ログアウトが無い");
     assert!(!html.contains(r#"data-ts="0""#), "登録日 0 を日付にした");
 
+    // ログアウトは sid を消す。`__Host-` の cookie は、張ったときと同じ属性でないとブラウザが消さない。
+    let mut h = HeaderMap::new();
+    h.insert(axum::http::header::COOKIE, "__Host-sid=x".parse().unwrap());
+    let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
+    let out = oidc::end_session(State(p.clone()), accept(None), CookieJar::from_headers(&h), Query(q)).await;
+    let set = out.headers()[axum::http::header::SET_COOKIE].to_str().unwrap().to_string();
+    assert!(set.starts_with("__Host-sid=;"), "{set}");
+    super::assert_host_cookie(&set);
     let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
     let done = body_of(oidc::end_session(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(q)).await).await;
     assert!(done.contains(&format!(r#"href="{}""#, p.path("/account"))), "{done}");

@@ -36,13 +36,25 @@ mod register;
 #[cfg(test)]
 mod flow_tests;
 
-const SID_COOKIE: &str = "sid";
+/// ブラウザは、`__Host-` の cookie を Secure・Path=/・Domain 無しの Set-Cookie でしか張らず、消しもしない。
+#[cfg(test)]
+fn assert_host_cookie(set: &str) {
+    let c = Cookie::parse(set.to_string()).unwrap();
+    assert!(c.name().starts_with("__Host-"), "{set}");
+    assert_eq!(c.secure(), Some(true), "{set}");
+    assert_eq!(c.path(), Some("/"), "{set}");
+    assert_eq!(c.domain(), None, "{set}");
+}
+
+/// `__Host-` の名前は、Secure・Path=/・Domain 無しでしか張れない。sonrisa.co.jp の別のサブドメインから
+/// `Domain=sonrisa.co.jp` で同じ名前の cookie を植えられない（Fable の査読 H2）。消すときも同じ属性が要る。
+const SID_COOKIE: &str = "__Host-sid";
 
 /// ログインを始めたブラウザの印。`/authorize` が interaction ごとに張り、login の完了と resume で照合する。
 /// 照合が無いと、攻撃者が自分で始めた `/login/{uid}` を被害者に踏ませ、被害者の認証の直後に resume を取って
 /// 被害者として RP に入れる。名前を uid ごとに分けるのは、別のタブで並行して始めたログインを上書きしないため。
 fn browser_cookie_name(uid: &str) -> String {
-    format!("ix_{uid}")
+    format!("__Host-ix_{uid}")
 }
 
 /// cookie に入れる値と、interaction に残すそのハッシュ。

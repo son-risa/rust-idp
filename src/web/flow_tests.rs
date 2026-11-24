@@ -787,6 +787,7 @@ async fn session_jar(p: &Arc<Provider>, account_id: &str, auth_time: u64) -> Coo
 /// 応答が張った sid cookie を、次のリクエストの cookie にする。
 fn jar_after(resp: &Response) -> CookieJar {
     let set = resp.headers().get(header::SET_COOKIE).expect("cookie を張る").to_str().unwrap();
+    super::assert_host_cookie(set);
     let c = Cookie::parse(set.to_string()).unwrap();
     assert_eq!(c.name(), SID_COOKIE);
     CookieJar::default().add(Cookie::new(SID_COOKIE, c.value().to_string()))
