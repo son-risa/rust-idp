@@ -1172,6 +1172,15 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     assert!(!sign_in(format!("{}={value}", name.replacen('-', "%2D", 1))).await);
     assert!(sign_in(format!("{ix}; {}=planted", name.replacen('-', "%2D", 1))).await);
     assert!(sign_in(format!("{}=planted; {ix}", name.replacen('-', "%2D", 1))).await);
+    // 名前の前の Unicode の空白も、削って `__Host-` の名前にしない。
+    for sp in ['\u{a0}', '\u{2000}', '\u{3000}'] {
+        let planted = reqwest::header::HeaderValue::from_bytes(format!("{ix}; {sp}{name}=planted").as_bytes()).unwrap();
+        let page = http.get(format!("http://{addr}{to}")).header("cookie", planted).send().await.unwrap().text().await.unwrap();
+        assert!(page.contains("passkey/verify"), "{sp:?}");
+        let alone = reqwest::header::HeaderValue::from_bytes(format!("{sp}{ix}").as_bytes()).unwrap();
+        let page = http.get(format!("http://{addr}{to}")).header("cookie", alone).send().await.unwrap().text().await.unwrap();
+        assert!(!page.contains("passkey/verify"), "{sp:?}");
+    }
     // ASCII でない cookie が並んでも、本物の印は読む。見出しが 2 行に分かれて来ても、どちらの行も読む。
     let (url, h) = (format!("http://{addr}{to}"), http.clone());
     let raw = reqwest::header::HeaderValue::from_bytes(format!("x=\u{e9}; {ix}").as_bytes()).unwrap();

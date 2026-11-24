@@ -365,9 +365,12 @@ async fn drop_encoded_cookie_names(mut req: axum::extract::Request, next: axum::
         .get_all(header::COOKIE)
         .iter()
         .flat_map(|v| v.as_bytes().split(|b| *b == b';'))
+        // ASCII だけかを先に見る。str::trim は Unicode の空白も削るので、先に削ると `\u{2000}__Host-sid` が
+        // `__Host-sid` として残る（ブラウザは `__Host-` で始まらない名前として受け取る）。
+        .filter(|kv| kv.iter().all(|b| *b == b'\t' || (0x20..0x7f).contains(b)))
         .filter_map(|kv| std::str::from_utf8(kv).ok())
-        .map(str::trim)
-        .filter(|kv| !kv.is_empty() && kv.bytes().all(|b| (0x20..0x7f).contains(&b)))
+        .map(|kv| kv.trim_matches([' ', '\t']))
+        .filter(|kv| !kv.is_empty())
         .filter(|kv| !kv.split('=').next().unwrap_or("").contains('%'))
         .map(str::to_string)
         .collect();
