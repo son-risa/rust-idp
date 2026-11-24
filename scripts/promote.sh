@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本番(rust-op)とstaging(rust-op-staging)の間でコンテナイメージを入れ替える。
+# 本番(rust-idp)とstaging(rust-idp-staging)の間でコンテナイメージを入れ替える。
 # 再ビルドはしない: staging で検証済みのイメージをそのまま本番へ、本番の(入れ替え前の)
 # イメージをそのまま staging へ、それぞれ --image 指定でデプロイするだけ。
 #
@@ -28,8 +28,8 @@ source "${SCRIPT_DIR}/lib_cloud_run.sh"
 
 PROJECT="${PROJECT:-fido2-8b943}"
 REGION="${REGION:-asia-northeast1}"
-PROD_SERVICE="${PROD_SERVICE:-rust-op}"
-STAGING_SERVICE="${STAGING_SERVICE:-rust-op-staging}"
+PROD_SERVICE="${PROD_SERVICE:-rust-idp}"
+STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
 PROD_URL="${PROD_URL:-https://oidc.sonrisa.co.jp}"
 STAGING_URL="${STAGING_URL:-https://test.sonrisa.co.jp}"
 
@@ -65,6 +65,9 @@ if [[ "$prev_prod_image" == "$new_image" ]]; then
   echo "       手段を失います。意図的な操作であれば、確認のうえ手動で対応してください。" >&2
   exit 1
 fi
+
+domain_routes_to "${PROD_URL#https://}" "$PROD_SERVICE"
+domain_routes_to "${STAGING_URL#https://}" "$STAGING_SERVICE"
 
 if (( APPLY == 0 )); then
   echo "[dry-run]"

@@ -3,7 +3,7 @@
 [Zero Trust 自己評価](./zero-trust-assessment.md) の領域4（Behavioral monitoring）**Foundation tier** の実体。
 枠組みの Foundation は「**期待される挙動を手で定義**し、**逸脱に閾値ベースのアラート**を張る」こと。
 
-rust-op は Cloud Run + Cloud Logging 上で動くため、責務は2つに分かれる:
+rust-idp は Cloud Run + Cloud Logging 上で動くため（サービス名は 2026-11 に `rust-op` から `rust-idp` へ変えた。旧サービスを消すまで、実際の指標と警報は両方の名前を見る）、責務は2つに分かれる:
 - **アプリ（コード, 実装済）**: アラート可能なセキュリティイベントを構造化ログで一貫して emit する。
 - **監視（Cloud Monitoring, config）**: そのイベントに log-based metric ＋閾値アラートポリシーを張る。
 
@@ -51,19 +51,19 @@ salt＋候補照合で（未設定時は平文 SHA256 ゆえ推測耐性は弱�
 gcloud logging metrics create rust_op_client_auth_failed \
   --project=fido2-8b943 \
   --description="token endpoint client auth failures (credential attack signal)" \
-  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="api" jsonPayload.fields.event="client_auth_failed"'
+  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="rust-idp" jsonPayload.fields.event="client_auth_failed"'
 
 # kms_sign_failed（0 が正常・1 件で警報）
 gcloud logging metrics create rust_op_kms_sign_failed \
   --project=fido2-8b943 \
   --description="KMS signing failures (integrity/availability)" \
-  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="api" jsonPayload.fields.event="kms_sign_failed"'
+  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="rust-idp" jsonPayload.fields.event="kms_sign_failed"'
 
 # 5xx（http_request の status>=500）
 gcloud logging metrics create rust_op_http_5xx \
   --project=fido2-8b943 \
   --description="server-side 5xx rate" \
-  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="api" jsonPayload.fields.event="http_request" jsonPayload.fields.status>=500'
+  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="rust-idp" jsonPayload.fields.event="http_request" jsonPayload.fields.status>=500'
 ```
 
 `login_failed` / `dcr_client_registered` も同様に `jsonPayload.fields.event="..."` で作成。

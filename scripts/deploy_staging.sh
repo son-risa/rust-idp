@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rust-op-staging (test.sonrisa.co.jp) へソースからビルド・デプロイし、100%トラフィックで
+# rust-idp-staging (test.sonrisa.co.jp) へソースからビルド・デプロイし、100%トラフィックで
 # 即座に公開する。staging は本番の0%トラフィックタグ付きcandidateとは違い専用プレビュー
 # サービスなので、タグ/トラフィック分割は不要。
 #
@@ -19,8 +19,10 @@ source "${SCRIPT_DIR}/lib_cloud_run.sh"
 
 PROJECT="${PROJECT:-fido2-8b943}"
 REGION="${REGION:-asia-northeast1}"
-STAGING_SERVICE="${STAGING_SERVICE:-rust-op-staging}"
+STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
 SMOKE_URL="${SMOKE_URL:-https://test.sonrisa.co.jp}"
+
+domain_routes_to "${SMOKE_URL#https://}" "$STAGING_SERVICE"
 
 APPLY=0
 [[ "${1:-}" == "--apply" ]] && APPLY=1

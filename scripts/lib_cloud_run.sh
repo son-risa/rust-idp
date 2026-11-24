@@ -31,7 +31,9 @@ traffic100_image() {  # $1=service -> digest付き完全修飾イメージ参照
   echo "$image"
 }
 
-KNOWN_PACKAGES=(rust-op rust-op-staging)  # promote.sh/rollback.sh がイメージを行き来させる対象パッケージ
+# promote.sh/rollback.sh がイメージを行き来させる対象パッケージ。rust-op・rust-op-staging は
+# 2026-11 の改名前のサービスのパッケージで、改名の直後はそこにあるイメージが稼働中・rollback 先になる。
+KNOWN_PACKAGES=(rust-idp rust-idp-staging rust-op rust-op-staging)
 
 image_path_for() {  # $1=パッケージ名(サービス名と一致) -> Artifact Registry イメージパス
   # gcloud run deploy --source . はデプロイ先サービス名でイメージ名を自動採番するため、
@@ -60,7 +62,7 @@ resolve_ar_tag() {  # $1=イメージパス(パッケージ) $2=タグ名 -> dig
 set_global_tag() {  # $1=digest参照 $2=タグ名: 全パッケージから同名タグを外してから対象へ付け直す
   # AR の Docker タグはパッケージ(イメージパス)ごとに独立した名前空間を持つ。promote.sh は
   # prod<->staging でイメージを行き来させるたびに、そのイメージが元々属するパッケージが
-  # rust-op と rust-op-staging の間で入れ替わる。単純に move_ar_tag するだけだと前回タグを
+  # rust-idp と rust-idp-staging の間で入れ替わる。単純に move_ar_tag するだけだと前回タグを
   # 付けた側のパッケージに古いタグが残り続け、rollback.sh がどちらのパッケージを先に見るかで
   # 「本当に最新のrollback-candidate」ではなく古いタグを拾ってしまう事故が起きる
   # (prod-live/rollback-candidate のように「常に高々1つだけ存在すべき」タグはこちらを使う)。
@@ -73,6 +75,24 @@ set_global_tag() {  # $1=digest参照 $2=タグ名: 全パッケージから同�
     fi
   done
   move_ar_tag "$digest_ref" "$tag"
+}
+
+domain_routes_to() {  # $1=ドメイン $2=service: ドメインのマッピングがそのサービスに向いていなければ非0
+  # 向いていないサービスへ入れても、スモークテストは別のサービスが返す 200 で通ってしまう
+  # （2026-11 の改名で、旧サービスにドメインが残っている間がそうなる）。
+  # gcloud の run domain-mappings は beta にしか無く、CI の gcloud に beta が入っている保証が無いので API を直に読む。
+  local domain="$1" service="$2" route
+  route="$(curl -sf -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://${REGION}-run.googleapis.com/apis/domains.cloudrun.com/v1/namespaces/${PROJECT}/domainmappings/${domain}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["spec"]["routeName"])')" || route=""
+  if [[ -z "$route" ]]; then
+    echo "ERROR: ${domain} のドメインのマッピングを読めませんでした（API・認証・応答の形）。" >&2
+    return 1
+  fi
+  if [[ "$route" != "$service" ]]; then
+    echo "ERROR: ${domain} は ${service} でなく '${route}' に向いています。" >&2
+    return 1
+  fi
 }
 
 smoke_test_url() {  # $1=base_url: 既知のエンドポイントを確認し、いずれか失敗すれば非0を返す

@@ -38,7 +38,7 @@ jobs:
       - name: Test
         run: cargo test --locked
 
-  # rust-op-staging (test.sonrisa.co.jp) へ100%トラフィックでビルド+デプロイし、
+  # rust-idp-staging (test.sonrisa.co.jp) へ100%トラフィックでビルド+デプロイし、
   # 機械的なスモークテストを行う。WebAuthn/passkeyの実機確認は人間がこのURLに対して行う
   # （promote の手動承認ゲートが、それが済んだことの証跡になる）。
   deploy-staging:
