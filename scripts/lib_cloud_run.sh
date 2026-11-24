@@ -85,6 +85,10 @@ domain_routes_to() {  # $1=ドメイン $2=service: ドメインのマッピン�
   route="$(curl -sf -H "Authorization: Bearer $(gcloud auth print-access-token)" \
     "https://${REGION}-run.googleapis.com/apis/domains.cloudrun.com/v1/namespaces/${PROJECT}/domainmappings/${domain}" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["spec"]["routeName"])')" || route=""
+  if [[ -z "$route" ]]; then
+    echo "ERROR: ${domain} のドメインのマッピングを読めませんでした（API・認証・応答の形）。" >&2
+    return 1
+  fi
   if [[ "$route" != "$service" ]]; then
     echo "ERROR: ${domain} は ${service} でなく '${route}' に向いています。" >&2
     return 1

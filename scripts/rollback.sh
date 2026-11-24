@@ -19,8 +19,7 @@ PROJECT="${PROJECT:-fido2-8b943}"
 REGION="${REGION:-asia-northeast1}"
 PROD_SERVICE="${PROD_SERVICE:-rust-idp}"
 STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
-
-domain_routes_to oidc.sonrisa.co.jp "$PROD_SERVICE"
+PROD_URL="${PROD_URL:-https://oidc.sonrisa.co.jp}"
 
 APPLY=0
 FORCE_IMAGE=""
@@ -31,6 +30,12 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+if ! domain_routes_to "${PROD_URL#https://}" "$PROD_SERVICE"; then
+  # 急ぎの戻し（--force-image）は、確かめに通らなくても止めない（読めないときも、別のサービスに向いているときも）。
+  [[ -n "$FORCE_IMAGE" ]] || exit 1
+  echo "WARNING: --force-image 指定のため、ドメインの確かめに通らないまま続けます。" >&2
+fi
 
 if [[ -n "$FORCE_IMAGE" ]]; then
   target_image="$FORCE_IMAGE"
