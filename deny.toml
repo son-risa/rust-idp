@@ -5,10 +5,6 @@
 version = 2
 # RustSec advisory DB の CVE をすべて検知する。修正版の無いものを除外するときは、理由を書いてここに足す。
 ignore = [
-    # url 2.5.8 の Url::origin() が入れ子の blob: URL で stack overflow。rust-idp も依存先（reqwest, tower-http）も
-    # Url::origin() を呼ばない（安全の直しの 2 日の例外には当たらない）。直った 2.5.9 は 2026-11-21 08:03 JST 公開で
-    # 3 日のクールダウン中。2026-11-24 08:03 JST 以降に上げてここから消す。
-    { id = "RUSTSEC-2026-0592", reason = "Url::origin() を呼ばない。url 2.5.9 がクールダウンを抜ける 2026-11-24 に上げる" },
     # 暗号化 cookie（PrivateCookieJar。axum-extra の cookie-private）も fork も使わない。直った cookie 0.18.3 は
     # 2026-11-23 16:45 JST 公開で 3 日のクールダウン中。2026-11-26 16:45 JST 以降に上げてここから消す。
     { id = "RUSTSEC-2026-0594", reason = "暗号化 cookie も fork も使わない。cookie 0.18.3 がクールダウンを抜ける 2026-11-26 に上げる" },
