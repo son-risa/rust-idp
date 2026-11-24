@@ -350,7 +350,31 @@ pub fn router(provider: Provider) -> Router {
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
     app.layer(axum::middleware::from_fn(localize_rejections))
+        .layer(axum::middleware::from_fn(drop_encoded_cookie_names))
         .layer(axum::middleware::from_fn(request_trace))
+}
+
+/// 名前に `%` を含む cookie を、ハンドラが読む前に Cookie の見出しから落とす。
+/// CookieJar は名前も %-符号から戻して読む（cookie crate の percent-encode）。`__Host%2Dsid` は `__Host-` で始まらないので
+/// ブラウザは別のサブドメインからの `Domain=` 付きでも受け取るが、読むと `__Host-sid` になり、`__Host-` の守りを迂回される。
+async fn drop_encoded_cookie_names(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let pairs: Vec<String> = req
+        .headers()
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .map(str::trim)
+        .filter(|kv| !kv.is_empty() && !kv.split('=').next().unwrap_or("").contains('%'))
+        .map(str::to_string)
+        .collect();
+    req.headers_mut().remove(header::COOKIE);
+    if !pairs.is_empty()
+        && let Ok(v) = header::HeaderValue::from_str(&pairs.join("; "))
+    {
+        req.headers_mut().insert(header::COOKIE, v);
+    }
+    next.run(req).await
 }
 
 /// axum の Query・Path・Form の取り出しの失敗は英語の説明を text/plain の本文に入れて返すので、

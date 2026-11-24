@@ -1160,6 +1160,19 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     let live = http.get(format!("http://{addr}{to}")).header("cookie", &ix).send().await.unwrap();
     assert_eq!(live.status(), 200);
 
+    // 名前を %-符号で書いた cookie は、`__Host-` の印として読まない（別のサブドメインから植えられるため）。
+    // 本物の印と並んでも、植えたほうが勝たない。
+    let sign_in = |cookie: String| {
+        let http = http.clone();
+        let url = format!("http://{addr}{to}");
+        async move { http.get(url).header("cookie", cookie).send().await.unwrap().text().await.unwrap().contains("passkey/verify") }
+    };
+    let (name, value) = ix.split_once('=').unwrap();
+    assert!(!sign_in(format!("{}={value}", name.replacen("__", "%5F%5F", 1))).await);
+    assert!(!sign_in(format!("{}={value}", name.replacen('-', "%2D", 1))).await);
+    assert!(sign_in(format!("{ix}; {}=planted", name.replacen('-', "%2D", 1))).await);
+    assert!(sign_in(format!("{}=planted; {ix}", name.replacen('-', "%2D", 1))).await);
+
     // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、ログイン画面の代わりに入口へのリンクを出す。
     // 自動では送らない（cookie を保存しないブラウザで回り続けないため）。
     // URL の client_id を書き換えても、リンクは interaction の要求の client の入口。
