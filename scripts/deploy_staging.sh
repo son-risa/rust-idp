@@ -22,6 +22,8 @@ REGION="${REGION:-asia-northeast1}"
 STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
 SMOKE_URL="${SMOKE_URL:-https://test.sonrisa.co.jp}"
 
+domain_routes_to "${SMOKE_URL#https://}" "$STAGING_SERVICE"
+
 APPLY=0
 [[ "${1:-}" == "--apply" ]] && APPLY=1
 if (( APPLY == 0 )); then

@@ -13,7 +13,7 @@ rust-op を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-
 > - **B-4 再利用検知 + 系列失効**: 消費済み RT の再提示を検知し family 全体を失効（OAuth Security BCP）。`event=refresh_reuse_detected` を**専用アラートに配線済**。
 > - **B-5 offline_access ポリシー**: 束縛なし public client に refresh を発行しない（発行時点で塞ぐ）。
 > - **B-6 jwks_uri**: private_key_jwt の鍵ローテーション対応（`JwksResolver`、SSRF は https-only）。
-> - **デプロイ移行**: 本番 OP は Cloud Run サービス **`rust-op`**（旧 `api` 関数は削除）。リソースサーバ **frog-crud-api**（api.sonrisa.co.jp）が DCR 登録の private_key_jwt クライアントで introspection + mandate 消費。詳細はメモリ project-rust-op-deployment。
+> - **デプロイ移行**: 本番 OP は Cloud Run サービス **`rust-op`**（旧 `api` 関数は削除。2026-11 に `rust-idp` へ改名）。リソースサーバ **frog-crud-api**（api.sonrisa.co.jp）が DCR 登録の private_key_jwt クライアントで introspection + mandate 消費。詳細はメモリ project-rust-op-deployment。
 > - **検知の修復**: ログメトリクス/アラート 5 本が移行で `service_name="api"` のまま壊れていたのを `rust-op` に修正し、refresh_reuse アラートを追加。
 > - **最小権限**: frog-crud-api を広域 default SA → 専用 SA（`frog-crud-api-runtime`、datastore.user + 当該 secret のみ）。rust-op は `rust-op-runtime`。RS 秘密鍵は Secret Manager 管理。
 > - **不採用**: mTLS / 証明書束縛トークン (RFC 8705) はインフラ追加コストのため見送り（sender-binding は DPoP で担保）。

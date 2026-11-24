@@ -66,6 +66,9 @@ if [[ "$prev_prod_image" == "$new_image" ]]; then
   exit 1
 fi
 
+domain_routes_to "${PROD_URL#https://}" "$PROD_SERVICE"
+domain_routes_to "${STAGING_URL#https://}" "$STAGING_SERVICE"
+
 if (( APPLY == 0 )); then
   echo "[dry-run]"
   exit 0

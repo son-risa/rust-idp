@@ -20,6 +20,8 @@ REGION="${REGION:-asia-northeast1}"
 PROD_SERVICE="${PROD_SERVICE:-rust-idp}"
 STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
 
+domain_routes_to oidc.sonrisa.co.jp "$PROD_SERVICE"
+
 APPLY=0
 FORCE_IMAGE=""
 while [[ $# -gt 0 ]]; do

@@ -77,6 +77,20 @@ set_global_tag() {  # $1=digest参照 $2=タグ名: 全パッケージから同�
   move_ar_tag "$digest_ref" "$tag"
 }
 
+domain_routes_to() {  # $1=ドメイン $2=service: ドメインのマッピングがそのサービスに向いていなければ非0
+  # 向いていないサービスへ入れても、スモークテストは別のサービスが返す 200 で通ってしまう
+  # （2026-11 の改名で、旧サービスにドメインが残っている間がそうなる）。
+  # gcloud の run domain-mappings は beta にしか無く、CI の gcloud に beta が入っている保証が無いので API を直に読む。
+  local domain="$1" service="$2" route
+  route="$(curl -sf -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://${REGION}-run.googleapis.com/apis/domains.cloudrun.com/v1/namespaces/${PROJECT}/domainmappings/${domain}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["spec"]["routeName"])')" || route=""
+  if [[ "$route" != "$service" ]]; then
+    echo "ERROR: ${domain} は ${service} でなく '${route}' に向いています。" >&2
+    return 1
+  fi
+}
+
 smoke_test_url() {  # $1=base_url: 既知のエンドポイントを確認し、いずれか失敗すれば非0を返す
   local base_url="$1" path code failed=0
   for path in "/oidc/.well-known/openid-configuration" "/oidc/jwks"; do

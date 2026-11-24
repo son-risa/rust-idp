@@ -3,7 +3,7 @@
 [Zero Trust 自己評価](./zero-trust-assessment.md) の領域4（Behavioral monitoring）**Foundation tier** の実体。
 枠組みの Foundation は「**期待される挙動を手で定義**し、**逸脱に閾値ベースのアラート**を張る」こと。
 
-rust-op は Cloud Run + Cloud Logging 上で動くため、責務は2つに分かれる:
+rust-idp は Cloud Run + Cloud Logging 上で動くため（サービス名は 2026-11 に `rust-op` から `rust-idp` へ変えた。旧サービスを消すまで、実際の指標と警報は両方の名前を見る）、責務は2つに分かれる:
 - **アプリ（コード, 実装済）**: アラート可能なセキュリティイベントを構造化ログで一貫して emit する。
 - **監視（Cloud Monitoring, config）**: そのイベントに log-based metric ＋閾値アラートポリシーを張る。
 
