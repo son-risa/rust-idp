@@ -51,19 +51,19 @@ salt＋候補照合で（未設定時は平文 SHA256 ゆえ推測耐性は弱�
 gcloud logging metrics create rust_op_client_auth_failed \
   --project=fido2-8b943 \
   --description="token endpoint client auth failures (credential attack signal)" \
-  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="api" jsonPayload.fields.event="client_auth_failed"'
+  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="rust-idp" jsonPayload.fields.event="client_auth_failed"'
 
 # kms_sign_failed（0 が正常・1 件で警報）
 gcloud logging metrics create rust_op_kms_sign_failed \
   --project=fido2-8b943 \
   --description="KMS signing failures (integrity/availability)" \
-  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="api" jsonPayload.fields.event="kms_sign_failed"'
+  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="rust-idp" jsonPayload.fields.event="kms_sign_failed"'
 
 # 5xx（http_request の status>=500）
 gcloud logging metrics create rust_op_http_5xx \
   --project=fido2-8b943 \
   --description="server-side 5xx rate" \
-  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="api" jsonPayload.fields.event="http_request" jsonPayload.fields.status>=500'
+  --log-filter='resource.type="cloud_run_revision" resource.labels.service_name="rust-idp" jsonPayload.fields.event="http_request" jsonPayload.fields.status>=500'
 ```
 
 `login_failed` / `dcr_client_registered` も同様に `jsonPayload.fields.event="..."` で作成。

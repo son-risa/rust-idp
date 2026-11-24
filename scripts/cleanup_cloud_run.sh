@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cloud Run (rust-op / rust-op-staging) の古いコンテナイメージ・リビジョンを削除する。
+# Cloud Run (rust-idp / rust-idp-staging) の古いコンテナイメージ・リビジョンを削除する。
 # Artifact Registry のクリーンアップポリシーは実行タイミングが不透明なため、
 # デプロイ側で確実に保持数を制御する（ops/cleanup-cloud-run-artifacts）。
 #
@@ -23,7 +23,8 @@ PROJECT="${PROJECT:-fido2-8b943}"
 REGION="${REGION:-asia-northeast1}"
 KEEP_IMAGES="${KEEP_IMAGES:-10}"
 KEEP_REVISIONS="${KEEP_REVISIONS:-5}"
-SERVICES=(rust-op rust-op-staging)
+# rust-op・rust-op-staging は改名前のサービス。消した後は「特定できず」で飛ばされる。
+SERVICES=(rust-idp rust-idp-staging rust-op rust-op-staging)
 
 APPLY=0
 if [[ "${1:-}" == "--apply" ]]; then

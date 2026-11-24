@@ -2,7 +2,7 @@
 # 直前の promote.sh が rollback-candidate タグを付けたイメージ(=入れ替え前の本番)を
 # 本番へ再デプロイする。再ビルドはしない。
 #
-# 安全確認: rust-op-staging の現在の中身が、記録した rollback-candidate と一致しない場合は
+# 安全確認: rust-idp-staging の現在の中身が、記録した rollback-candidate と一致しない場合は
 # 拒否する。次のリリース検証で既に staging が上書きされている場合、誤ってその「検証中の
 # 新バージョン」を本番へロールバックとして流し込んでしまう事故を防ぐため。
 #
@@ -17,8 +17,8 @@ source "${SCRIPT_DIR}/lib_cloud_run.sh"
 
 PROJECT="${PROJECT:-fido2-8b943}"
 REGION="${REGION:-asia-northeast1}"
-PROD_SERVICE="${PROD_SERVICE:-rust-op}"
-STAGING_SERVICE="${STAGING_SERVICE:-rust-op-staging}"
+PROD_SERVICE="${PROD_SERVICE:-rust-idp}"
+STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
 
 APPLY=0
 FORCE_IMAGE=""
@@ -52,7 +52,7 @@ else
   fi
   current_staging_image="$(traffic100_image "$STAGING_SERVICE")"
   if [[ "$current_staging_image" != "$candidate" ]]; then
-    echo "ERROR: rust-op-staging の現在のイメージが記録済み rollback-candidate と一致しません。" >&2
+    echo "ERROR: ${STAGING_SERVICE} の現在のイメージが記録済み rollback-candidate と一致しません。" >&2
     echo "       既に次のリリース検証で staging が上書きされている可能性があり、安全なロールバックではありません。" >&2
     echo "       記録済み  : ${candidate}" >&2
     echo "       staging現在: ${current_staging_image}" >&2

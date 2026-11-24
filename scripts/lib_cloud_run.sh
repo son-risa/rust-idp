@@ -31,7 +31,9 @@ traffic100_image() {  # $1=service -> digest付き完全修飾イメージ参照
   echo "$image"
 }
 
-KNOWN_PACKAGES=(rust-op rust-op-staging)  # promote.sh/rollback.sh がイメージを行き来させる対象パッケージ
+# promote.sh/rollback.sh がイメージを行き来させる対象パッケージ。rust-op・rust-op-staging は
+# 2026-11 の改名前のサービスのパッケージで、改名の直後はそこにあるイメージが稼働中・rollback 先になる。
+KNOWN_PACKAGES=(rust-idp rust-idp-staging rust-op rust-op-staging)
 
 image_path_for() {  # $1=パッケージ名(サービス名と一致) -> Artifact Registry イメージパス
   # gcloud run deploy --source . はデプロイ先サービス名でイメージ名を自動採番するため、
@@ -60,7 +62,7 @@ resolve_ar_tag() {  # $1=イメージパス(パッケージ) $2=タグ名 -> dig
 set_global_tag() {  # $1=digest参照 $2=タグ名: 全パッケージから同名タグを外してから対象へ付け直す
   # AR の Docker タグはパッケージ(イメージパス)ごとに独立した名前空間を持つ。promote.sh は
   # prod<->staging でイメージを行き来させるたびに、そのイメージが元々属するパッケージが
-  # rust-op と rust-op-staging の間で入れ替わる。単純に move_ar_tag するだけだと前回タグを
+  # rust-idp と rust-idp-staging の間で入れ替わる。単純に move_ar_tag するだけだと前回タグを
   # 付けた側のパッケージに古いタグが残り続け、rollback.sh がどちらのパッケージを先に見るかで
   # 「本当に最新のrollback-candidate」ではなく古いタグを拾ってしまう事故が起きる
   # (prod-live/rollback-candidate のように「常に高々1つだけ存在すべき」タグはこちらを使う)。
