@@ -358,14 +358,17 @@ pub fn router(provider: Provider) -> Router {
 /// CookieJar は名前も %-符号から戻して読む（cookie crate の percent-encode）。`__Host%2Dsid` は `__Host-` で始まらないので
 /// ブラウザは別のサブドメインからの `Domain=` 付きでも受け取るが、読むと `__Host-sid` になり、`__Host-` の守りを迂回される。
 async fn drop_encoded_cookie_names(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    // bytes のまま組に分ける。ASCII でない組が 1 つあるだけで見出しごと読めなくなると、別のサブドメインから
+    // 植えた 1 つで印とセッションを読ませなくできるので、その組だけを落とす。
     let pairs: Vec<String> = req
         .headers()
         .get_all(header::COOKIE)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(';'))
+        .flat_map(|v| v.as_bytes().split(|b| *b == b';'))
+        .filter_map(|kv| std::str::from_utf8(kv).ok())
         .map(str::trim)
-        .filter(|kv| !kv.is_empty() && !kv.split('=').next().unwrap_or("").contains('%'))
+        .filter(|kv| !kv.is_empty() && kv.bytes().all(|b| (0x20..0x7f).contains(&b)))
+        .filter(|kv| !kv.split('=').next().unwrap_or("").contains('%'))
         .map(str::to_string)
         .collect();
     req.headers_mut().remove(header::COOKIE);

@@ -1172,6 +1172,13 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     assert!(!sign_in(format!("{}={value}", name.replacen('-', "%2D", 1))).await);
     assert!(sign_in(format!("{ix}; {}=planted", name.replacen('-', "%2D", 1))).await);
     assert!(sign_in(format!("{}=planted; {ix}", name.replacen('-', "%2D", 1))).await);
+    // ASCII でない cookie が並んでも、本物の印は読む。見出しが 2 行に分かれて来ても、どちらの行も読む。
+    let (url, h) = (format!("http://{addr}{to}"), http.clone());
+    let raw = reqwest::header::HeaderValue::from_bytes(format!("x=\u{e9}; {ix}").as_bytes()).unwrap();
+    let mixed = h.get(&url).header("cookie", raw).send().await.unwrap().text().await.unwrap();
+    assert!(mixed.contains("passkey/verify"), "{mixed}");
+    let split = h.get(&url).header("cookie", format!("{}=planted", name.replacen('-', "%2D", 1))).header("cookie", ix.as_str());
+    assert!(split.send().await.unwrap().text().await.unwrap().contains("passkey/verify"));
 
     // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、ログイン画面の代わりに入口へのリンクを出す。
     // 自動では送らない（cookie を保存しないブラウザで回り続けないため）。
