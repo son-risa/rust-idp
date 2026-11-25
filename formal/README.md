@@ -83,7 +83,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 <!-- premises: oauth_code_pkce.spthy -->
 | ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
-| P-SINGLEUSE | 認可コードは**原子的に単回消費**される（`AS_Code` が linear） | store の code 消費（単回）。回帰テスト `store::code_reuse_revokes_issued_tokens` |
+| P-SINGLEUSE | 認可コードは**原子的に単回消費**される（`AS_Code` が linear） | store の code 消費（単回）。`Store` の契約の試験 `code_reuse_revokes_issued_tokens`（メモリと Firestore の両方に当てる） |
 | P-CODEFRESH | 認可コードは**推測不能**（CSPRNG = Fr） | code 生成（乱数） |
 | P-VERIFIER | PKCE の verifier は**秘密**で、`h(verifier)=challenge` を AS が検査 | `CheckPkce`（S256 のみ受理、`auth_checks.rs`） |
 | P-CKEY | クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる） | private_key_jwt（`client_auth.rs`）。rust-idp は**公開鍵のみ保持** |
@@ -678,7 +678,7 @@ cargo kani --harness exp_in_window_spec
 
 **#3 は「スキップ」ではなく層の割当**: 認可コード単回は **Firestore の分散 CAS 原子性**に依存する。Kani は**単一プロセスの有界モデル検査器**で、
 分散ストアの原子性は射程外（見えない）。この義務は **L1（Tamarin の `Once` ＝ #1 で verified 済）** と **L4（回帰テスト
-`store::code_reuse_revokes_issued_tokens`）** で履行済み。「どの前提がどの層の責務か」を明示するのが、この演習の狙いそのもの。
+`store::tests::contract::code_reuse_revokes_issued_tokens`）** で履行済み。「どの前提がどの層の責務か」を明示するのが、この演習の狙いそのもの。
 
 **なぜ panic しえないか（#4 の核心）**: `strip_query_fragment` は `end = u.find(['?','#']).unwrap_or(u.len())` を使う。
 `str::find` は **文字単位**で走査しマッチ文字の**先頭バイト位置**を返す契約なので、`end` は**常に文字境界**（`u.len()` も境界）。
