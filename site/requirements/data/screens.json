@@ -1,0 +1,856 @@
+{
+ "SCREENS": [
+  {
+   "id": "SC-001",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "passkey でサインインする画面",
+   "parent": null,
+   "root": true,
+   "file": "src/web/login.rs:18-115",
+   "direct": "RP がブラウザを /authorize へ送り（A-003）、/login/{uid} に着く",
+   "ops": [
+    "A-005",
+    "A-007",
+    "A-008"
+   ]
+  },
+  {
+   "id": "SC-002",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "別のブラウザで始めたサインインの案内",
+   "parent": "SC-001",
+   "file": "src/web/login.rs:31-48",
+   "show_when": [
+    "interaction を始めた印（cookie）がこのブラウザに無いとき"
+   ],
+   "ops": [
+    "A-005"
+   ]
+  },
+  {
+   "id": "SC-003",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "メールで登録する画面",
+   "parent": "SC-001",
+   "file": "src/web/register.rs:24-56",
+   "ops": [
+    "A-026"
+   ]
+  },
+  {
+   "id": "SC-004",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "passkey を作り直す申し込みの画面",
+   "parent": "SC-001",
+   "file": "src/web/recover.rs:88-111",
+   "ops": [
+    "A-036"
+   ]
+  },
+  {
+   "id": "SC-005",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "登録の passkey を作る画面",
+   "parent": "SC-001",
+   "reach": "リンクで直接開く",
+   "file": "src/web/register.rs:207-313",
+   "direct": "確かめのメールのリンク（/signup/verify、アプリからは /r を経る）",
+   "ops": [
+    "A-027",
+    "A-028",
+    "A-029"
+   ]
+  },
+  {
+   "id": "SC-006",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "招待の passkey を作る画面",
+   "parent": "SC-001",
+   "reach": "リンクで直接開く",
+   "file": "src/web/register.rs:551-597",
+   "direct": "RP が招待（A-039）で受け取ったリンクを利用者に渡す",
+   "ops": [
+    "A-040",
+    "A-028",
+    "A-029"
+   ]
+  },
+  {
+   "id": "SC-007",
+   "kind": "画面",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "復旧の passkey を作る画面",
+   "parent": "SC-001",
+   "reach": "リンクで直接開く",
+   "file": "src/web/recover.rs:112-215",
+   "direct": "復旧のメールのリンク（/recover?t=…）",
+   "ops": [
+    "A-037",
+    "A-038",
+    "A-031",
+    "A-032"
+   ]
+  },
+  {
+   "id": "SC-008",
+   "kind": "メニュー",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "メールで登録する",
+   "parent": "SC-001",
+   "opens": [
+    "SC-003"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "メールで登録する画面",
+    "at": "src/web/login.rs:81"
+   },
+   "file": "src/web/login.rs:81"
+  },
+  {
+   "id": "SC-009",
+   "kind": "メニュー",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "passkey が使えない",
+   "parent": "SC-001",
+   "opens": [
+    "SC-004"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "復旧の申し込みの画面",
+    "at": "src/web/login.rs:82"
+   },
+   "file": "src/web/login.rs:82"
+  },
+  {
+   "id": "SC-010",
+   "kind": "メニュー",
+   "surface": "ログインと登録（利用者のブラウザ）",
+   "name": "取り消す",
+   "parent": "SC-001",
+   "opens": [],
+   "ops": [
+    "A-006"
+   ],
+   "dest": {
+    "t": "操作",
+    "what": "登録済みの redirect_uri へ access_denied を返す",
+    "at": "src/web/login.rs:84"
+   },
+   "file": null
+  },
+  {
+   "id": "SC-011",
+   "kind": "画面",
+   "surface": "アカウントの画面",
+   "name": "アカウントの画面（passkey と名前）",
+   "parent": null,
+   "root": true,
+   "file": "src/web/account.rs:94-292",
+   "ops": [
+    "A-030",
+    "A-031",
+    "A-032",
+    "A-033",
+    "A-034",
+    "A-035",
+    "A-018"
+   ],
+   "show_when": [
+    "セッションが無いか止まったアカウントなら、サインインのボタンだけ",
+    "名前を保存・passkey を足す・消すは、最近 passkey で確かめたセッションのとき"
+   ]
+  },
+  {
+   "id": "SC-012",
+   "kind": "メニュー",
+   "surface": "アカウントの画面",
+   "name": "passkey が使えない",
+   "parent": "SC-011",
+   "opens": [
+    "SC-004"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "復旧の申し込みの画面",
+    "at": "src/web/account.rs:113"
+   },
+   "file": "src/web/account.rs:113"
+  },
+  {
+   "id": "SC-013",
+   "kind": "メニュー",
+   "surface": "アカウントの画面",
+   "name": "アプリに戻る",
+   "parent": "SC-011",
+   "opens": [],
+   "ops": [],
+   "dest": {
+    "t": "画面の中だけ",
+    "what": "client の入口（initiate_login_uri）へ移るだけで、本体に要求を出さない",
+    "at": "src/web/account.rs:165-172"
+   },
+   "file": "src/web/account.rs:169"
+  },
+  {
+   "id": "SC-014",
+   "kind": "メニュー",
+   "surface": "アカウントの画面",
+   "name": "サインアウト",
+   "parent": "SC-011",
+   "opens": [],
+   "ops": [
+    "A-014"
+   ],
+   "dest": {
+    "t": "操作",
+    "what": "セッションを消す（確かめの form）",
+    "at": "src/web/account.rs:184"
+   },
+   "file": null
+  },
+  {
+   "id": "SC-015",
+   "kind": "画面",
+   "surface": "CIBA の承認",
+   "name": "CIBA の要求を承認する画面",
+   "parent": null,
+   "root": true,
+   "file": "src/web/ciba.rs:279-366",
+   "ops": [
+    "A-020",
+    "A-023",
+    "A-024",
+    "A-025"
+   ],
+   "show_when": [
+    "サインインしていなければ、サインインへの案内だけ"
+   ]
+  },
+  {
+   "id": "SC-016",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "管理画面の表紙",
+   "parent": null,
+   "root": true,
+   "file": "src/web/admin.rs:143-158",
+   "ops": [
+    "A-048"
+   ],
+   "show_when": [
+    "管理者だけ（未ログインはサインインへ、管理者でなければ 403）"
+   ]
+  },
+  {
+   "id": "SC-017",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "利用者の一覧",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:162-215",
+   "ops": [
+    "A-049"
+   ]
+  },
+  {
+   "id": "SC-018",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "利用者の詳しい画面",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:217-371",
+   "ops": [
+    "A-050",
+    "A-041",
+    "A-042",
+    "A-043",
+    "A-044",
+    "A-045",
+    "A-046"
+   ],
+   "show_when": [
+    "止める: 相手が止まっておらず、自分でないとき",
+    "戻す: 相手が止めてあるとき",
+    "消す: 相手が止めてあり、管理者でないとき",
+    "passkey だけ消す: 相手が自分でも管理者でもないとき",
+    "管理者にする・外す: 相手が管理者でない・管理者のとき"
+   ]
+  },
+  {
+   "id": "SC-019",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "client の一覧",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:604-635",
+   "ops": [
+    "A-052"
+   ]
+  },
+  {
+   "id": "SC-020",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "client の詳しい画面",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:637-747",
+   "ops": [
+    "A-053",
+    "A-054",
+    "A-055"
+   ]
+  },
+  {
+   "id": "SC-021",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "IAT の一覧",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:888-961",
+   "ops": [
+    "A-056",
+    "A-058"
+   ]
+  },
+  {
+   "id": "SC-022",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "IAT を発行する画面",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:985-1139",
+   "ops": [
+    "A-057"
+   ]
+  },
+  {
+   "id": "SC-023",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "発行した IAT を一度だけ見せる画面",
+   "parent": "SC-016",
+   "reach": "リンクで直接開く",
+   "file": "src/web/admin.rs:1141-1211",
+   "direct": "発行（A-057）の後に送られる。1 度見せたら消える",
+   "ops": [
+    "A-059"
+   ]
+  },
+  {
+   "id": "SC-024",
+   "kind": "画面",
+   "surface": "管理画面",
+   "name": "監査の記録",
+   "parent": "SC-016",
+   "file": "src/web/admin.rs:567-602",
+   "ops": [
+    "A-051"
+   ]
+  },
+  {
+   "id": "SC-025",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "表紙",
+   "parent": "SC-016",
+   "opens": [
+    "SC-016"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "管理画面の表紙",
+    "at": "src/web/admin.rs:82"
+   },
+   "file": "src/web/admin.rs:82"
+  },
+  {
+   "id": "SC-026",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "利用者",
+   "parent": "SC-016",
+   "opens": [
+    "SC-017"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "利用者の一覧",
+    "at": "src/web/admin.rs:83"
+   },
+   "file": "src/web/admin.rs:83"
+  },
+  {
+   "id": "SC-027",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "client",
+   "parent": "SC-016",
+   "opens": [
+    "SC-019"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "client の一覧",
+    "at": "src/web/admin.rs:84"
+   },
+   "file": "src/web/admin.rs:84"
+  },
+  {
+   "id": "SC-028",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "IAT",
+   "parent": "SC-016",
+   "opens": [
+    "SC-021"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "IAT の一覧",
+    "at": "src/web/admin.rs:85"
+   },
+   "file": "src/web/admin.rs:85"
+  },
+  {
+   "id": "SC-029",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "監査",
+   "parent": "SC-016",
+   "opens": [
+    "SC-024"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "監査の記録",
+    "at": "src/web/admin.rs:86"
+   },
+   "file": "src/web/admin.rs:86"
+  },
+  {
+   "id": "SC-030",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "ログアウト",
+   "parent": "SC-016",
+   "opens": [],
+   "ops": [
+    "A-014"
+   ],
+   "dest": {
+    "t": "操作",
+    "what": "セッションを消す（確かめの form）",
+    "at": "src/web/admin.rs:81"
+   },
+   "file": "src/web/admin.rs:87"
+  },
+  {
+   "id": "SC-031",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "利用者の行",
+   "parent": "SC-017",
+   "opens": [
+    "SC-018"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "利用者の詳しい画面",
+    "at": "src/web/admin.rs:202"
+   },
+   "file": "src/web/admin.rs:202"
+  },
+  {
+   "id": "SC-032",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "client の行",
+   "parent": "SC-019",
+   "opens": [
+    "SC-020"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "client の詳しい画面",
+    "at": "src/web/admin.rs:623"
+   },
+   "file": "src/web/admin.rs:623"
+  },
+  {
+   "id": "SC-033",
+   "kind": "メニュー",
+   "surface": "管理画面",
+   "name": "発行する",
+   "parent": "SC-021",
+   "opens": [
+    "SC-022"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "IAT を発行する画面",
+    "at": "src/web/admin.rs:933"
+   },
+   "file": "src/web/admin.rs:933"
+  },
+  {
+   "id": "SC-034",
+   "kind": "画面でない面",
+   "surface": "メール",
+   "name": "確かめのメール（登録のリンク）",
+   "parent": null,
+   "root": true,
+   "file": "src/mailer.rs:46-58",
+   "ops": [
+    "A-026",
+    "A-071"
+   ],
+   "opens": [
+    "SC-005"
+   ]
+  },
+  {
+   "id": "SC-035",
+   "kind": "画面でない面",
+   "surface": "メール",
+   "name": "登録済みの知らせのメール",
+   "parent": null,
+   "root": true,
+   "file": "src/mailer.rs:60-72",
+   "ops": [
+    "A-026",
+    "A-071"
+   ]
+  },
+  {
+   "id": "SC-036",
+   "kind": "画面でない面",
+   "surface": "メール",
+   "name": "復旧のメール",
+   "parent": null,
+   "root": true,
+   "file": "src/mailer.rs:74-88",
+   "ops": [
+    "A-026",
+    "A-036",
+    "A-071"
+   ],
+   "opens": [
+    "SC-007"
+   ]
+  },
+  {
+   "id": "SC-037",
+   "kind": "画面でない面",
+   "surface": "メール",
+   "name": "passkey が足された知らせのメール",
+   "parent": null,
+   "root": true,
+   "file": "src/mailer.rs:90-98",
+   "ops": [
+    "A-038",
+    "A-071"
+   ]
+  },
+  {
+   "id": "SC-038",
+   "kind": "画面",
+   "surface": "試しの RP",
+   "name": "試しの RP の入口",
+   "parent": null,
+   "root": true,
+   "file": "src/web/pages.rs:9-58",
+   "ops": [
+    "A-060"
+   ]
+  },
+  {
+   "id": "SC-039",
+   "kind": "画面",
+   "surface": "試しの RP",
+   "name": "試しの RP の profile の画面",
+   "parent": "SC-038",
+   "reach": "リンクで直接開く",
+   "file": "src/web/pages.rs:60-250",
+   "direct": "認可の後に /callback へ送り返される",
+   "ops": [
+    "A-060",
+    "A-009",
+    "A-016",
+    "A-017",
+    "A-018",
+    "A-020",
+    "A-023",
+    "A-024",
+    "A-025"
+   ]
+  },
+  {
+   "id": "SC-040",
+   "kind": "メニュー",
+   "surface": "試しの RP",
+   "name": "サインイン",
+   "parent": "SC-038",
+   "opens": [],
+   "ops": [
+    "A-003"
+   ],
+   "dest": {
+    "t": "操作",
+    "what": "/authorize へ送る",
+    "at": "src/web/pages.rs:28-42"
+   },
+   "file": null
+  },
+  {
+   "id": "SC-041",
+   "kind": "メニュー",
+   "surface": "試しの RP",
+   "name": "ログアウト",
+   "parent": "SC-039",
+   "opens": [],
+   "ops": [
+    "A-014"
+   ],
+   "dest": {
+    "t": "操作",
+    "what": "/end-session へ送る",
+    "at": "src/web/pages.rs:130-139"
+   },
+   "file": null
+  },
+  {
+   "id": "SC-042",
+   "kind": "メニュー",
+   "surface": "CIBA の承認",
+   "name": "サインイン",
+   "parent": "SC-015",
+   "opens": [
+    "SC-038"
+   ],
+   "ops": [],
+   "dest": {
+    "t": "移る",
+    "what": "試しの RP の入口（未ログインのとき）",
+    "at": "src/web/ciba.rs:290"
+   },
+   "file": "src/web/ciba.rs:290"
+  }
+ ],
+ "CHECK": {
+  "deny_on_screen": [],
+  "no_screen": [
+   {
+    "op": "A-001",
+    "obj": "発見の文書（.well-known/openid-configuration）",
+    "verb": "",
+    "type": "取得",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-002",
+    "obj": "署名の公開鍵（jwks）",
+    "verb": "",
+    "type": "一覧",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-004",
+    "obj": "認可の要求（authorize）",
+    "verb": "再開する",
+    "type": "動作",
+    "why": "画面を出さない道（サインインの後にブラウザが送られ、RP へ code を返す）"
+   },
+   {
+    "op": "A-010",
+    "obj": "token（access・refresh）",
+    "verb": "",
+    "type": "取得",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-011",
+    "obj": "支払いの委任（mandate）",
+    "verb": "使い切る",
+    "type": "動作",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-012",
+    "obj": "client",
+    "verb": "",
+    "type": "追加",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-013",
+    "obj": "token（access・refresh）",
+    "verb": "失効させる",
+    "type": "動作",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-015",
+    "obj": "認可の要求の預け（par）",
+    "verb": "",
+    "type": "追加",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-019",
+    "obj": "CIBA の要求（backchannel-authentication）",
+    "verb": "",
+    "type": "追加",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-021",
+    "obj": "CIBA の要求（ciba/history）",
+    "verb": "",
+    "type": "一覧",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-022",
+    "obj": "端末の通知先（ciba/fcm-tokens）",
+    "verb": "",
+    "type": "追加",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-039",
+    "obj": "招待（invites）",
+    "verb": "",
+    "type": "追加",
+    "why": "API だけ（RP・RS・端末のアプリが呼ぶ）"
+   },
+   {
+    "op": "A-047",
+    "obj": "管理者（admins）",
+    "verb": "",
+    "type": "取得",
+    "why": "API だけ（管理者かを確かめる。管理画面の画面は呼ばない）"
+   },
+   {
+    "op": "A-061",
+    "obj": "道の送り返し",
+    "verb": "BASE_PATH へ送る",
+    "type": "動作",
+    "why": "送り返しの道だけ（画面を出さずに送る）"
+   },
+   {
+    "op": "A-062",
+    "obj": "メールのリンク（r）",
+    "verb": "アプリか画面へ渡す",
+    "type": "動作",
+    "why": "送り返しの道だけ（メールのリンクを、アプリか登録の passkey を作る画面へ渡す）"
+   },
+   {
+    "op": "A-063",
+    "obj": "アプリの関連づけ（apple-app-site-association）",
+    "verb": "",
+    "type": "取得",
+    "why": "端末の OS（iOS）が読むだけ"
+   },
+   {
+    "op": "A-064",
+    "obj": "FIDO の適合試験の登録（fido/attestation）",
+    "verb": "試しに登録する",
+    "type": "動作",
+    "why": "FIDO の適合試験の道だけ（本番では置かない）"
+   },
+   {
+    "op": "A-065",
+    "obj": "FIDO の適合試験の認証（fido/assertion）",
+    "verb": "試しに認証する",
+    "type": "動作",
+    "why": "FIDO の適合試験の道だけ（本番では置かない）"
+   },
+   {
+    "op": "A-066",
+    "obj": "FIDO の MDS（fido/mds）",
+    "verb": "試しの MDS を確かめる・置く",
+    "type": "動作",
+    "why": "FIDO の適合試験の道だけ（本番では置かない）"
+   },
+   {
+    "op": "A-067",
+    "obj": "client",
+    "verb": "静的な client を移す",
+    "type": "動作",
+    "why": "運用の道具（CLI）だけ"
+   },
+   {
+    "op": "A-068",
+    "obj": "passkey",
+    "verb": "置き場を移す",
+    "type": "動作",
+    "why": "運用の道具（CLI）だけ"
+   },
+   {
+    "op": "A-069",
+    "obj": "期限の切れた記録",
+    "verb": "掃除する",
+    "type": "動作",
+    "why": "内部のきっかけで動く"
+   },
+   {
+    "op": "A-070",
+    "obj": "端末への通知（FCM）",
+    "verb": "送る",
+    "type": "動作",
+    "why": "内部のきっかけで動く"
+   },
+   {
+    "op": "A-072",
+    "obj": "監査の記録（audit）",
+    "verb": "",
+    "type": "追加",
+    "why": "内部のきっかけで動く"
+   }
+  ],
+  "link_only": [
+   {
+    "screen": "SC-005",
+    "how": "確かめのメールのリンク（/signup/verify、アプリからは /r を経る）"
+   },
+   {
+    "screen": "SC-006",
+    "how": "RP が招待（A-039）で受け取ったリンクを利用者に渡す"
+   },
+   {
+    "screen": "SC-007",
+    "how": "復旧のメールのリンク（/recover?t=…）"
+   },
+   {
+    "screen": "SC-023",
+    "how": "発行（A-057）の後に送られる。1 度見せたら消える"
+   },
+   {
+    "screen": "SC-039",
+    "how": "認可の後に /callback へ送り返される"
+   }
+  ],
+  "no_core": [],
+  "unresolved_pair": [],
+  "component_unused": []
+ }
+}

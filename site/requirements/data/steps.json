@@ -1,0 +1,350 @@
+[
+ {
+  "id": "T-00",
+  "goal": "rust-idp を本番へ入れる",
+  "checked": "無し（本番では通していない）",
+  "source": "2026-11-25 に 8f3fe0f のコードを読んで組んだ",
+  "steps": [
+   {
+    "id": "T-00-1",
+    "stage": "外部の準備",
+    "who": "運用者",
+    "proof": "none",
+    "does": "GCP の project に Firestore・KMS の署名鍵（ES256・RS256）・Secret Manager を用意する。メールを送るなら Resend の API 鍵を取る",
+    "ops": [],
+    "screens": [],
+    "settings": [],
+    "ext": [
+     "X-01",
+     "X-02",
+     "X-03",
+     "X-06"
+    ],
+    "xops": [],
+    "dm": [],
+    "provider": "Google Cloud・Resend"
+   },
+   {
+    "id": "T-00-2",
+    "stage": "配備の設定",
+    "who": "運用者",
+    "proof": "guide",
+    "does": "Cloud Run に配備し、issuer を決める ORIGIN・BASE_PATH と、つなぎ先の GCLOUD_PROJECT（必須）・KMS_ES256_KEY・KMS_RS256_KEY・RESEND_API_KEY・MAIL_FROM を env に置く。メールのリンクを端末のアプリで受けるなら APP_NAME・APP_SCHEME・APP_ANDROID_PACKAGE・APPLE_APP_ID も置く（README の env の表）",
+    "ops": [],
+    "screens": [],
+    "settings": [
+     "ST-031",
+     "ST-006",
+     "ST-021",
+     "ST-025",
+     "ST-026",
+     "ST-033",
+     "ST-030",
+     "ST-002",
+     "ST-003",
+     "ST-004",
+     "ST-005",
+     "ST-035"
+    ],
+    "ext": [
+     "X-09"
+    ],
+    "xops": [],
+    "dm": [],
+    "provider": "Google Cloud"
+   }
+  ]
+ },
+ {
+  "id": "T-01",
+  "goal": "RP（client）を登録する",
+  "checked": "無し（本番では通していない）",
+  "source": "2026-11-25 に 8f3fe0f のコードを読んで組んだ",
+  "needs": [
+   "T-00",
+   "T-04"
+  ],
+  "steps": [
+   {
+    "id": "T-01-1",
+    "stage": "物×処理",
+    "who": "管理者",
+    "proof": "guide",
+    "does": "管理画面の IAT の画面で、profile・期限・使い回しを選んで IAT を発行する",
+    "ops": [
+     "A-057"
+    ],
+    "screens": [
+     "SC-022"
+    ],
+    "settings": [],
+    "ext": [],
+    "xops": [
+     "XO-029",
+     "XO-033"
+    ],
+    "dm": [
+     "D-013",
+     "D-005"
+    ],
+    "rel": "他"
+   },
+   {
+    "id": "T-01-2",
+    "stage": "物×処理",
+    "who": "管理者",
+    "proof": "guide",
+    "does": "続けて開く一度だけ見せる画面で、生の IAT を写す（見られるのは発行した管理者だけ）",
+    "ops": [
+     "A-059"
+    ],
+    "screens": [
+     "SC-023"
+    ],
+    "settings": [],
+    "ext": [],
+    "xops": [
+     "XO-034"
+    ],
+    "dm": [
+     "D-005"
+    ],
+    "rel": "自"
+   },
+   {
+    "id": "T-01-3",
+    "stage": "物×処理",
+    "who": "匿名",
+    "proof": "none",
+    "does": "RP の作り手が、受け取った IAT を Bearer に付けて /oauth/register を呼び、client を作る（IAT の制約の内に限る）",
+    "ops": [
+     "A-012"
+    ],
+    "screens": [],
+    "settings": [],
+    "ext": [
+     "X-03"
+    ],
+    "xops": [
+     "XO-030",
+     "XO-025"
+    ],
+    "dm": [
+     "D-013",
+     "D-011"
+    ]
+   },
+   {
+    "id": "T-01-4",
+    "stage": "配備の設定",
+    "who": "運用者",
+    "proof": "none",
+    "does": "RP と別の client の RS が、RP に出た access token を /introspect で引き、mandate を /oauth/mandate/consume で使い切るなら、RS の client id を INTROSPECTION_CLIENT_IDS に載せて配備し直す（載せなければ自分に出た token しか引けない）",
+    "ops": [],
+    "screens": [],
+    "settings": [
+     "ST-023"
+    ],
+    "ext": [],
+    "xops": [],
+    "dm": []
+   }
+  ]
+ },
+ {
+  "id": "T-02",
+  "goal": "利用者を招待して登録させる",
+  "checked": "無し（本番では通していない）",
+  "source": "2026-11-25 に 8f3fe0f のコードを読んで組んだ",
+  "needs": [
+   "T-01"
+  ],
+  "steps": [
+   {
+    "id": "T-02-1",
+    "stage": "配備の設定",
+    "who": "運用者",
+    "proof": "none",
+    "does": "招待を許す confidential な client の id を INVITE_CLIENT_IDS に載せて配備し直す",
+    "ops": [],
+    "screens": [],
+    "settings": [
+     "ST-024"
+    ],
+    "ext": [],
+    "xops": [],
+    "dm": []
+   },
+   {
+    "id": "T-02-2",
+    "stage": "物×処理",
+    "who": "RP",
+    "proof": "none",
+    "does": "RP が client 認証を付けて /invites に宛先のメールアドレスを送り、登録のリンクを受け取って利用者に渡す",
+    "ops": [
+     "A-039"
+    ],
+    "screens": [],
+    "settings": [],
+    "ext": [],
+    "xops": [
+     "XO-046"
+    ],
+    "dm": [
+     "D-014"
+    ],
+    "rel": "自"
+   },
+   {
+    "id": "T-02-3",
+    "stage": "物×処理",
+    "who": "匿名",
+    "proof": "guide",
+    "does": "利用者がリンクを開き、名前を入れて passkey を作る。終わると RP の return_to へ戻る",
+    "ops": [
+     "A-040",
+     "A-028",
+     "A-029"
+    ],
+    "screens": [
+     "SC-006"
+    ],
+    "settings": [],
+    "ext": [],
+    "xops": [
+     "XO-047",
+     "XO-044",
+     "XO-036",
+     "XO-040",
+     "XO-048",
+     "XO-050"
+    ],
+    "dm": [
+     "D-014",
+     "D-025",
+     "D-003",
+     "D-012",
+     "D-021"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "T-03",
+  "goal": "passkey を失った利用者が復旧する",
+  "checked": "無し（本番では通していない）",
+  "source": "2026-11-25 に 8f3fe0f のコードを読んで組んだ",
+  "needs": [
+   "T-00"
+  ],
+  "steps": [
+   {
+    "id": "T-03-1",
+    "stage": "物×処理",
+    "who": "利用者",
+    "proof": "guide",
+    "does": "サインインの画面の「passkey が使えない」から、登録したメールアドレスを送る",
+    "ops": [
+     "A-036"
+    ],
+    "screens": [
+     "SC-004"
+    ],
+    "settings": [],
+    "ext": [
+     "X-06"
+    ],
+    "xops": [
+     "XO-046",
+     "XO-070"
+    ],
+    "dm": [
+     "D-014"
+    ],
+    "rel": "自"
+   },
+   {
+    "id": "T-03-2",
+    "stage": "物×処理",
+    "who": "利用者",
+    "proof": "guide",
+    "does": "届いた復旧のメールのリンクを、使いたい端末で 15 分の内に開き、新しい passkey を作る。前の passkey とセッション・token は失効し、知らせのメールが届く",
+    "ops": [
+     "A-037",
+     "A-038"
+    ],
+    "screens": [
+     "SC-036",
+     "SC-007",
+     "SC-037"
+    ],
+    "settings": [],
+    "ext": [
+     "X-06"
+    ],
+    "xops": [
+     "XO-047",
+     "XO-040",
+     "XO-071"
+    ],
+    "dm": [
+     "D-014",
+     "D-012",
+     "D-024"
+    ],
+    "rel": "自"
+   }
+  ]
+ },
+ {
+  "id": "T-04",
+  "goal": "管理者を足す",
+  "checked": "無し（本番では通していない）",
+  "source": "2026-11-25 に 8f3fe0f のコードを読んで組んだ",
+  "needs": [
+   "T-00"
+  ],
+  "steps": [
+   {
+    "id": "T-04-1",
+    "stage": "配備の設定",
+    "who": "運用者",
+    "proof": "none",
+    "does": "最初の管理者は、運用者が運用の道具（CLI）の grant-admin で、登録済みのアカウントを名指して作る（src/gcp.rs:406）",
+    "ops": [],
+    "screens": [],
+    "settings": [],
+    "ext": [
+     "X-03"
+    ],
+    "xops": [
+     "XO-052"
+    ],
+    "dm": []
+   },
+   {
+    "id": "T-04-2",
+    "stage": "物×処理",
+    "who": "管理者",
+    "proof": "guide",
+    "does": "管理画面の利用者の詳しい画面で「管理者にする」を押す",
+    "ops": [
+     "A-045"
+    ],
+    "screens": [
+     "SC-017",
+     "SC-018"
+    ],
+    "settings": [],
+    "ext": [],
+    "xops": [
+     "XO-052"
+    ],
+    "dm": [
+     "D-006"
+    ],
+    "rel": "他"
+   }
+  ]
+ }
+]

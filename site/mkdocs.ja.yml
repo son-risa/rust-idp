@@ -62,6 +62,6 @@ nav:
   - 使い始める: get-started.md
   - 検証: verification.md
   - 要件:
-      - 要件一覧: requirements/index.md
+      - 要件一覧: ../requirements/
       - 要件一覧の決まり: requirements/rules.md
   - 設計の文書: design-docs.md
