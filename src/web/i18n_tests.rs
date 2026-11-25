@@ -487,6 +487,7 @@ async fn admin_pages_follow_the_browser_language() {
             let doc = serde_json::json!({
                 "raw_token": crate::firestore::s("raw"),
                 "expires_at": crate::firestore::int(expires_at),
+                "minted_by": crate::firestore::s("acc-me"),
             });
             fsr.set_doc("adminIatFlash", &flash, doc).await.unwrap();
             body_of(admin::iat_show_once(State(p.clone()), h, jar.clone(), Path(flash)).await).await

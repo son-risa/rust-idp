@@ -158,43 +158,15 @@ async fn finalize_login(
 
 /* ===== passkey ログイン ===== */
 
-#[derive(serde::Deserialize)]
-pub(super) struct LoginPkOptionsReq {
-    #[serde(default)]
-    email: String,
-}
-
-pub(super) async fn login_passkey_options(
-    State(p): State<Arc<Provider>>,
-    Path(uid): Path<String>,
-    Json(req): Json<LoginPkOptionsReq>,
-) -> Response {
+/// 常に discoverable（allowCredentials 空）で返し、利用者は verify で assertion の userHandle から引く。
+/// 本文（email 等）は読まない。email で allowCredentials を絞ると、登録の有無と credential id が
+/// 外から分かってしまうため。
+pub(super) async fn login_passkey_options(State(p): State<Arc<Provider>>, Path(uid): Path<String>) -> Response {
     let fs = match &p.firestore {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    let email = req.email.trim().to_lowercase();
-    // email 指定があり credential があれば allowCredentials を絞る。無指定/未登録なら
-    // discoverable（allowCredentials 空）＝OS の passkey ピッカーに全候補を出す。
-    // discoverable のときは verify 時に assertion の userHandle でユーザーを解決する。
-    let (allow, chal_email) = if email.is_empty() {
-        (serde_json::json!([]), String::new())
-    } else {
-        let creds = match crate::registration::get_account(fs, &email).await {
-            Ok(Some(a)) => crate::registration::list_credentials(fs, &a).await.unwrap_or_default(),
-            _ => vec![],
-        };
-        if creds.is_empty() {
-            (serde_json::json!([]), String::new())
-        } else {
-            let allow: Vec<_> = creds
-                .iter()
-                .map(|c| serde_json::json!({ "type": "public-key", "id": c.credential_id, "transports": ["internal", "hybrid"] }))
-                .collect();
-            (serde_json::json!(allow), email.clone())
-        }
-    };
-    let challenge = match crate::registration::create_webauthn_challenge(fs, &chal_email, crate::registration::ChallengeKind::Auth, &uid, "").await {
+    let challenge = match crate::registration::create_webauthn_challenge(fs, "", crate::registration::ChallengeKind::Auth, &uid, "").await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("create challenge: {e}");
@@ -206,7 +178,7 @@ pub(super) async fn login_passkey_options(
         "rpId": p.rp_id(),
         "timeout": 60000,
         "userVerification": "preferred",
-        "allowCredentials": allow,
+        "allowCredentials": [],
     }))
     .into_response()
 }

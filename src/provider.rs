@@ -49,6 +49,9 @@ pub struct Provider {
     pub(crate) jwks_resolver: crate::jwks_resolver::JwksResolver,
     /// 招待の登録リンク（POST /invites）の発行を許す confidential client の client_id。空なら誰にも許さない。
     pub(crate) invite_clients: Vec<String>,
+    /// ほかの client に出た access token も introspection・mandate 消費できる RS の client_id。
+    /// ここに無い client は、自分に出た token しか引けない。
+    pub(crate) introspection_clients: Vec<String>,
 }
 
 impl Provider {
@@ -94,6 +97,7 @@ impl Provider {
             response_modes,
             jwks_resolver: crate::jwks_resolver::JwksResolver::new(),
             invite_clients: Vec::new(),
+            introspection_clients: Vec::new(),
         }
     }
 
@@ -232,6 +236,11 @@ impl Provider {
 
     pub fn with_invite_clients(mut self, ids: Vec<String>) -> Self {
         self.invite_clients = ids;
+        self
+    }
+
+    pub fn with_introspection_clients(mut self, ids: Vec<String>) -> Self {
+        self.introspection_clients = ids;
         self
     }
 

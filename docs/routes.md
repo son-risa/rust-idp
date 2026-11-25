@@ -38,8 +38,8 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | POST | `/login/{uid}/passkey/options` | ブラウザ | 無し | はい | いいえ |
 | base | POST | `/login/{uid}/passkey/verify` | ブラウザ | passkey、cookie（印） | はい | いいえ |
 | base | POST | `/token` | RP | client 認証、DPoP（client が dpop_bound なら必須） | はい | いいえ |
-| base | POST | `/introspect` | RS | client 認証 | いいえ | いいえ |
-| base | POST | `/oauth/mandate/consume` | RS | client 認証 | はい | いいえ |
+| base | POST | `/introspect` | RS | client 認証（自分に出た token か、INTROSPECTION_CLIENT_IDS の client） | いいえ | いいえ |
+| base | POST | `/oauth/mandate/consume` | RS | client 認証（自分に出た token か、INTROSPECTION_CLIENT_IDS の client） | はい | いいえ |
 | base | POST | `/oauth/register` | RP | Initial Access Token（Bearer、一度きり） | はい | いいえ |
 | base | POST | `/revoke` | RP | client 認証 | はい | いいえ |
 | base | GET | `/end-session` | ブラウザ（RP から） | id_token_hint（無いか確かめに失敗すれば、確かめの画面を出すだけ） | はい | いいえ |

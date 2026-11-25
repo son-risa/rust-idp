@@ -470,6 +470,12 @@ fn require_confidential(client: &crate::model::Client) -> Result<(), OAuthError>
     Ok(())
 }
 
+/// 呼び出し元がこの token を引けるか。token を受けた client 自身か、INTROSPECTION_CLIENT_IDS に
+/// 挙げた RS だけ。ほかの confidential client には、ほかの RP の利用者の token を見せない。
+fn may_inspect(p: &Provider, caller: &crate::model::Client, at: &crate::model::AccessToken) -> bool {
+    at.client_id == caller.client_id || p.introspection_clients.iter().any(|id| id == &caller.client_id)
+}
+
 /// 有効トークンの introspection 応答本体（active=true）。
 /// DPoP 束縛トークンは cnf.jkt を含め、RS が proof と照合できるようにする。
 fn introspection_active_body(at: &crate::model::AccessToken) -> serde_json::Value {
@@ -504,7 +510,8 @@ fn introspection_active_body(at: &crate::model::AccessToken) -> serde_json::Valu
 
 /// 分離した RS 向けのトークン検証窓口。同居エンドポイント(/profile, /userinfo)は
 /// 従来どおり store 直引きで検証するため、これは外部 RS だけが使う。
-/// 呼び出し元(RS)は confidential クライアント認証必須。無効トークンは active=false のみ返す。
+/// 呼び出し元(RS)は confidential クライアント認証必須。無効トークンと、呼び出し元が引けない
+/// トークン（[`may_inspect`]）は active=false のみ返す。
 pub(super) async fn introspect(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
@@ -525,8 +532,8 @@ pub(super) async fn introspect(
     // RFC 7662 §2.2: 無効/未知/失効は active=false のみ（それ以外の情報は漏らさない）。
     // access token のみ対象。期限切れ/未知は get_access_token が None を返す。
     let body = match p.store.get_access_token(token).await {
-        Ok(Some(at)) => introspection_active_body(&at),
-        Ok(None) => serde_json::json!({ "active": false }),
+        Ok(Some(at)) if may_inspect(&p, &client, &at) => introspection_active_body(&at),
+        Ok(_) => serde_json::json!({ "active": false }),
         // active=false と答えると、RS は生きているトークンを失効扱いにする。
         Err(e) => return OAuthError::from(e).into_response(),
     };
@@ -534,7 +541,7 @@ pub(super) async fn introspect(
 }
 /// RFC 9396 mandate の単回消費窓口。RS が introspection で mandate を確認 → body と一致したら
 /// この endpoint を CAS 呼び出し → 成功した呼び出しだけ実行に進む。
-/// 認証は introspection と同じ confidential client 必須（呼べる RS を絞る）。
+/// 認証は introspection と同じ confidential client 必須で、消費できる token も introspection と同じく絞る。
 pub(super) async fn mandate_consume(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
@@ -551,6 +558,16 @@ pub(super) async fn mandate_consume(
         Some(t) => t,
         None => return OAuthError::InvalidRequest("token required".into()).into_response(),
     };
+    match p.store.get_access_token(token).await {
+        Ok(Some(at)) if may_inspect(&p, &client, &at) => {}
+        Ok(_) => {
+            return ([(header::CACHE_CONTROL, "no-store")], Json(serde_json::json!({ "consumed": false }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("mandate_consume: get_access_token: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    }
     let consumed = match p.store.consume_mandate_if_unused(token).await {
         Ok(b) => b,
         Err(e) => {
@@ -1704,6 +1721,50 @@ mod tests {
         assert!(require_confidential(&client("none")).is_err());
         assert!(require_confidential(&client("client_secret_basic")).is_ok());
         assert!(require_confidential(&client("private_key_jwt")).is_ok());
+    }
+
+    /// ほかの RP に出た token は、confidential でも INTROSPECTION_CLIENT_IDS に無い client には
+    /// 見せず、mandate も消費させない。token を受けた client 自身と、挙げた RS は引ける。
+    #[tokio::test]
+    async fn only_the_token_holder_and_listed_resource_servers_may_inspect_a_token() {
+        let confidential = |id: &str| crate::model::Client {
+            client_id: id.into(),
+            client_secret: Some(crate::dcr::hash_token("s3cret")),
+            ..client("client_secret_basic")
+        };
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_client(confidential("rp"))
+                .with_client(confidential("other-rp"))
+                .with_client(confidential("rs"))
+                .with_introspection_clients(vec!["rs".into()]),
+        );
+        let mut token = at(None);
+        token.authorization_details = Some(r#"[{"type":"payment"}]"#.into());
+        p.store.save_access_token(token).await.unwrap();
+        let basic = |id: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::AUTHORIZATION, format!("Basic {}", B64.encode(format!("{id}:s3cret"))).parse().unwrap());
+            h
+        };
+        let form = || Form(HashMap::from([("token".to_string(), "AT".to_string())]));
+        let json = |r: Response| async move {
+            serde_json::from_slice::<serde_json::Value>(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap()
+        };
+
+        let other = json(introspect(State(p.clone()), basic("other-rp"), form()).await).await;
+        assert_eq!(other, serde_json::json!({ "active": false }));
+        let other = json(mandate_consume(State(p.clone()), basic("other-rp"), form()).await).await;
+        assert_eq!(other["consumed"], false);
+        assert!(!p.store.get_access_token("AT").await.unwrap().unwrap().mandate_consumed);
+
+        let own = json(introspect(State(p.clone()), basic("rp"), form()).await).await;
+        assert_eq!(own["active"], true);
+        let rs = json(introspect(State(p.clone()), basic("rs"), form()).await).await;
+        assert_eq!(rs["active"], true);
+        assert_eq!(rs["sub"], "user@example.com");
+        let rs = json(mandate_consume(State(p.clone()), basic("rs"), form()).await).await;
+        assert_eq!(rs["consumed"], true);
     }
 
     #[test]
