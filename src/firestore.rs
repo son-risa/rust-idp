@@ -1409,6 +1409,15 @@ mod tests {
         );
     }
 
+    /// 上の試験は reqwest の関数をじかに呼ぶ。こちらは get_doc を通し、返す誤りの文に文書 ID が残らないことを見る。
+    #[tokio::test]
+    async fn get_doc_transport_error_does_not_carry_the_document_id() {
+        let fs = Firestore::new_for_test("proj", "127.0.0.1:1");
+        let err = fs.get_doc("accounts", "a@b.com").await.unwrap_err();
+        assert!(!err.contains("a%40b.com"), "誤りの文に ID が残った: {err}");
+        assert!(!err.contains("a@b.com"), "誤りの文に ID が残った: {err}");
+    }
+
     async fn fake() -> Firestore {
         let (host, _state) = fake_firestore::spawn().await;
         Firestore::new_for_test("proj", host)
