@@ -4,8 +4,24 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT"
-# 非公開バイナリ（crates.io へ publish しない）。cargo-deny の private 除外対象になる。
-publish = false
+description = "OpenID Provider (FAPI 2.0, passkeys, CIBA, DPoP) as an axum Router, with pluggable storage adapters"
+repository = "https://github.com/son-risa/rust-idp"
+homepage = "https://github.com/son-risa/rust-idp"
+documentation = "https://docs.rs/rust-idp"
+readme = "README.md"
+keywords = ["oidc", "openid", "oauth2", "fapi", "webauthn"]
+categories = ["authentication", "web-programming::http-server"]
+# crates.io へ出すのは library と binary と例、それに表示と義務に要る文書だけ。
+# formal/（Tamarin・Kani）、docs/、scripts/、.github/、Dockerfile などは出さない。
+# 先頭の / は根に固定するため（無いと gitignore と同じく formal/README.md などにも当たる）。
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/README.md",
+    "/LICENSE",
+    "/CREDITS.md",
+    "/THIRD-PARTY-LICENSES.md",
+]
 
 [features]
 default = []

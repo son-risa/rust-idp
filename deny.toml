@@ -18,8 +18,6 @@ wildcards = "warn"
 [licenses]
 version = 2
 confidence-threshold = 0.8
-# 非公開バイナリ（rust-idp 自身など license フィールド無しのワークスペースcrate）は対象外。
-private = { ignore = true }
 # 許可ライセンス（permissive のみ）。新規依存が想定外ライセンスを持ち込んだら CI で検知する。
 allow = [
     "MIT",
