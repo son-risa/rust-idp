@@ -36,15 +36,15 @@ mod document_store_contract;
 mod dpop;
 mod error;
 mod es256;
-#[cfg(test)]
-mod formal_ledger_tests;
-#[cfg(test)]
-mod fuzz_tests;
 mod fcm;
 mod fido;
 mod firestore;
 #[cfg(feature = "gcp")]
 mod firestore_store;
+#[cfg(test)]
+mod formal_ledger_tests;
+#[cfg(test)]
+mod fuzz_tests;
 #[cfg(feature = "gcp")]
 pub mod gcp;
 mod grants;
@@ -75,7 +75,9 @@ mod webauthn;
 #[doc(hidden)]
 pub use admin_command::AdminCommand;
 pub use auth_checks::AuthorizationCheck;
-pub use ciba::{AuthReqId, BackchannelAuthRequest, CibaHistoryEntry, CibaStatus, CibaStore, MemoryCibaStore};
+pub use ciba::{
+    AuthReqId, BackchannelAuthRequest, CibaHistoryEntry, CibaStatus, CibaStore, MemoryCibaStore,
+};
 pub use client_auth::{ClientAuthInput, ClientAuthMethod};
 pub use context::AddressedRequest;
 pub use dcr::hash_token;
@@ -86,8 +88,8 @@ pub use grants::GrantHandler;
 pub use jws::{Es256Signer, JwsSigner, Rs256Signer};
 pub use mailer::{LogMailer, Mailer};
 pub use model::{
-    AccessToken, Account, AuthParams, AuthorizationCode, Client, Interaction, JwkPub, RefreshToken, Session,
-    TokenResponse,
+    AccessToken, Account, AuthParams, AuthorizationCode, Client, Interaction, JwkPub, RefreshToken,
+    Session, TokenResponse,
 };
 pub use provider::{MobileApp, Provider};
 pub use response_mode::ResponseMode;

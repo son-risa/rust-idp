@@ -1,11 +1,11 @@
 //! JWS 署名の概念トレイトと、ES256(P-256) のピュア Rust 実装。
 //! 後で RS256/PS256/EdDSA を足す時はこのトレイトに impl を増やすだけ。
 
-use p256::elliptic_curve::Generate;
 use async_trait::async_trait;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+use p256::elliptic_curve::Generate;
 
 /// base64url(no-pad) エンコード。実体は es256 に集約。
 pub fn b64url(bytes: impl AsRef<[u8]>) -> String {
@@ -131,7 +131,11 @@ impl JwsSigner for Rs256Signer {
     async fn sign(&self, claims: &serde_json::Value) -> String {
         use sha2::Digest;
         let header = serde_json::json!({ "alg": "RS256", "typ": "JWT", "kid": self.kid });
-        let signing_input = format!("{}.{}", b64url(header.to_string()), b64url(claims.to_string()));
+        let signing_input = format!(
+            "{}.{}",
+            b64url(header.to_string()),
+            b64url(claims.to_string())
+        );
         let hashed = sha2::Sha256::digest(signing_input.as_bytes());
         let sig = self
             .key
@@ -154,7 +158,7 @@ impl JwsSigner for Rs256Signer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+    use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 
     fn b64d(s: &str) -> Vec<u8> {
         URL_SAFE_NO_PAD.decode(s).unwrap()
@@ -224,7 +228,10 @@ mod tests {
     #[test]
     fn kid_equals_jwk_thumbprint() {
         let signer = Es256Signer::generate();
-        assert_eq!(signer.kid, crate::es256::jwk_thumbprint_p256(&signer.x, &signer.y));
+        assert_eq!(
+            signer.kid,
+            crate::es256::jwk_thumbprint_p256(&signer.x, &signer.y)
+        );
     }
 
     #[tokio::test]
@@ -246,10 +253,18 @@ mod tests {
         let pk = RsaPublicKey::new(n, e).unwrap();
         let signing_input = format!("{}.{}", parts[0], parts[1]);
         let hashed = sha2::Sha256::digest(signing_input.as_bytes());
-        assert!(pk
-            .verify(Pkcs1v15Sign::new::<sha2::Sha256>(), &hashed, &b64d(parts[2]))
-            .is_ok());
+        assert!(
+            pk.verify(
+                Pkcs1v15Sign::new::<sha2::Sha256>(),
+                &hashed,
+                &b64d(parts[2])
+            )
+            .is_ok()
+        );
         // public_jwk の e は本物の指数（PublicKeyParts と一致）。
-        assert_eq!(b64d(jwk["e"].as_str().unwrap()), signer.key.e().to_be_bytes_trimmed_vartime().into_vec());
+        assert_eq!(
+            b64d(jwk["e"].as_str().unwrap()),
+            signer.key.e().to_be_bytes_trimmed_vartime().into_vec()
+        );
     }
 }

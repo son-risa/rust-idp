@@ -250,7 +250,13 @@ async function doRefresh(){
   fail('[[Your session has expired. Please sign in again.]]');
 })();
 </script></body></html>"##;
-    Html(localize(&page.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS), Lang::from_headers(&headers)).replace("__ISSUER__", &p.issuer))
+    Html(
+        localize(
+            &page.replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS),
+            Lang::from_headers(&headers),
+        )
+        .replace("__ISSUER__", &p.issuer),
+    )
 }
 
 #[cfg(test)]
@@ -261,10 +267,25 @@ mod tests {
     async fn the_profile_page_escapes_quotes_before_putting_values_into_attributes() {
         let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()));
         let html = demo_callback(State(p), HeaderMap::new()).await.0;
-        let esc = html.lines().find(|l| l.starts_with("function esc(")).expect("esc の定義がある");
-        for (raw, escaped) in [("<", "&lt;"), (">", "&gt;"), ("&", "&amp;"), ("\"", "&quot;"), ("'", "&#39;")] {
-            assert!(esc.contains(escaped), "esc が {raw} を {escaped} に退避しない: {esc}");
+        let esc = html
+            .lines()
+            .find(|l| l.starts_with("function esc("))
+            .expect("esc の定義がある");
+        for (raw, escaped) in [
+            ("<", "&lt;"),
+            (">", "&gt;"),
+            ("&", "&amp;"),
+            ("\"", "&quot;"),
+            ("'", "&#39;"),
+        ] {
+            assert!(
+                esc.contains(escaped),
+                "esc が {raw} を {escaped} に退避しない: {esc}"
+            );
         }
-        assert!(html.contains("value=\"'+esc(val||'')+'\""), "編集欄の value は esc を通す");
+        assert!(
+            html.contains("value=\"'+esc(val||'')+'\""),
+            "編集欄の value は esc を通す"
+        );
     }
 }

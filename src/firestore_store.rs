@@ -7,7 +7,7 @@ use crate::firestore::{self as fs_h, Firestore};
 use crate::model::*;
 use crate::store::{CodeTake, RevocationCounts, Store, StoreResult};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,7 +18,10 @@ use crate::store::{
 };
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// 系列の失効の札（refreshFamilyRevocations/{familyId}）。
@@ -81,13 +84,22 @@ impl FirestoreStore {
     /// ローテーションが replacedBy を書いた）ときもストアの誤りと同じく gone=false にし、消し直しの周で
     /// 読み直して新しい replacedBy の先まで辿る。条件なしで消すと、その間に渡った新しい RT が系列から外れて残る。
     async fn revoke_one_refresh(&self, token: &str) -> (bool, Option<String>) {
-        let (f, update_time) = match self.fs.get_doc_with_update_time("refreshTokens", token).await {
+        let (f, update_time) = match self
+            .fs
+            .get_doc_with_update_time("refreshTokens", token)
+            .await
+        {
             Ok(Some(x)) => x,
             Ok(None) => return (true, None),
             Err(_) => return (false, None),
         };
         let next = fs_h::field_str(&f, "replacedBy").map(str::to_string);
-        let gone = matches!(self.fs.delete_doc_if_unchanged("refreshTokens", token, &update_time).await, Ok(true));
+        let gone = matches!(
+            self.fs
+                .delete_doc_if_unchanged("refreshTokens", token, &update_time)
+                .await,
+            Ok(true)
+        );
         (gone, next)
     }
 }
@@ -98,7 +110,9 @@ impl FirestoreStore {
 fn issued_shape(id: &str) -> bool {
     (1..=128).contains(&id.len())
         && !id.starts_with("__")
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[async_trait]
@@ -132,13 +146,17 @@ impl Store for FirestoreStore {
             account_id: fs_h::field_str(&f, "accountId").map(str::to_string),
             auth_time: fs_h::field_u64(&f, "authTime"),
             request_uri: fs_h::field_str(&f, "requestUri").map(str::to_string),
-            browser_binding: fs_h::field_str(&f, "browserBinding").unwrap_or("").to_string(),
+            browser_binding: fs_h::field_str(&f, "browserBinding")
+                .unwrap_or("")
+                .to_string(),
         })
     }
 
     async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool {
         // 読んだ updateTime の CAS で書く。間に resume が消費（CAS 削除）していれば負けて false。
-        let Ok(Some((mut f, update_time))) = self.fs.get_doc_with_update_time("interactions", uid).await else {
+        let Ok(Some((mut f, update_time))) =
+            self.fs.get_doc_with_update_time("interactions", uid).await
+        else {
             return false;
         };
         if doc_expired(&f) {
@@ -146,7 +164,12 @@ impl Store for FirestoreStore {
         }
         f["accountId"] = fs_h::s(account_id);
         f["authTime"] = fs_h::int(auth_time);
-        matches!(self.fs.set_doc_if_unchanged("interactions", uid, f, &update_time).await, Ok(true))
+        matches!(
+            self.fs
+                .set_doc_if_unchanged("interactions", uid, f, &update_time)
+                .await,
+            Ok(true)
+        )
     }
 
     async fn consume_interaction(&self, uid: &str) -> bool {
@@ -217,7 +240,9 @@ impl Store for FirestoreStore {
         }
         // updateTime CAS で単回消費を原子化する。get→write の間に別リクエストが消費した
         // 場合は CAS が負け、二重発行を防ぐ（consume_mandate_if_unused / CIBA と同型）。
-        let Some((mut f, update_time)) = self.fs.get_doc_with_update_time("authCodes", code).await? else {
+        let Some((mut f, update_time)) =
+            self.fs.get_doc_with_update_time("authCodes", code).await?
+        else {
             return Ok(CodeTake::Unknown);
         };
         // 期限切れのコードは未知と同じ（MemoryStore の alive と同じく、期限ちょうども切れとする）。
@@ -234,7 +259,11 @@ impl Store for FirestoreStore {
         }
         // 初回消費: used=true を CAS で書く。並行消費に負けたら再利用と同じに扱う。
         f["used"] = fs_h::b(true);
-        if !self.fs.set_doc_if_unchanged("authCodes", code, f.clone(), &update_time).await? {
+        if !self
+            .fs
+            .set_doc_if_unchanged("authCodes", code, f.clone(), &update_time)
+            .await?
+        {
             return Ok(CodeTake::Reused(code_from_fields(code, &f)));
         }
         Ok(CodeTake::Fresh(code_from_fields(code, &f)))
@@ -260,7 +289,12 @@ impl Store for FirestoreStore {
         }
     }
 
-    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()> {
+    async fn link_issued_tokens(
+        &self,
+        code: &str,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> StoreResult<()> {
         let mut f = json!({ "issuedAccessToken": fs_h::s(access_token) });
         if let Some(rt) = refresh_token {
             f["issuedRefreshToken"] = fs_h::s(rt);
@@ -397,7 +431,11 @@ impl Store for FirestoreStore {
         }
         // 消費前の fields と updateTime を読み、used=false なら used=true + replacedBy を
         // updateTime 条件付き更新で書く（CAS）。並行ローテーションは高々 1 回成功。
-        let Some((mut f, ut)) = self.fs.get_doc_with_update_time("refreshTokens", token).await? else {
+        let Some((mut f, ut)) = self
+            .fs
+            .get_doc_with_update_time("refreshTokens", token)
+            .await?
+        else {
             return Ok(false);
         };
         if fs_h::field_bool(&f, "used").unwrap_or(false) {
@@ -407,11 +445,18 @@ impl Store for FirestoreStore {
         if let Some(rb) = replaced_by {
             f["replacedBy"] = fs_h::s(rb);
         }
-        Ok(self.fs.set_doc_if_unchanged("refreshTokens", token, f, &ut).await?)
+        Ok(self
+            .fs
+            .set_doc_if_unchanged("refreshTokens", token, f, &ut)
+            .await?)
     }
 
     async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> {
-        Ok(self.fs.get_doc(FAMILY_REVOCATIONS, family_id).await?.is_some_and(|f| !doc_expired(&f)))
+        Ok(self
+            .fs
+            .get_doc(FAMILY_REVOCATIONS, family_id)
+            .await?
+            .is_some_and(|f| !doc_expired(&f)))
     }
 
     async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
@@ -421,7 +466,12 @@ impl Store for FirestoreStore {
         for _ in 0..=REVOKE_RETRIES {
             // 期限は書き込みを試すたびに、その時刻から計算する（前の試みが遅れても札が短くならない）。
             let tomb = json!({ "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + REFRESH_TTL + crate::store::FAMILY_REVOCATION_MARGIN_SECS)) });
-            if self.fs.set_doc(FAMILY_REVOCATIONS, family_id, tomb).await.is_ok() {
+            if self
+                .fs
+                .set_doc(FAMILY_REVOCATIONS, family_id, tomb)
+                .await
+                .is_ok()
+            {
                 written = true;
                 break;
             }
@@ -439,7 +489,10 @@ impl Store for FirestoreStore {
             while let Some(t) = queue.pop() {
                 handled += 1;
                 if handled > REVOKE_MAX_RTS {
-                    tracing::warn!(event = "refresh_family_cleanup_truncated", limit = REVOKE_MAX_RTS);
+                    tracing::warn!(
+                        event = "refresh_family_cleanup_truncated",
+                        limit = REVOKE_MAX_RTS
+                    );
                     return;
                 }
                 let (gone, next) = self.revoke_one_refresh(&t).await;
@@ -456,7 +509,10 @@ impl Store for FirestoreStore {
             queue = std::mem::take(&mut failed);
         }
         if !failed.is_empty() {
-            tracing::warn!(event = "refresh_family_cleanup_incomplete", left = failed.len());
+            tracing::warn!(
+                event = "refresh_family_cleanup_incomplete",
+                left = failed.len()
+            );
         }
     }
 
@@ -482,15 +538,22 @@ impl Store for FirestoreStore {
         ] {
             match self.fs.query_eq(col, "accountId", account_id).await {
                 Ok(rows) => {
-                    for (id, _) in rows.iter().filter(|(id, _)| col != "sessions" || id != keep_sid) {
+                    for (id, _) in rows
+                        .iter()
+                        .filter(|(id, _)| col != "sessions" || id != keep_sid)
+                    {
                         match self.fs.delete_doc(col, id).await {
                             Ok(()) => *n += 1,
-                            Err(e) => tracing::error!("account_admin: {col} revoke failed id={id}: {e}"),
+                            Err(e) => {
+                                tracing::error!("account_admin: {col} revoke failed id={id}: {e}")
+                            }
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::error!("account_admin: {col} revocation query failed for {account_id}: {e}");
+                    tracing::error!(
+                        "account_admin: {col} revocation query failed for {account_id}: {e}"
+                    );
                     counts.query_errors.push(col);
                 }
             }
@@ -521,7 +584,11 @@ mod revoke_family_tests {
     }
 
     /// 鎖を保存し、fail の RT の削除を 1 回だけ 503 にして start から失効させ、残った RT を返す。
-    async fn left_after_revoke(chain: &[(&str, Option<&str>)], fail: &str, start: &str) -> Vec<String> {
+    async fn left_after_revoke(
+        chain: &[(&str, Option<&str>)],
+        fail: &str,
+        start: &str,
+    ) -> Vec<String> {
         let (host, state) = fake_firestore::spawn().await;
         let s = FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)));
         for (t, next) in chain {
@@ -540,18 +607,27 @@ mod revoke_family_tests {
 
     #[tokio::test]
     async fn a_failed_delete_is_retried_in_a_self_pointing_chain() {
-        assert_eq!(left_after_revoke(&[("C1", Some("C1"))], "C1", "C1").await, Vec::<String>::new());
+        assert_eq!(
+            left_after_revoke(&[("C1", Some("C1"))], "C1", "C1").await,
+            Vec::<String>::new()
+        );
     }
 
     #[tokio::test]
     async fn a_failed_delete_is_retried_in_a_two_link_cycle() {
-        assert_eq!(left_after_revoke(&[("C1", Some("C2")), ("C2", Some("C1"))], "C1", "C1").await, Vec::<String>::new());
+        assert_eq!(
+            left_after_revoke(&[("C1", Some("C2")), ("C2", Some("C1"))], "C1", "C1").await,
+            Vec::<String>::new()
+        );
     }
 
     #[tokio::test]
     async fn a_failed_delete_in_the_middle_of_a_line_is_retried() {
         let chain = [("R1", Some("R2")), ("R2", Some("R3")), ("R3", None)];
-        assert_eq!(left_after_revoke(&chain, "R2", "R1").await, Vec::<String>::new());
+        assert_eq!(
+            left_after_revoke(&chain, "R2", "R1").await,
+            Vec::<String>::new()
+        );
     }
 
     /// 失効が RT1 を読んでから消すまでの間に、RT1 のローテーション（本物の RefreshTokenGrant）が来る。
@@ -560,8 +636,12 @@ mod revoke_family_tests {
     async fn a_rotation_between_the_read_and_the_delete_does_not_let_the_new_rt_survive() {
         use crate::grants::{GrantHandler, RefreshTokenGrant};
         let (host, state) = fake_firestore::spawn().await;
-        let store = Arc::new(FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))));
-        let p = Arc::new(crate::provider::Provider::new("https://op.example").with_store(store.clone()));
+        let store = Arc::new(FirestoreStore::new(Arc::new(Firestore::new_for_test(
+            "proj", host,
+        ))));
+        let p = Arc::new(
+            crate::provider::Provider::new("https://op.example").with_store(store.clone()),
+        );
         let client = crate::model::Client {
             client_id: "rp".into(),
             redirect_uris: vec!["https://rp.example/cb".into()],
@@ -577,9 +657,16 @@ mod revoke_family_tests {
             require_pkce: false,
             id_token_signed_response_alg: None,
         };
-        let form = |t: &str| std::collections::HashMap::from([("refresh_token".to_string(), t.to_string())]);
+        let form = |t: &str| {
+            std::collections::HashMap::from([("refresh_token".to_string(), t.to_string())])
+        };
         store.save_refresh_token(rt("RT0", None)).await.unwrap();
-        let rt1 = RefreshTokenGrant.handle(&p, &client, &form("RT0"), None).await.unwrap().refresh_token.unwrap();
+        let rt1 = RefreshTokenGrant
+            .handle(&p, &client, &form("RT0"), None)
+            .await
+            .unwrap()
+            .refresh_token
+            .unwrap();
 
         let (reached, release) = state.gate("DELETE", "refreshTokens", &rt1);
         let revoking = tokio::spawn({
@@ -587,13 +674,22 @@ mod revoke_family_tests {
             async move { store.revoke_refresh_family("F", "RT0").await }
         });
         reached.notified().await;
-        let during = RefreshTokenGrant.handle(&p, &client, &form(&rt1), None).await;
+        let during = RefreshTokenGrant
+            .handle(&p, &client, &form(&rt1), None)
+            .await;
         release.notify_one();
         revoking.await.unwrap();
 
-        assert!(during.is_err(), "札を書いた後のローテーションが通った: {:?}", during.map(|r| r.refresh_token));
+        assert!(
+            during.is_err(),
+            "札を書いた後のローテーションが通った: {:?}",
+            during.map(|r| r.refresh_token)
+        );
         for t in ["RT0", rt1.as_str()] {
-            assert!(store.get_refresh_token(t).await.unwrap().is_none(), "失効の後に {t} が残っている");
+            assert!(
+                store.get_refresh_token(t).await.unwrap().is_none(),
+                "失効の後に {t} が残っている"
+            );
         }
     }
 
@@ -615,9 +711,17 @@ mod revoke_family_tests {
         let released_at = now();
         release.notify_one();
         revoking.await.unwrap();
-        let tomb = fs.get_doc(FAMILY_REVOCATIONS, "F").await.unwrap().expect("札が無い");
+        let tomb = fs
+            .get_doc(FAMILY_REVOCATIONS, "F")
+            .await
+            .unwrap()
+            .expect("札が無い");
         let expires = fs_h::field_ts_secs(&tomb, "expiresAt").unwrap();
-        assert!(expires >= released_at + REFRESH_TTL + 2 * 24 * 3600, "札の期限が短い: {expires} < {}", released_at + REFRESH_TTL + 2 * 24 * 3600);
+        assert!(
+            expires >= released_at + REFRESH_TTL + 2 * 24 * 3600,
+            "札の期限が短い: {expires} < {}",
+            released_at + REFRESH_TTL + 2 * 24 * 3600
+        );
     }
 }
 
@@ -632,7 +736,10 @@ mod tests {
 
     async fn store_and_fake() -> (FirestoreStore, Arc<fake_firestore::FakeState>) {
         let (host, state) = fake_firestore::spawn().await;
-        (FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))), state)
+        (
+            FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))),
+            state,
+        )
     }
 
     crate::store_contract::store_contract_tests!(store);
@@ -657,14 +764,23 @@ mod tests {
     #[tokio::test]
     async fn a_value_firestore_cannot_hold_is_simply_not_found() {
         let (s, fake) = store_and_fake().await;
-        for bad in ["a/b".to_string(), "x".repeat(1501), "__x__".into(), String::new(), "a.b".into()] {
+        for bad in [
+            "a/b".to_string(),
+            "x".repeat(1501),
+            "__x__".into(),
+            String::new(),
+            "a.b".into(),
+        ] {
             // 引いてしまったら落ちるようにしておく。
             for col in ["authCodes", "accessTokens", "refreshTokens"] {
                 for m in ["GET", "PATCH", "DELETE"] {
                     fake.fail_once_with(m, col, None, axum::http::StatusCode::BAD_REQUEST);
                 }
             }
-            assert!(matches!(s.take_code(&bad).await.unwrap(), CodeTake::Unknown));
+            assert!(matches!(
+                s.take_code(&bad).await.unwrap(),
+                CodeTake::Unknown
+            ));
             assert!(s.get_access_token(&bad).await.unwrap().is_none());
             assert!(s.get_refresh_token(&bad).await.unwrap().is_none());
             assert!(!s.mark_refresh_used(&bad, None).await.unwrap());
@@ -682,8 +798,14 @@ mod tests {
             s.save_refresh_token(rt("R1", "F", None)).await.unwrap();
             fake.fail_once(method, "refreshTokens", Some("R1"));
             // 「使用済み」（false）ではなく誤りとして返す。false だと invalid_grant になり、RP が RT を捨てる。
-            assert!(s.mark_refresh_used("R1", Some("R2")).await.is_err(), "{method} の 503 を誤りとして返さなかった");
-            assert!(!s.get_refresh_token("R1").await.unwrap().unwrap().used, "{method} の 503 で使用済みになった");
+            assert!(
+                s.mark_refresh_used("R1", Some("R2")).await.is_err(),
+                "{method} の 503 を誤りとして返さなかった"
+            );
+            assert!(
+                !s.get_refresh_token("R1").await.unwrap().unwrap().used,
+                "{method} の 503 で使用済みになった"
+            );
         }
     }
 
@@ -691,11 +813,24 @@ mod tests {
     async fn consuming_an_interaction_fails_closed_when_the_store_errs() {
         for method in ["GET", "DELETE"] {
             let (s, fake) = store_and_fake().await;
-            let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None, browser_binding: String::new() };
+            let i = Interaction {
+                uid: "U1".into(),
+                raw_query: String::new(),
+                account_id: None,
+                auth_time: None,
+                request_uri: None,
+                browser_binding: String::new(),
+            };
             s.save_interaction(i).await;
             fake.fail_once(method, "interactions", Some("U1"));
-            assert!(!s.consume_interaction("U1").await, "{method} の 503 で消費が通ってしまった");
-            assert!(s.get_interaction("U1").await.is_some(), "{method} の 503 で interaction が消えた");
+            assert!(
+                !s.consume_interaction("U1").await,
+                "{method} の 503 で消費が通ってしまった"
+            );
+            assert!(
+                s.get_interaction("U1").await.is_some(),
+                "{method} の 503 で interaction が消えた"
+            );
         }
     }
 
@@ -703,9 +838,24 @@ mod tests {
     #[tokio::test]
     async fn consuming_an_interaction_that_another_request_deleted_first_fails() {
         let (s, fake) = store_and_fake().await;
-        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None, browser_binding: String::new() };
+        let i = Interaction {
+            uid: "U1".into(),
+            raw_query: String::new(),
+            account_id: None,
+            auth_time: None,
+            request_uri: None,
+            browser_binding: String::new(),
+        };
         s.save_interaction(i).await;
-        fake.fail_once_with("DELETE", "interactions", Some("U1"), axum::http::StatusCode::NOT_FOUND);
-        assert!(!s.consume_interaction("U1").await, "削除の 404 で消費が通ってしまった");
+        fake.fail_once_with(
+            "DELETE",
+            "interactions",
+            Some("U1"),
+            axum::http::StatusCode::NOT_FOUND,
+        );
+        assert!(
+            !s.consume_interaction("U1").await,
+            "削除の 404 で消費が通ってしまった"
+        );
     }
 }

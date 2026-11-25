@@ -5,7 +5,7 @@
 //! 印の置き換えは `CATALOG` に在る鍵だけに限る（利用者の値に `[[...]]` が紛れても崩さない）。
 //! 鍵と訳には HTML・JS の文字列を抜け出せる文字を入れない（`catalog_text_is_safe_everywhere`）。
 
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
@@ -148,14 +148,26 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Sign-in approval request", "ログイン承認の依頼"),
     ("Approve (passkey)", "承認（パスキー）"),
     ("Reject", "拒否"),
-    ("Your session has expired. Please sign in again.", "セッションが切れました。再度ログインしてください。"),
+    (
+        "Your session has expired. Please sign in again.",
+        "セッションが切れました。再度ログインしてください。",
+    ),
     // register.rs
     ("Sign up", "登録"),
     ("Create an account", "ユーザー登録"),
-    ("We will send a confirmation link to your email address.", "メールアドレスに確認リンクを送ります。"),
+    (
+        "We will send a confirmation link to your email address.",
+        "メールアドレスに確認リンクを送ります。",
+    ),
     ("Send confirmation email", "確認メールを送信"),
-    ("Enter a valid email address.", "正しいメールアドレスを入力してください。"),
-    ("Too many requests. Please try again later.", "要求が多すぎます。しばらくしてからお試しください。"),
+    (
+        "Enter a valid email address.",
+        "正しいメールアドレスを入力してください。",
+    ),
+    (
+        "Too many requests. Please try again later.",
+        "要求が多すぎます。しばらくしてからお試しください。",
+    ),
     ("Sent", "送信しました"),
     ("Confirmation email sent", "確認メールを送信しました"),
     (
@@ -172,7 +184,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Create a passkey", "パスキーを作成"),
     ("Name (required)", "氏名（必須）"),
     ("Name (optional)", "氏名（任意）"),
-    ("Register securely with the {app} app.", "{app} アプリで安全に登録します。"),
+    (
+        "Register securely with the {app} app.",
+        "{app} アプリで安全に登録します。",
+    ),
     ("Open in the app", "アプリで開く"),
     (
         "If the app is installed, it opens automatically. If it does not, continue on the web with the button below.",
@@ -183,7 +198,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "アプリで開くと、上の氏名は保存されません。Web で登録を続けると保存されます。",
     ),
     ("Continue on the web", "Web で登録を続ける"),
-    ("It is created as a synced passkey (for example in iCloud Keychain).", "同期 パスキー（iCloud Keychain 等）として作成されます。"),
+    (
+        "It is created as a synced passkey (for example in iCloud Keychain).",
+        "同期 パスキー（iCloud Keychain 等）として作成されます。",
+    ),
     (
         "On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.",
         "iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。Google パスワードマネージャーに保存すると、ログインのときに PIN を求められることがあります。",
@@ -195,35 +213,80 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Create a passkey and sign up", "パスキーを作成して登録"),
     ("Enter your name", "氏名を入力してください"),
     ("Working…", "処理中…"),
-    ("Registration complete. Taking you to sign in…", "登録が完了しました。ログイン画面へ移ります…"),
+    (
+        "Registration complete. Taking you to sign in…",
+        "登録が完了しました。ログイン画面へ移ります…",
+    ),
     ("Registration complete.", "登録が完了しました。"),
     // mod.rs（passkey の API の失敗）
-    ("This took too long. Please try again.", "時間が経ちすぎました。もう一度お試しください。"),
-    ("This passkey is not registered.", "この パスキーは登録されていません。"),
-    ("The passkey could not be verified.", "パスキーを確認できませんでした。"),
-    ("This account is disabled.", "このアカウントは凍結されています。"),
-    ("This account needs to be registered again.", "このアカウントは登録し直す必要があります。"),
-    ("This sign-in has expired. Please start again.", "ログインの有効期限が切れました。最初からやり直してください。"),
-    ("This sign-in was started in another browser.", "このログインは別のブラウザで始められたものです。"),
-    ("Sign in again in this browser", "このブラウザでログインし直す"),
+    (
+        "This took too long. Please try again.",
+        "時間が経ちすぎました。もう一度お試しください。",
+    ),
+    (
+        "This passkey is not registered.",
+        "この パスキーは登録されていません。",
+    ),
+    (
+        "The passkey could not be verified.",
+        "パスキーを確認できませんでした。",
+    ),
+    (
+        "This account is disabled.",
+        "このアカウントは凍結されています。",
+    ),
+    (
+        "This account needs to be registered again.",
+        "このアカウントは登録し直す必要があります。",
+    ),
+    (
+        "This sign-in has expired. Please start again.",
+        "ログインの有効期限が切れました。最初からやり直してください。",
+    ),
+    (
+        "This sign-in was started in another browser.",
+        "このログインは別のブラウザで始められたものです。",
+    ),
+    (
+        "Sign in again in this browser",
+        "このブラウザでログインし直す",
+    ),
     (
         "This sign-in was started in another browser. Please start again from the app.",
         "このログインは別のブラウザで始められたものです。アプリからもう一度始めてください。",
     ),
-    ("This link has expired or has already been used.", "このリンクは期限が切れたか、既に使われています。"),
+    (
+        "This link has expired or has already been used.",
+        "このリンクは期限が切れたか、既に使われています。",
+    ),
     (
         "This email address is already registered. Please sign in.",
         "このメールアドレスは既に登録されています。ログインしてください。",
     ),
-    ("The passkey could not be created.", "パスキーを作成できませんでした。"),
+    (
+        "The passkey could not be created.",
+        "パスキーを作成できませんでした。",
+    ),
     (
         "The name is too long or contains characters that cannot be used.",
         "氏名が長すぎるか、使えない文字が入っています。",
     ),
-    ("This request was not found or has expired.", "この要求は見つからないか、期限が切れています。"),
-    ("No passkey is registered for this account.", "このアカウントには パスキーが登録されていません。"),
-    ("This request has already been handled.", "この要求は既に処理されています。"),
-    ("Something went wrong. Please try again.", "問題が起きました。もう一度お試しください。"),
+    (
+        "This request was not found or has expired.",
+        "この要求は見つからないか、期限が切れています。",
+    ),
+    (
+        "No passkey is registered for this account.",
+        "このアカウントには パスキーが登録されていません。",
+    ),
+    (
+        "This request has already been handled.",
+        "この要求は既に処理されています。",
+    ),
+    (
+        "Something went wrong. Please try again.",
+        "問題が起きました。もう一度お試しください。",
+    ),
     (
         "The passkey was canceled or timed out. If you opened this page inside another app, open it in the standard Safari or Chrome app.",
         "パスキーの操作が取り消されたか、時間切れになりました。ほかのアプリの中で開いている場合は、標準の Safari / Chrome アプリで開いてください。",
@@ -239,27 +302,48 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Back to sign in", "ログイン画面に戻る"),
     ("Back to the app", "アプリに戻る"),
     // ciba.rs
-    ("You need to sign in to approve.", "承認するにはログインが必要です。"),
+    (
+        "You need to sign in to approve.",
+        "承認するにはログインが必要です。",
+    ),
     ("CIBA approval", "CIBA 承認"),
-    ("There are no pending requests.", "保留中の要求はありません。"),
+    (
+        "There are no pending requests.",
+        "保留中の要求はありません。",
+    ),
     ("(no message)", "（メッセージなし）"),
     ("Requested by", "要求元"),
     // admin.rs
     ("Admin console", "管理コンソール"),
-    ("Choose an action from the navigation above.", "上のナビゲーションから操作を選んでください。"),
+    (
+        "Choose an action from the navigation above.",
+        "上のナビゲーションから操作を選んでください。",
+    ),
     ("Status", "状態"),
     ("Registered", "登録日"),
-    ("Admins cannot be deleted (revoke admin first).", "管理者は削除できません（先に管理者を剥奪）。"),
+    (
+        "Admins cannot be deleted (revoke admin first).",
+        "管理者は削除できません（先に管理者を剥奪）。",
+    ),
     (
         "Delete this account permanently? Its passkey, profile, and notification registration are also removed, and this cannot be undone (the CIBA approval history is kept).",
         "このアカウントを完全に削除しますか？パスキー・プロフィール・通知の登録も消え、元に戻せません（CIBA の承認の履歴は残ります）。",
     ),
     ("Delete", "削除（delete）"),
     ("Enable", "凍結解除（enable）"),
-    ("You cannot disable yourself (your session would end immediately).", "自分自身は凍結できません（セッションが即座に失効するため）。"),
-    ("Disable this account? Its sessions and tokens are also revoked.", "このアカウントを凍結しますか？セッション・トークンも失効します。"),
+    (
+        "You cannot disable yourself (your session would end immediately).",
+        "自分自身は凍結できません（セッションが即座に失効するため）。",
+    ),
+    (
+        "Disable this account? Its sessions and tokens are also revoked.",
+        "このアカウントを凍結しますか？セッション・トークンも失効します。",
+    ),
     ("Disable", "凍結（disable）"),
-    ("Revoke your own admin rights?", "自分自身の管理者権限を剥奪しますか？"),
+    (
+        "Revoke your own admin rights?",
+        "自分自身の管理者権限を剥奪しますか？",
+    ),
     ("Revoke admin rights?", "管理者権限を剥奪しますか？"),
     ("Revoke admin", "管理者を剥奪"),
     ("Make admin", "管理者に任命"),
@@ -283,24 +367,54 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Passkeys", "パスキー"),
     ("Authenticator", "保存先"),
     ("Last used", "最後の利用"),
-    ("No passkeys. The user can register again with the same account.", "パスキーはありません。同じアカウントのまま登録し直せます。"),
+    (
+        "No passkeys. The user can register again with the same account.",
+        "パスキーはありません。同じアカウントのまま登録し直せます。",
+    ),
     ("Passkey", "パスキー"),
     ("Not used yet", "まだ使っていません"),
     ("Remove", "削除"),
     ("Continue", "続ける"),
     ("Add a passkey on this device", "この端末のパスキーを追加"),
     ("The name was saved.", "氏名を保存しました。"),
-    ("Add a passkey in Passwords", "「パスワード」にパスキーを追加する"),
-    ("Sign in with your passkey to see and add passkeys.", "パスキーを見たり追加したりするには、パスキーでログインしてください。"),
+    (
+        "Add a passkey in Passwords",
+        "「パスワード」にパスキーを追加する",
+    ),
+    (
+        "Sign in with your passkey to see and add passkeys.",
+        "パスキーを見たり追加したりするには、パスキーでログインしてください。",
+    ),
     ("Please sign in again.", "もう一度ログインしてください。"),
-    ("Please confirm it is you with a passkey again.", "もう一度パスキーで本人確認をしてください。"),
-    ("A passkey for this account is already saved here.", "このアカウントのパスキーは、ここに保存済みです。"),
+    (
+        "Please confirm it is you with a passkey again.",
+        "もう一度パスキーで本人確認をしてください。",
+    ),
+    (
+        "A passkey for this account is already saved here.",
+        "このアカウントのパスキーは、ここに保存済みです。",
+    ),
     ("Can’t use your passkey?", "パスキーを使えないとき"),
-    ("If this computer has no passkey, press sign in and scan the QR code that appears with the phone that has your passkey.", "このパソコンにパスキーが無いときは、ログインを押すと出る QR コードを、パスキーのあるスマホで読み取ってください。"),
-    ("To continue on your computer, press sign in there and scan the QR code that appears with this phone.", "パソコンで続けるときは、パソコンでログインを押すと出る QR コードを、このスマホで読み取ってください。"),
-    ("is registered. Sign in with your passkey.", "は登録済みです。パスキーでログインしてください。"),
-    ("[rust-idp] Add a passkey on this device", "【rust-idp】この端末にパスキーを追加する"),
-    ("If you cannot use your passkey, contact the administrator.", "パスキーを使えない場合は、管理者に問い合わせてください。"),
+    (
+        "If this computer has no passkey, press sign in and scan the QR code that appears with the phone that has your passkey.",
+        "このパソコンにパスキーが無いときは、ログインを押すと出る QR コードを、パスキーのあるスマホで読み取ってください。",
+    ),
+    (
+        "To continue on your computer, press sign in there and scan the QR code that appears with this phone.",
+        "パソコンで続けるときは、パソコンでログインを押すと出る QR コードを、このスマホで読み取ってください。",
+    ),
+    (
+        "is registered. Sign in with your passkey.",
+        "は登録済みです。パスキーでログインしてください。",
+    ),
+    (
+        "[rust-idp] Add a passkey on this device",
+        "【rust-idp】この端末にパスキーを追加する",
+    ),
+    (
+        "If you cannot use your passkey, contact the administrator.",
+        "パスキーを使えない場合は、管理者に問い合わせてください。",
+    ),
     (
         "Passkeys cannot be used in this browser. Open the link in Safari or Chrome.",
         "このブラウザではパスキーを使えません。リンクを Safari か Chrome で開いてください。",
@@ -351,7 +465,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "この方法でパスキーを追加すると、ほかの端末ではログアウトされます。",
     ),
     ("A passkey was added", "パスキーが追加されました"),
-    ("[rust-idp] A passkey was added", "【rust-idp】パスキーが追加されました"),
+    (
+        "[rust-idp] A passkey was added",
+        "【rust-idp】パスキーが追加されました",
+    ),
     (
         "A passkey was added to your account using a link sent to this email address, and you were signed out on your other devices.",
         "このメールアドレスに送ったリンクを使って、あなたのアカウントにパスキーが追加されました。ほかの端末ではログアウトしています。",
@@ -364,13 +481,22 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.",
         "選んだ保存先には、このアカウントのパスキーが既に保存されています。もう一度押して、保存先に「パスワード」（iCloud）を選んでください。",
     ),
-    ("This passkey was not found. Please reload the page.", "このパスキーが見つかりません。ページを読み直してください。"),
-    ("You cannot remove your only passkey. Add another passkey first.", "パスキーが 1 つだけのときは削除できません。先に別のパスキーを追加してください。"),
+    (
+        "This passkey was not found. Please reload the page.",
+        "このパスキーが見つかりません。ページを読み直してください。",
+    ),
+    (
+        "You cannot remove your only passkey. Add another passkey first.",
+        "パスキーが 1 つだけのときは削除できません。先に別のパスキーを追加してください。",
+    ),
     (
         "Remove this passkey? You can no longer sign in with it, and you are signed out on your other devices.",
         "このパスキーを削除しますか？削除すると、このパスキーではログインできなくなり、ほかの端末からもログアウトします。",
     ),
-    ("You can add up to 10 passkeys. Remove one first.", "パスキーは 10 個まで追加できます。先に 1 つ削除してください。"),
+    (
+        "You can add up to 10 passkeys. Remove one first.",
+        "パスキーは 10 個まで追加できます。先に 1 つ削除してください。",
+    ),
     (
         "On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.",
         "iPhone では、パスキーの保存先を聞かれたら「パスワード」（iCloud）を選んでください。",
@@ -388,8 +514,14 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "Remove all passkeys of this user? The account and profile are kept, and the user can register again as the same person. Sessions and tokens are also revoked.",
         "このユーザーのパスキーをすべて削除しますか？アカウントとプロフィールは残り、同じ人のまま登録し直せます。セッションとトークンも失効します。",
     ),
-    ("You cannot remove your own passkeys here.", "自分のパスキーはここでは削除できません。"),
-    ("The passkeys of an admin cannot be removed. Revoke admin first.", "管理者のパスキーは削除できません。先に管理者を外してください。"),
+    (
+        "You cannot remove your own passkeys here.",
+        "自分のパスキーはここでは削除できません。",
+    ),
+    (
+        "The passkeys of an admin cannot be removed. Revoke admin first.",
+        "管理者のパスキーは削除できません。先に管理者を外してください。",
+    ),
     ("Client ID", "クライアント ID"),
     (
         "A return address must use https and must not contain a fragment or user info: {uri}",
@@ -437,7 +569,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "ログインできませんでした。（エラーコード: {code}）",
     ),
     ("Sign-in was canceled.", "ログインをキャンセルしました。"),
-    ("Failed to save. Please try again.", "保存に失敗しました。もう一度お試しください。"),
+    (
+        "Failed to save. Please try again.",
+        "保存に失敗しました。もう一度お試しください。",
+    ),
     ("IATs", "IAT"),
     ("Hash", "ハッシュ"),
     ("Redirect hosts", "redirect host"),
@@ -448,13 +583,22 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Please sign in.", "ログインしてください。"),
     // mod.rs SWITCH_NOTICE
     ("Switch accounts?", "アカウントを切り替えますか？"),
-    ("This browser is signed in as {current}.", "このブラウザは {current} でログインしています。"),
+    (
+        "This browser is signed in as {current}.",
+        "このブラウザは {current} でログインしています。",
+    ),
     (
         "If you continue, it will be signed in as {target} instead. Continue only if you expected this email.",
         "続けると {target} に切り替わります。このメールに心当たりがあるときだけ続けてください。",
     ),
-    ("Only admins can open this page.", "このページは管理者だけが開けます。"),
-    ("The admin console is not available.", "管理コンソールは使えません。"),
+    (
+        "Only admins can open this page.",
+        "このページは管理者だけが開けます。",
+    ),
+    (
+        "The admin console is not available.",
+        "管理コンソールは使えません。",
+    ),
     ("User", "ユーザー"),
     ("Clients", "クライアント"),
     ("Client", "クライアント"),
@@ -462,15 +606,27 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Email address", "メールアドレス"),
     ("Regular user", "一般"),
     ("You cannot disable yourself", "自分自身は凍結できません"),
-    ("Admins cannot be deleted. Revoke admin first", "管理者は削除できません。先に管理者を剥奪してください"),
+    (
+        "Admins cannot be deleted. Revoke admin first",
+        "管理者は削除できません。先に管理者を剥奪してください",
+    ),
     (
         "An account that is not disabled cannot be deleted. Disable it first",
         "凍結していないアカウントは削除できません。先に凍結してください",
     ),
-    ("This conflicted with another change. Please try again", "他の書き込みと競合しました。もう一度お試しください"),
+    (
+        "This conflicted with another change. Please try again",
+        "他の書き込みと競合しました。もう一度お試しください",
+    ),
     ("You gave up admin rights", "管理者権限を放棄しました"),
-    ("You can no longer access the admin console.", "これ以降、管理コンソールにはアクセスできません。"),
-    ("The last admin cannot be revoked", "最後の管理者は剥奪できません"),
+    (
+        "You can no longer access the admin console.",
+        "これ以降、管理コンソールにはアクセスできません。",
+    ),
+    (
+        "The last admin cannot be revoked",
+        "最後の管理者は剥奪できません",
+    ),
     ("Audit log (latest {n})", "監査ログ（直近{n}件）"),
     ("Auth method", "認証方式"),
     ("(none)", "（なし）"),
@@ -496,7 +652,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
         "A sign-in start address must be on the host of a redirect_uri of this client: {host}",
         "ログインの入口は、このクライアントの redirect_uris のいずれかと同じホストにしてください: {host}",
     ),
-    ("Revoke this client? This cannot be undone.", "このクライアントを失効させますか？取り消せません。"),
+    (
+        "Revoke this client? This cannot be undone.",
+        "このクライアントを失効させますか？取り消せません。",
+    ),
     ("Revoke", "失効"),
     ("Set", "設定済み"),
     ("None", "なし"),
@@ -513,39 +672,72 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Mint", "発行"),
     ("Mint a new IAT", "IATを新規発行"),
     ("Client profile", "プロファイル"),
-    ("Confidential Key (private_key_jwt, FAPI2 equivalent)", "Confidential Key（private_key_jwt、FAPI2相当）"),
-    ("Confidential Secret (client_secret_basic)", "Confidential Secret（client_secret_basic）"),
+    (
+        "Confidential Key (private_key_jwt, FAPI2 equivalent)",
+        "Confidential Key（private_key_jwt、FAPI2相当）",
+    ),
+    (
+        "Confidential Secret (client_secret_basic)",
+        "Confidential Secret（client_secret_basic）",
+    ),
     ("Public (none)", "Public（none）"),
     (
         "Allowed redirect hosts (one per line or comma-separated; at least one required)",
         "許可する redirect host（改行またはカンマ区切り、1つ以上必須）",
     ),
-    ("Allowed grant_type (default: authorization_code, refresh_token)", "許可する grant_type（省略時: authorization_code, refresh_token）"),
+    (
+        "Allowed grant_type (default: authorization_code, refresh_token)",
+        "許可する grant_type（省略時: authorization_code, refresh_token）",
+    ),
     ("Expires in (hours)", "有効期限（時間）"),
-    ("Specify at least one redirect host", "redirect host を最低1つ指定してください"),
-    ("ttl_hours must be between 1 and {max} (365 days)", "ttl_hours は1〜{max}（365日）の範囲で指定してください"),
+    (
+        "Specify at least one redirect host",
+        "redirect host を最低1つ指定してください",
+    ),
+    (
+        "ttl_hours must be between 1 and {max} (365 days)",
+        "ttl_hours は1〜{max}（365日）の範囲で指定してください",
+    ),
     ("ttl_hours is too large", "ttl_hours が大きすぎます"),
     (
         "The IAT was issued (hash={hash}), but the raw token cannot be shown because saving it for display failed.",
         "IATの発行自体は成功しました（hash={hash}）が、表示用の一時保存に失敗したため生トークンは表示できません。",
     ),
     ("Already shown", "表示済みです"),
-    ("This token was already shown or has expired. Mint a new one.", "このトークンは既に表示済み、または期限切れです。もう一度発行してください。"),
+    (
+        "This token was already shown or has expired. Mint a new one.",
+        "このトークンは既に表示済み、または期限切れです。もう一度発行してください。",
+    ),
     ("Expired", "期限切れ"),
-    ("It took too long to show it. Mint a new one.", "表示までに時間がかかりすぎました。もう一度発行してください。"),
+    (
+        "It took too long to show it. Mint a new one.",
+        "表示までに時間がかかりすぎました。もう一度発行してください。",
+    ),
     ("IAT issued", "IATを発行しました"),
-    ("This screen is shown only once. Copy the token now.", "この画面は一度しか表示されません。今すぐコピーしてください。"),
+    (
+        "This screen is shown only once. Copy the token now.",
+        "この画面は一度しか表示されません。今すぐコピーしてください。",
+    ),
     ("IAT issuance complete", "IAT発行完了"),
     // mailer.rs
-    ("[rust-idp] Verify your email", "【rust-idp】メールアドレス確認"),
+    (
+        "[rust-idp] Verify your email",
+        "【rust-idp】メールアドレス確認",
+    ),
     ("Verify your email address", "メールアドレス確認"),
     (
         "To finish signing up, create your passkey with the button below. The link expires in 30 minutes.",
         "登録を完了するには、以下のボタンから パスキーを作成してください。有効期限は30分です。",
     ),
     ("Sign up with a passkey", "パスキーを作成して登録"),
-    ("If you did not request this, ignore this email.", "心当たりがない場合はこのメールを無視してください。"),
-    ("[rust-idp] An account already exists", "【rust-idp】既に登録済みのアカウントがあります"),
+    (
+        "If you did not request this, ignore this email.",
+        "心当たりがない場合はこのメールを無視してください。",
+    ),
+    (
+        "[rust-idp] An account already exists",
+        "【rust-idp】既に登録済みのアカウントがあります",
+    ),
     ("Already registered", "既に登録済みです"),
     ("This email address", "このメールアドレス"),
     (
@@ -554,7 +746,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ),
     // fcm.rs
     ("Sign-in approval", "ログインの承認"),
-    ("Sign-in request from {client}", "{client} からのログイン要求があります"),
+    (
+        "Sign-in request from {client}",
+        "{client} からのログイン要求があります",
+    ),
 ];
 
 #[cfg(test)]
@@ -624,7 +819,9 @@ mod tests {
                 .to_lowercase()
                 .replace("post_logout_redirect_uri", "")
                 .replace("initiate_login_uri", "");
-            for bad in ["log in", "log-in", "login", "log out", "log-out", "logout", "logged", "logon"] {
+            for bad in [
+                "log in", "log-in", "login", "log out", "log-out", "logout", "logged", "logon",
+            ] {
                 assert!(!text.contains(bad), "英語に「{bad}」: {en}");
             }
             for bad in ["サインイン", "サインアウト"] {

@@ -4,9 +4,9 @@
 use crate::auth_checks::*;
 use crate::ciba::{CibaRateLimiter, CibaStore, MemoryCibaStore};
 use crate::client_auth::*;
+use crate::document_store::DocumentStore;
 use crate::dpop::{DpopVerifier, Es256Dpop};
 use crate::error::OAuthError;
-use crate::document_store::DocumentStore;
 #[cfg(feature = "gcp")]
 use crate::firestore::Firestore;
 use crate::grants::*;
@@ -113,7 +113,10 @@ impl Provider {
             ciba: Arc::new(MemoryCibaStore::default()),
             ciba_rate: Arc::new(CibaRateLimiter::default()),
             // 1 時間に 5 通まで（同一 email / 同一 IP）。正常な登録では超えない。
-            register_rate: Arc::new(CibaRateLimiter::new(std::time::Duration::from_secs(3600), 5)),
+            register_rate: Arc::new(CibaRateLimiter::new(
+                std::time::Duration::from_secs(3600),
+                5,
+            )),
             dpop: Arc::new(Es256Dpop::default()),
             jar_jti: crate::nonce::NonceStore::memory(),
             clients: HashMap::new(),
@@ -170,7 +173,10 @@ impl Provider {
     /// 二段構えで、参照されないまま溜まるエントリもこのタスクが物理削除する。
     /// Firestore など TTL 自己管理のストアでは sweep_expired が no-op なので無害。
     /// 返した JoinHandle は破棄してよい(プロセス終了まで走り続ける)。
-    pub(crate) fn spawn_store_sweeper(self: &Arc<Self>, period: std::time::Duration) -> tokio::task::JoinHandle<()> {
+    pub(crate) fn spawn_store_sweeper(
+        self: &Arc<Self>,
+        period: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
         let p = Arc::clone(self);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(period);
@@ -349,14 +355,20 @@ mod tests {
     /// with_document_store だけでも、find_account は試し用の claim を返さない。with_store が先なら替えない。
     #[tokio::test]
     async fn document_store_alone_does_not_make_up_claims() {
-        let docs: Arc<dyn DocumentStore> = Arc::new(crate::document_store::MemoryDocumentStore::default());
+        let docs: Arc<dyn DocumentStore> =
+            Arc::new(crate::document_store::MemoryDocumentStore::default());
         let p = Provider::new("https://op").with_document_store(docs.clone());
         let a = p.store.find_account("not-registered").await;
         assert_eq!(a.claims.get("email"), None);
         assert_eq!(a.claims.get("email_verified"), None);
 
-        let p = Provider::new("https://op").with_store(Arc::new(MemoryStore::default())).with_document_store(docs);
+        let p = Provider::new("https://op")
+            .with_store(Arc::new(MemoryStore::default()))
+            .with_document_store(docs);
         let a = p.store.find_account("not-registered").await;
-        assert_eq!(a.claims.get("email_verified"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            a.claims.get("email_verified"),
+            Some(&serde_json::json!(true))
+        );
     }
 }

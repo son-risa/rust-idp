@@ -3,10 +3,10 @@
 //! 公開鍵は起動時に 1 回取得して JWK 化・キャッシュ（/jwks は KMS を叩かない）。
 
 use crate::firestore::Firestore;
-use crate::jws::{b64url, JwsSigner};
+use crate::jws::{JwsSigner, b64url};
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use sha2::Digest;
 use std::sync::Arc;
 
@@ -52,8 +52,14 @@ impl KmsSigner {
                 resp.text().await.unwrap_or_default()
             ));
         }
-        let j: serde_json::Value = resp.json().await.map_err(|e| format!("kms publicKey json: {e}"))?;
-        let pem = j.get("pem").and_then(|v| v.as_str()).ok_or("kms publicKey: no pem")?;
+        let j: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("kms publicKey json: {e}"))?;
+        let pem = j
+            .get("pem")
+            .and_then(|v| v.as_str())
+            .ok_or("kms publicKey: no pem")?;
         let (jwk, kid) = match kind {
             KmsKind::Es256 => {
                 use p256::elliptic_curve::sec1::ToSec1Point;
@@ -84,13 +90,23 @@ impl KmsSigner {
                 (jwk, kid)
             }
         };
-        Ok(Self { kind, fs, http, version, kid, jwk })
+        Ok(Self {
+            kind,
+            fs,
+            http,
+            version,
+            kid,
+            jwk,
+        })
     }
 
     /// digest(SHA-256) を KMS で署名し、JOSE 形式の署名(b64url)を返す。
     async fn kms_sign(&self, digest: &[u8]) -> Result<String, String> {
         let tok = self.fs.token().await?;
-        let url = format!("https://cloudkms.googleapis.com/v1/{}:asymmetricSign", self.version);
+        let url = format!(
+            "https://cloudkms.googleapis.com/v1/{}:asymmetricSign",
+            self.version
+        );
         let body = serde_json::json!({ "digest": { "sha256": B64.encode(digest) } });
         let resp = self
             .http
@@ -107,9 +123,17 @@ impl KmsSigner {
                 resp.text().await.unwrap_or_default()
             ));
         }
-        let j: serde_json::Value = resp.json().await.map_err(|e| format!("kms sign json: {e}"))?;
-        let sig_b64 = j.get("signature").and_then(|v| v.as_str()).ok_or("kms sign: no signature")?;
-        let sig = B64.decode(sig_b64).map_err(|e| format!("kms sig b64: {e}"))?;
+        let j: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("kms sign json: {e}"))?;
+        let sig_b64 = j
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .ok_or("kms sign: no signature")?;
+        let sig = B64
+            .decode(sig_b64)
+            .map_err(|e| format!("kms sig b64: {e}"))?;
         let raw = match self.kind {
             // KMS は ES256 を DER で返す。JWS は raw r||s なので変換する。
             KmsKind::Es256 => p256::ecdsa::Signature::from_der(&sig)
@@ -134,7 +158,11 @@ impl JwsSigner for KmsSigner {
 
     async fn sign(&self, claims: &serde_json::Value) -> String {
         let header = serde_json::json!({ "alg": self.alg(), "typ": "JWT", "kid": self.kid });
-        let signing_input = format!("{}.{}", b64url(header.to_string()), b64url(claims.to_string()));
+        let signing_input = format!(
+            "{}.{}",
+            b64url(header.to_string()),
+            b64url(claims.to_string())
+        );
         let digest = sha2::Sha256::digest(signing_input.as_bytes());
         match self.kms_sign(&digest).await {
             Ok(sig) => format!("{signing_input}.{sig}"),

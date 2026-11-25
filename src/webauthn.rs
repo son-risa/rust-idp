@@ -27,7 +27,9 @@ pub fn authenticator_name(aaguid: &str) -> Option<&'static str> {
         GOOGLE_PASSWORD_MANAGER => "Google Password Manager",
         "fbfc3007-154e-4ecc-8c0b-6e020557d7bd" => "iCloud Keychain",
         "adce0002-35bc-c60a-648b-0b25f1f05503" => "Chrome on Mac",
-        "08987058-cadc-4b81-b6e1-30de50dcbe96" | "9ddd1817-af5a-4672-a2b9-3e3dd95000a9" | "6028b017-b1d4-4c02-b4b3-afcdafc96bb2" => "Windows Hello",
+        "08987058-cadc-4b81-b6e1-30de50dcbe96"
+        | "9ddd1817-af5a-4672-a2b9-3e3dd95000a9"
+        | "6028b017-b1d4-4c02-b4b3-afcdafc96bb2" => "Windows Hello",
         "bada5566-a7aa-401f-bd96-45619a55120d" => "1Password",
         _ => return None,
     })
@@ -52,7 +54,12 @@ pub fn verify_registration(
     origin: &str,
     rp_id: &str,
 ) -> Result<RegOutcome, String> {
-    verify::check_client_data(client_data_json_b64, "webauthn.create", expected_challenge, origin)?;
+    verify::check_client_data(
+        client_data_json_b64,
+        "webauthn.create",
+        expected_challenge,
+        origin,
+    )?;
     let att = b64d(attestation_object_b64)?;
     let ao = verify::parse_attestation_object(&att)?;
     let ad = verify::parse_auth_data(&ao.auth_data)?;
@@ -79,7 +86,9 @@ pub fn verify_registration(
         pub_x: b64e(&x),
         pub_y: b64e(&y),
         sign_count: ad.sign_count,
-        aaguid: uuid::Uuid::from_slice(&rest[..16]).map(|u| u.to_string()).unwrap_or_default(),
+        aaguid: uuid::Uuid::from_slice(&rest[..16])
+            .map(|u| u.to_string())
+            .unwrap_or_default(),
     })
 }
 
@@ -97,8 +106,12 @@ pub fn verify_authentication(
     stored_sign_count: u32,
     require_uv: bool,
 ) -> Result<u32, String> {
-    let client_data =
-        verify::check_client_data(client_data_json_b64, "webauthn.get", expected_challenge, origin)?;
+    let client_data = verify::check_client_data(
+        client_data_json_b64,
+        "webauthn.get",
+        expected_challenge,
+        origin,
+    )?;
     let auth_data = b64d(authenticator_data_b64)?;
     let ad = verify::parse_auth_data(&auth_data)?;
     verify::check_rp_id_hash(ad.rp_id_hash, rp_id)?;
@@ -118,7 +131,6 @@ pub fn verify_authentication(
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::es256::b64url_encode as b64e2;
     use crate::fido::verify::test_support::*;
@@ -126,6 +138,7 @@ mod tests {
     use ciborium::value::Value as Cbor;
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
+    use p256::elliptic_curve::Generate;
     use sha2::{Digest, Sha256};
 
     const RP: &str = "example.com";
@@ -167,7 +180,11 @@ mod tests {
         let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let mut acd = attested_cred_data(b"cred", &cose_es256(&x, &y));
-        acd[..16].copy_from_slice(&uuid::Uuid::parse_str("ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4").unwrap().into_bytes());
+        acd[..16].copy_from_slice(
+            &uuid::Uuid::parse_str("ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4")
+                .unwrap()
+                .into_bytes(),
+        );
         let auth_data = build_auth_data(RP, FLAG_UP | FLAG_AT, 0, Some(&acd));
         let att = Cbor::Map(vec![
             (Cbor::Text("fmt".into()), Cbor::Text("none".into())),
@@ -175,7 +192,8 @@ mod tests {
             (Cbor::Text("authData".into()), Cbor::Bytes(auth_data)),
         ]);
         let cdj = client_data_json("webauthn.create", CH, ORIGIN);
-        let out = verify_registration(&b64e2(cdj), &b64e2(cbor_to_vec(&att)), CH, ORIGIN, RP).unwrap();
+        let out =
+            verify_registration(&b64e2(cdj), &b64e2(cbor_to_vec(&att)), CH, ORIGIN, RP).unwrap();
         assert_eq!(out.aaguid, "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4");
     }
 
@@ -196,7 +214,11 @@ mod tests {
         let mut signed = auth_data.clone();
         signed.extend_from_slice(&Sha256::digest(&cdj));
         let sig: Signature = key.sign(&signed);
-        (b64e2(&auth_data), b64e2(sig.to_der().as_bytes()), b64e2(&cdj))
+        (
+            b64e2(&auth_data),
+            b64e2(sig.to_der().as_bytes()),
+            b64e2(&cdj),
+        )
     }
 
     #[test]
@@ -204,8 +226,19 @@ mod tests {
         let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
         let (ad, sig, cdj) = make_authentication(&key, 5);
-        let new_count =
-            verify_authentication(&cdj, &ad, &sig, CH, ORIGIN, RP, &b64e2(&x), &b64e2(&y), 1, false).unwrap();
+        let new_count = verify_authentication(
+            &cdj,
+            &ad,
+            &sig,
+            CH,
+            ORIGIN,
+            RP,
+            &b64e2(&x),
+            &b64e2(&y),
+            1,
+            false,
+        )
+        .unwrap();
         assert_eq!(new_count, 5);
     }
 
@@ -215,7 +248,18 @@ mod tests {
         let (x, y) = ec_xy(&key);
         let (ad, sig, cdj) = make_authentication(&key, 5);
         // stored=5、受信=5 → 増えていない → クローン疑い。
-        let r = verify_authentication(&cdj, &ad, &sig, CH, ORIGIN, RP, &b64e2(&x), &b64e2(&y), 5, false);
+        let r = verify_authentication(
+            &cdj,
+            &ad,
+            &sig,
+            CH,
+            ORIGIN,
+            RP,
+            &b64e2(&x),
+            &b64e2(&y),
+            5,
+            false,
+        );
         assert!(r.is_err());
     }
 
@@ -226,7 +270,18 @@ mod tests {
         let (ox, oy) = ec_xy(&other);
         let (ad, sig, cdj) = make_authentication(&key, 5);
         // 別鍵 (other) の (x,y) で検証 → 署名検証で落ちる。
-        let r = verify_authentication(&cdj, &ad, &sig, CH, ORIGIN, RP, &b64e2(&ox), &b64e2(&oy), 1, false);
+        let r = verify_authentication(
+            &cdj,
+            &ad,
+            &sig,
+            CH,
+            ORIGIN,
+            RP,
+            &b64e2(&ox),
+            &b64e2(&oy),
+            1,
+            false,
+        );
         assert!(r.is_err());
     }
 
@@ -236,7 +291,18 @@ mod tests {
         let (x, y) = ec_xy(&key);
         let (ad, sig, cdj) = make_authentication(&key, 0);
         // 受信 signCount=0 は「カウンタ非対応」として stored に関わらず許容。
-        let r = verify_authentication(&cdj, &ad, &sig, CH, ORIGIN, RP, &b64e2(&x), &b64e2(&y), 9, false);
+        let r = verify_authentication(
+            &cdj,
+            &ad,
+            &sig,
+            CH,
+            ORIGIN,
+            RP,
+            &b64e2(&x),
+            &b64e2(&y),
+            9,
+            false,
+        );
         assert!(r.is_ok());
     }
 
@@ -246,7 +312,18 @@ mod tests {
         let (x, y) = ec_xy(&key);
         // make_authentication は UP のみ（UV フラグ無し）。
         let (ad, sig, cdj) = make_authentication(&key, 5);
-        let r = verify_authentication(&cdj, &ad, &sig, CH, ORIGIN, RP, &b64e2(&x), &b64e2(&y), 1, true);
+        let r = verify_authentication(
+            &cdj,
+            &ad,
+            &sig,
+            CH,
+            ORIGIN,
+            RP,
+            &b64e2(&x),
+            &b64e2(&y),
+            1,
+            true,
+        );
         assert!(r.is_err()); // UV 必須なのに UV 無し → 拒否
     }
 

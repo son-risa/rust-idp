@@ -108,9 +108,7 @@ impl AuthorizationCheck for CheckPkce {
                 }
                 Ok(())
             }
-            None if required => Err(OAuthError::InvalidRequest(
-                "code_challenge required".into(),
-            )),
+            None if required => Err(OAuthError::InvalidRequest("code_challenge required".into())),
             None => Ok(()),
         }
     }
@@ -118,15 +116,19 @@ impl AuthorizationCheck for CheckPkce {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches;
     use super::*;
     use crate::model::{AuthParams, Client};
+    use std::assert_matches;
 
     fn client(public: bool, require_pkce: bool) -> Client {
         Client {
             client_id: "c".into(),
             redirect_uris: vec!["https://rp/cb".into()],
-            token_endpoint_auth_method: if public { "none".into() } else { "client_secret_basic".into() },
+            token_endpoint_auth_method: if public {
+                "none".into()
+            } else {
+                "client_secret_basic".into()
+            },
             client_secret: if public { None } else { Some("s".into()) },
             grant_types: vec!["authorization_code".into()],
             post_logout_redirect_uris: vec![],
@@ -159,7 +161,10 @@ mod tests {
     }
 
     fn raw(p: AuthParams) -> RawAuthRequest {
-        RawAuthRequest { params: p, request_uri: None }
+        RawAuthRequest {
+            params: p,
+            request_uri: None,
+        }
     }
 
     /// Phase 1 通過済みのリクエストを直接組み立てる（ポリシーチェックのテスト用）。
@@ -181,7 +186,10 @@ mod tests {
 
         let bad = resolve_addressee(
             &p,
-            raw(AuthParams { client_id: Some("zzz".into()), ..params() }),
+            raw(AuthParams {
+                client_id: Some("zzz".into()),
+                ..params()
+            }),
         )
         .await;
         assert!(matches!(bad, Err(OAuthError::InvalidClient(_))));
@@ -192,14 +200,20 @@ mod tests {
         let p = Provider::new("https://op").with_client(client(true, false));
         let bad = resolve_addressee(
             &p,
-            raw(AuthParams { redirect_uri: Some("https://evil/cb".into()), ..params() }),
+            raw(AuthParams {
+                redirect_uri: Some("https://evil/cb".into()),
+                ..params()
+            }),
         )
         .await;
         assert!(bad.is_err());
 
         let none = resolve_addressee(
             &p,
-            raw(AuthParams { redirect_uri: None, ..params() }),
+            raw(AuthParams {
+                redirect_uri: None,
+                ..params()
+            }),
         )
         .await;
         assert!(matches!(none, Err(OAuthError::InvalidRequest(_))));
@@ -208,14 +222,33 @@ mod tests {
     /// 登録値を頭に持つだけの URI や、query を足した URI は別の宛先として断る（前方一致にしない）。
     #[tokio::test]
     async fn resolve_addressee_refuses_uris_that_only_start_with_the_registered_one() {
-        let c = Client { redirect_uris: vec!["https://rp.example/cb".into()], ..client(true, false) };
+        let c = Client {
+            redirect_uris: vec!["https://rp.example/cb".into()],
+            ..client(true, false)
+        };
         let p = Provider::new("https://op").with_client(c);
-        let with = |ru: &str| raw(AuthParams { redirect_uri: Some(ru.into()), ..params() });
+        let with = |ru: &str| {
+            raw(AuthParams {
+                redirect_uri: Some(ru.into()),
+                ..params()
+            })
+        };
 
-        assert!(resolve_addressee(&p, with("https://rp.example/cb")).await.is_ok());
-        for ru in ["https://rp.example/cb/evil", "https://rp.example/cbx", "https://rp.example/cb?x=1"] {
+        assert!(
+            resolve_addressee(&p, with("https://rp.example/cb"))
+                .await
+                .is_ok()
+        );
+        for ru in [
+            "https://rp.example/cb/evil",
+            "https://rp.example/cbx",
+            "https://rp.example/cb?x=1",
+        ] {
             assert!(
-                matches!(resolve_addressee(&p, with(ru)).await, Err(OAuthError::InvalidRequest(_))),
+                matches!(
+                    resolve_addressee(&p, with(ru)).await,
+                    Err(OAuthError::InvalidRequest(_))
+                ),
                 "{ru} を通した"
             );
         }
@@ -226,20 +259,43 @@ mod tests {
         let p = Provider::new("https://op");
         let ok = addressed(params(), client(true, false));
         assert!(CheckResponseType.check(&p, &ok).await.is_ok());
-        let tok = addressed(AuthParams { response_type: Some("token".into()), ..params() }, client(true, false));
+        let tok = addressed(
+            AuthParams {
+                response_type: Some("token".into()),
+                ..params()
+            },
+            client(true, false),
+        );
         assert_matches!(
             CheckResponseType.check(&p, &tok).await,
             Err(OAuthError::UnsupportedResponseType(_))
         );
-        let none = addressed(AuthParams { response_type: None, ..params() }, client(true, false));
+        let none = addressed(
+            AuthParams {
+                response_type: None,
+                ..params()
+            },
+            client(true, false),
+        );
         assert!(CheckResponseType.check(&p, &none).await.is_err());
     }
 
     #[tokio::test]
     async fn check_scope_requires_openid() {
         let p = Provider::new("https://op");
-        assert!(CheckScope.check(&p, &addressed(params(), client(true, false))).await.is_ok());
-        let no = addressed(AuthParams { scope: Some("profile email".into()), ..params() }, client(true, false));
+        assert!(
+            CheckScope
+                .check(&p, &addressed(params(), client(true, false)))
+                .await
+                .is_ok()
+        );
+        let no = addressed(
+            AuthParams {
+                scope: Some("profile email".into()),
+                ..params()
+            },
+            client(true, false),
+        );
         assert_matches!(
             CheckScope.check(&p, &no).await,
             Err(OAuthError::InvalidScope(_))
@@ -250,23 +306,57 @@ mod tests {
     async fn check_pkce_rules() {
         let p = Provider::new("https://op");
         // public + S256 challenge → OK
-        assert!(CheckPkce.check(&p, &addressed(params(), client(true, false))).await.is_ok());
+        assert!(
+            CheckPkce
+                .check(&p, &addressed(params(), client(true, false)))
+                .await
+                .is_ok()
+        );
         // public + challenge 無し → 必須エラー
-        let no_pkce = AuthParams { code_challenge: None, code_challenge_method: None, ..params() };
-        assert!(CheckPkce.check(&p, &addressed(no_pkce.clone(), client(true, false))).await.is_err());
+        let no_pkce = AuthParams {
+            code_challenge: None,
+            code_challenge_method: None,
+            ..params()
+        };
+        assert!(
+            CheckPkce
+                .check(&p, &addressed(no_pkce.clone(), client(true, false)))
+                .await
+                .is_err()
+        );
         // confidential + challenge 無し → OK（必須でない）
-        assert!(CheckPkce.check(&p, &addressed(no_pkce, client(false, false))).await.is_ok());
+        assert!(
+            CheckPkce
+                .check(&p, &addressed(no_pkce, client(false, false)))
+                .await
+                .is_ok()
+        );
         // challenge あり + plain method → S256 必須エラー
-        let plain = AuthParams { code_challenge_method: Some("plain".into()), ..params() };
-        assert!(CheckPkce.check(&p, &addressed(plain, client(false, false))).await.is_err());
+        let plain = AuthParams {
+            code_challenge_method: Some("plain".into()),
+            ..params()
+        };
+        assert!(
+            CheckPkce
+                .check(&p, &addressed(plain, client(false, false)))
+                .await
+                .is_err()
+        );
     }
 
     /// method を省いた challenge は RFC 7636 §4.3 により plain とみなす。S256 とみなして通さない。
     #[tokio::test]
     async fn check_pkce_refuses_a_challenge_without_method() {
         let p = Provider::new("https://op");
-        let no_method = AuthParams { code_challenge_method: None, ..params() };
-        for c in [client(true, false), client(false, false), client(false, true)] {
+        let no_method = AuthParams {
+            code_challenge_method: None,
+            ..params()
+        };
+        for c in [
+            client(true, false),
+            client(false, false),
+            client(false, true),
+        ] {
             assert_matches!(
                 CheckPkce.check(&p, &addressed(no_method.clone(), c)).await,
                 Err(OAuthError::InvalidRequest(_))

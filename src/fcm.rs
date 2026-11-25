@@ -6,18 +6,26 @@ use crate::document_store::DocumentStore;
 use crate::firestore;
 #[cfg(feature = "gcp")]
 use crate::firestore::Firestore;
-use serde_json::json;
 #[cfg(feature = "gcp")]
 use serde_json::Value;
+use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const COL: &str = "fcmTokens";
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
-pub async fn save_token(fs: &dyn DocumentStore, account_id: &str, token: &str, platform: &str) -> Result<(), String> {
+pub async fn save_token(
+    fs: &dyn DocumentStore,
+    account_id: &str,
+    token: &str,
+    platform: &str,
+) -> Result<(), String> {
     fs.set_doc(
         COL,
         account_id,
@@ -95,7 +103,11 @@ async fn send(fs: &Firestore, message: Value) -> Result<(), String> {
     if r.status().is_success() {
         Ok(())
     } else {
-        Err(format!("fcm {} {}", r.status(), r.text().await.unwrap_or_default()))
+        Err(format!(
+            "fcm {} {}",
+            r.status(),
+            r.text().await.unwrap_or_default()
+        ))
     }
 }
 
@@ -113,12 +125,24 @@ mod tests {
         // 別々の場所で同じ識別子(account_id)を渡し続けられているかを検証する
         // (かつて login_hint/email との取り違えでこのキーがズレていたクラスのバグを防ぐ)。
         save_token(&fs, "acct-123", "tok-abc", "ios").await.unwrap();
-        send_ciba_request(&fs, "acct-123", "client-1", "openid", "承認してください", "req-1", None)
-            .await
-            .unwrap();
+        send_ciba_request(
+            &fs,
+            "acct-123",
+            "client-1",
+            "openid",
+            "承認してください",
+            "req-1",
+            None,
+        )
+        .await
+        .unwrap();
 
         let sent = state.fcm_sent_messages();
-        assert_eq!(sent.len(), 1, "同じ account_id で保存した token 宛にちょうど1通送られる");
+        assert_eq!(
+            sent.len(),
+            1,
+            "同じ account_id で保存した token 宛にちょうど1通送られる"
+        );
         assert_eq!(sent[0]["message"]["token"], json!("tok-abc"));
         assert_eq!(sent[0]["message"]["data"]["auth_req_id"], json!("req-1"));
         assert_eq!(
@@ -141,9 +165,17 @@ mod tests {
         // account_id ではなく email 等、違う識別子系列で呼ばれた場合を模す。
         // 現状の契約は「見つからなければ静かに no-op」であり、エラーにはならない
         // (呼び出し側のキー取り違えを検知する仕組みは無いことの記録でもある)。
-        send_ciba_request(&fs, "someone@example.com", "client-1", "openid", "", "req-2", None)
-            .await
-            .unwrap();
+        send_ciba_request(
+            &fs,
+            "someone@example.com",
+            "client-1",
+            "openid",
+            "",
+            "req-2",
+            None,
+        )
+        .await
+        .unwrap();
 
         assert!(
             state.fcm_sent_messages().is_empty(),

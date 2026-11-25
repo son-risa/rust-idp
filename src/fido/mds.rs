@@ -10,17 +10,16 @@
 //!
 //! MDS の root はここで明示的に信頼するため、verify.rs の「x5c 内自己署名拒否」とは別経路。
 
-use base64::engine::general_purpose::{STANDARD as B64_STD, URL_SAFE_NO_PAD};
-use base64::Engine;
 use crate::sig;
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD as B64_STD, URL_SAFE_NO_PAD};
 use p256::ecdsa::signature::Verifier;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use x509_cert::Certificate;
 use x509_cert::der::asn1::ObjectIdentifier;
 use x509_cert::der::{Decode, Encode};
-use x509_cert::Certificate;
-
 
 #[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -72,7 +71,10 @@ const COMPROMISED: &[&str] = &[
 ];
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn b64url(s: &str) -> Result<Vec<u8>, String> {
@@ -112,9 +114,15 @@ fn cert_pubkey(cert: &Certificate) -> Result<CertPubKey, String> {
             .decode_as()
             .map_err(|e| format!("ec curve: {e}"))?;
         if curve == OID_P256 && pk.len() == 65 && pk[0] == 0x04 {
-            Ok(CertPubKey::EcP256 { x: pk[1..33].to_vec(), y: pk[33..65].to_vec() })
+            Ok(CertPubKey::EcP256 {
+                x: pk[1..33].to_vec(),
+                y: pk[33..65].to_vec(),
+            })
         } else if curve == OID_P384 && pk.len() == 97 && pk[0] == 0x04 {
-            Ok(CertPubKey::EcP384 { x: pk[1..49].to_vec(), y: pk[49..97].to_vec() })
+            Ok(CertPubKey::EcP384 {
+                x: pk[1..49].to_vec(),
+                y: pk[49..97].to_vec(),
+            })
         } else {
             Err(format!("unsupported EC key (curve/len {})", pk.len()))
         }
@@ -123,7 +131,10 @@ fn cert_pubkey(cert: &Certificate) -> Result<CertPubKey, String> {
         use rsa::traits::PublicKeyParts;
         let der = spki.to_der().map_err(|e| format!("spki der: {e}"))?;
         let key = rsa::PublicKey::from_public_key_der(&der).map_err(|e| format!("rsa: {e}"))?;
-        Ok(CertPubKey::Rsa { n: key.n().to_be_bytes_trimmed_vartime().into_vec(), e: key.e().to_be_bytes_trimmed_vartime().into_vec() })
+        Ok(CertPubKey::Rsa {
+            n: key.n().to_be_bytes_trimmed_vartime().into_vec(),
+            e: key.e().to_be_bytes_trimmed_vartime().into_vec(),
+        })
     } else {
         Err(format!("unsupported cert key alg {alg}"))
     }
@@ -143,15 +154,24 @@ fn p384_vk(x: &[u8], y: &[u8]) -> Result<p384::ecdsa::VerifyingKey, String> {
 }
 
 /// 証明書チェーンの署名検証（child の signatureAlgorithm に従い parent 鍵で検証）。DER 署名。
-fn cert_verify(parent: &CertPubKey, child: &Certificate, msg: &[u8], sig: &[u8]) -> Result<(), String> {
+fn cert_verify(
+    parent: &CertPubKey,
+    child: &Certificate,
+    msg: &[u8],
+    sig: &[u8],
+) -> Result<(), String> {
     match parent {
         CertPubKey::EcP256 { x, y } => {
             let s = p256::ecdsa::Signature::from_der(sig).map_err(|e| format!("p256 sig: {e}"))?;
-            p256_vk(x, y)?.verify(msg, &s).map_err(|_| "ecdsa-p256 verify failed".into())
+            p256_vk(x, y)?
+                .verify(msg, &s)
+                .map_err(|_| "ecdsa-p256 verify failed".into())
         }
         CertPubKey::EcP384 { x, y } => {
             let s = p384::ecdsa::Signature::from_der(sig).map_err(|e| format!("p384 sig: {e}"))?;
-            p384_vk(x, y)?.verify(msg, &s).map_err(|_| "ecdsa-p384 verify failed".into())
+            p384_vk(x, y)?
+                .verify(msg, &s)
+                .map_err(|_| "ecdsa-p384 verify failed".into())
         }
         CertPubKey::Rsa { n, e } => match child.signature_algorithm().oid {
             OID_RSA_SHA256 => sig::verify_rs256(n, e, msg, sig),
@@ -163,15 +183,26 @@ fn cert_verify(parent: &CertPubKey, child: &Certificate, msg: &[u8], sig: &[u8])
 }
 
 /// JWS（raw r||s / raw RSA）を leaf 鍵 + header.alg で検証。
-fn jws_verify(leaf: &CertPubKey, alg: &str, signing_input: &[u8], sig: &[u8]) -> Result<(), String> {
+fn jws_verify(
+    leaf: &CertPubKey,
+    alg: &str,
+    signing_input: &[u8],
+    sig: &[u8],
+) -> Result<(), String> {
     match (alg, leaf) {
         ("ES256", CertPubKey::EcP256 { x, y }) => {
-            let s = p256::ecdsa::Signature::from_slice(sig).map_err(|e| format!("es256 sig: {e}"))?;
-            p256_vk(x, y)?.verify(signing_input, &s).map_err(|_| "ES256 verify failed".into())
+            let s =
+                p256::ecdsa::Signature::from_slice(sig).map_err(|e| format!("es256 sig: {e}"))?;
+            p256_vk(x, y)?
+                .verify(signing_input, &s)
+                .map_err(|_| "ES256 verify failed".into())
         }
         ("ES384", CertPubKey::EcP384 { x, y }) => {
-            let s = p384::ecdsa::Signature::from_slice(sig).map_err(|e| format!("es384 sig: {e}"))?;
-            p384_vk(x, y)?.verify(signing_input, &s).map_err(|_| "ES384 verify failed".into())
+            let s =
+                p384::ecdsa::Signature::from_slice(sig).map_err(|e| format!("es384 sig: {e}"))?;
+            p384_vk(x, y)?
+                .verify(signing_input, &s)
+                .map_err(|_| "ES384 verify failed".into())
         }
         ("RS256", CertPubKey::Rsa { n, e }) => sig::verify_rs256(n, e, signing_input, sig),
         ("RS384", CertPubKey::Rsa { n, e }) => sig::verify_rs384(n, e, signing_input, sig),
@@ -193,8 +224,14 @@ fn cert_valid_now(cert: &Certificate) -> Result<(), String> {
 
 fn signed_by(child: &Certificate, parent: &Certificate) -> Result<(), String> {
     let pk = cert_pubkey(parent)?;
-    let tbs = child.tbs_certificate().to_der().map_err(|e| format!("tbs der: {e}"))?;
-    let sig = child.signature().as_bytes().ok_or("cert sig not byte-aligned")?;
+    let tbs = child
+        .tbs_certificate()
+        .to_der()
+        .map_err(|e| format!("tbs der: {e}"))?;
+    let sig = child
+        .signature()
+        .as_bytes()
+        .ok_or("cert sig not byte-aligned")?;
     cert_verify(&pk, child, &tbs, sig)
 }
 
@@ -262,7 +299,11 @@ pub fn validate_attestation_chain(x5c_der: &[Vec<u8>], roots_b64: &[String]) -> 
 pub type VerifiedBlob = (i64, Vec<Entry>, Vec<Vec<u8>>);
 
 /// BLOB(JWS Compact) を検証して (no, entries, x5cチェーンDER) を返す。`prev_no` 以下の no は拒否。
-pub fn verify_blob(blob: &str, roots_der: &[Vec<u8>], prev_no: i64) -> Result<VerifiedBlob, String> {
+pub fn verify_blob(
+    blob: &str,
+    roots_der: &[Vec<u8>],
+    prev_no: i64,
+) -> Result<VerifiedBlob, String> {
     let parts: Vec<&str> = blob.trim().split('.').collect();
     if parts.len() != 3 {
         return Err("mds blob not a JWS compact".into());
@@ -279,7 +320,11 @@ pub fn verify_blob(blob: &str, roots_der: &[Vec<u8>], prev_no: i64) -> Result<Ve
     let x5c_der: Vec<Vec<u8>> = header
         .x5c
         .iter()
-        .map(|c| B64_STD.decode(c).map_err(|e| format!("mds x5c base64: {e}")))
+        .map(|c| {
+            B64_STD
+                .decode(c)
+                .map_err(|e| format!("mds x5c base64: {e}"))
+        })
         .collect::<Result<_, _>>()?;
     let leaf_key = validate_chain_to_roots(&x5c_der, roots_der, true)?;
 
@@ -293,8 +338,8 @@ pub fn verify_blob(blob: &str, roots_der: &[Vec<u8>], prev_no: i64) -> Result<Ve
 
 /// 証明書の CRL Distribution Points(2.5.29.31) から CRL URL を取り出す。
 fn crl_url(cert: &Certificate) -> Option<String> {
-    use x509_cert::ext::pkix::name::{DistributionPointName, GeneralName};
     use x509_cert::ext::pkix::CrlDistributionPoints;
+    use x509_cert::ext::pkix::name::{DistributionPointName, GeneralName};
     let cdp_oid = ObjectIdentifier::new_unwrap("2.5.29.31");
     let exts = cert.tbs_certificate().extensions()?;
     for ext in exts.iter() {
@@ -381,7 +426,10 @@ impl MdsCache {
     }
 
     /// aaguid のメタデータを返す。未登録は None。compromised status は Err。
-    pub fn get_statement(&self, aaguid_hex_dashed: &str) -> Result<Option<&MetadataStatement>, String> {
+    pub fn get_statement(
+        &self,
+        aaguid_hex_dashed: &str,
+    ) -> Result<Option<&MetadataStatement>, String> {
         let entry = match self.entries.get(&aaguid_hex_dashed.to_lowercase()) {
             Some(e) => e,
             None => return Ok(None),

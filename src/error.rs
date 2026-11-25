@@ -1,9 +1,9 @@
 //! OAuth/OIDC エラー。RFC 6749 §4.1.2.1 / §5.2 の error code に対応。
 //! 描画方法（redirect か JSON か HTML か）は呼び出し側の endpoint が決める。
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {

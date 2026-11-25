@@ -1,20 +1,20 @@
 //! HTTP レイヤ。axum で各エンドポイントを provider のレジストリに配線する。
 
-use crate::client_auth::ClientAuthInput;
 use crate::auth_checks::resolve_addressee;
+use crate::client_auth::ClientAuthInput;
 use crate::context::{AddressedRequest, RawAuthRequest};
 use crate::error::OAuthError;
 use crate::model::{AuthParams, AuthorizationCode, Interaction, Session};
 use crate::provider::Provider;
 use axum::extract::{Form, Path, Query, RawQuery, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use i18n::{localize, Lang};
+use base64::engine::general_purpose::STANDARD as B64;
+use i18n::{Lang, localize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,6 +25,8 @@ use uuid::Uuid;
 mod account;
 mod admin;
 mod ciba;
+#[cfg(test)]
+mod flow_tests;
 pub(crate) mod i18n;
 #[cfg(test)]
 mod i18n_tests;
@@ -33,8 +35,6 @@ mod oidc;
 mod pages;
 mod recover;
 mod register;
-#[cfg(test)]
-mod flow_tests;
 #[cfg(test)]
 mod routes_tests;
 
@@ -81,7 +81,11 @@ fn started_in_this_browser(jar: &CookieJar, i: &crate::model::Interaction) -> bo
     }
     jar.get(&browser_cookie_name(&i.uid)).is_some_and(|c| {
         use subtle::ConstantTimeEq;
-        bool::from(browser_binding_hash(c.value()).as_bytes().ct_eq(i.browser_binding.as_bytes()))
+        bool::from(
+            browser_binding_hash(c.value())
+                .as_bytes()
+                .ct_eq(i.browser_binding.as_bytes()),
+        )
     })
 }
 
@@ -91,11 +95,16 @@ async fn came_from(p: &Provider, jar: &CookieJar, uid: &str) -> crate::registrat
     if uid.is_empty() {
         return none();
     }
-    let Some(i) = p.store.get_interaction(uid).await else { return none() };
+    let Some(i) = p.store.get_interaction(uid).await else {
+        return none();
+    };
     if !started_in_this_browser(jar, &i) {
         return none();
     }
-    crate::registration::CameFrom { uid: uid.to_string(), client_id: requested_client_id(&i) }
+    crate::registration::CameFrom {
+        uid: uid.to_string(),
+        client_id: requested_client_id(&i),
+    }
 }
 
 /// interaction の元の要求の client_id。利用者の入力でなく、/authorize が受けた要求から取る
@@ -132,8 +141,14 @@ const SWITCH_NOTICE: &str = r#"<div id="switch"><h1>[[Switch accounts?]]</h1>
 <button class="primary" onclick="document.getElementById('switch').hidden=true;document.getElementById('main').hidden=false">[[Continue]]</button></div>"#;
 
 fn fill_switch_notice(html: String, current: &str, target: &str) -> String {
-    html.replace("{current}", &format!("<strong>{}</strong>", admin::esc(current)))
-        .replace("{target}", &format!("<strong>{}</strong>", admin::esc(target)))
+    html.replace(
+        "{current}",
+        &format!("<strong>{}</strong>", admin::esc(current)),
+    )
+    .replace(
+        "{target}",
+        &format!("<strong>{}</strong>", admin::esc(target)),
+    )
 }
 
 /// メールのリンクで passkey を作り終えた後の行き先。
@@ -146,10 +161,16 @@ async fn continue_after_email(
     account_id: &str,
     recovered: bool,
 ) -> String {
-    let interaction = if from.uid.is_empty() { None } else { p.store.get_interaction(&from.uid).await };
+    let interaction = if from.uid.is_empty() {
+        None
+    } else {
+        p.store.get_interaction(&from.uid).await
+    };
     if let Some(i) = interaction
         && started_in_this_browser(jar, &i)
-        && p.store.complete_interaction(&from.uid, account_id, now()).await
+        && p.store
+            .complete_interaction(&from.uid, account_id, now())
+            .await
     {
         tracing::info!(event = "login_success", sub = %pseudonymize_sub(account_id), via = "email");
         return p.path(&format!("/authorize/resume?uid={}", from.uid));
@@ -168,7 +189,11 @@ fn account_url(p: &Provider, client_id: &str, recovered: bool) -> String {
     if q.is_empty() {
         return p.path("/account");
     }
-    format!("{}?{}", p.path("/account"), serde_urlencoded::to_string(q).unwrap_or_default())
+    format!(
+        "{}?{}",
+        p.path("/account"),
+        serde_urlencoded::to_string(q).unwrap_or_default()
+    )
 }
 
 /// client の入口（initiate_login_uri）に iss を付けた URL。入口が無い client は None。
@@ -183,13 +208,27 @@ async fn client_entry(p: &Provider, client_id: &str) -> Option<String> {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// SSO セッションを作り、sid cookie を張る。
-async fn start_session(p: &Provider, jar: CookieJar, account_id: String, auth_time: u64) -> CookieJar {
+async fn start_session(
+    p: &Provider,
+    jar: CookieJar,
+    account_id: String,
+    auth_time: u64,
+) -> CookieJar {
     let sid = uuid::Uuid::new_v4().to_string();
-    p.store.save_session(Session { sid: sid.clone(), account_id, auth_time }).await;
+    p.store
+        .save_session(Session {
+            sid: sid.clone(),
+            account_id,
+            auth_time,
+        })
+        .await;
     let cookie = Cookie::build((SID_COOKIE, sid))
         .path("/")
         .http_only(true)
@@ -246,16 +285,28 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
         .route("/authorize/resume", get(oidc::authorize_resume))
         .route("/login/{uid}", get(login::login_form))
         .route("/login/{uid}/cancel", get(oidc::authorize_cancel))
-        .route("/login/{uid}/passkey/options", post(login::login_passkey_options))
-        .route("/login/{uid}/passkey/verify", post(login::login_passkey_verify))
+        .route(
+            "/login/{uid}/passkey/options",
+            post(login::login_passkey_options),
+        )
+        .route(
+            "/login/{uid}/passkey/verify",
+            post(login::login_passkey_verify),
+        )
         .route("/token", post(oidc::token))
         .route("/introspect", post(oidc::introspect))
         .route("/oauth/mandate/consume", post(oidc::mandate_consume))
         .route("/oauth/register", post(oidc::register))
         .route("/revoke", post(oidc::revoke))
-        .route("/end-session", get(oidc::end_session).post(oidc::end_session_post))
+        .route(
+            "/end-session",
+            get(oidc::end_session).post(oidc::end_session_post),
+        )
         .route("/par", post(oidc::par))
-        .route("/userinfo", get(oidc::userinfo_get).post(oidc::userinfo_post))
+        .route(
+            "/userinfo",
+            get(oidc::userinfo_get).post(oidc::userinfo_post),
+        )
         .route("/me/profile", get(oidc::profile_get).put(oidc::profile_put))
         // CIBA
         .route("/backchannel-authentication", post(ciba::backchannel_auth))
@@ -263,17 +314,35 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
         .route("/ciba/pending", get(ciba::ciba_pending_list))
         .route("/ciba/history", get(ciba::ciba_history))
         .route("/ciba/fcm-tokens", post(ciba::fcm_token_register))
-        .route("/ciba/{auth_req_id}/passkey-options", post(ciba::ciba_approve_options))
+        .route(
+            "/ciba/{auth_req_id}/passkey-options",
+            post(ciba::ciba_approve_options),
+        )
         .route("/ciba/{auth_req_id}/approve", post(ciba::ciba_approve))
         .route("/ciba/{auth_req_id}/reject", post(ciba::ciba_reject))
         // メール確認つきユーザー登録（Web HTML フロー + ネイティブ JSON API）。
         // OAuth の「クライアント登録(DCR)」と区別するため /signup/* に置く。
-        .route("/signup", get(register::register_form).post(register::register_submit))
+        .route(
+            "/signup",
+            get(register::register_form).post(register::register_submit),
+        )
         .route("/signup/verify", get(register::verify_form))
-        .route("/signup/email-challenge", post(register::register_email_challenge))
-        .route("/signup/verify-email", post(register::register_verify_email))
-        .route("/signup/passkey/options", post(register::register_passkey_options))
-        .route("/signup/passkey/verify", post(register::register_passkey_verify))
+        .route(
+            "/signup/email-challenge",
+            post(register::register_email_challenge),
+        )
+        .route(
+            "/signup/verify-email",
+            post(register::register_verify_email),
+        )
+        .route(
+            "/signup/passkey/options",
+            post(register::register_passkey_options),
+        )
+        .route(
+            "/signup/passkey/verify",
+            post(register::register_passkey_verify),
+        )
         // 招待: RP（INVITE_CLIENT_IDS の confidential client）が登録リンクを発行し、受け手は /invite で登録する。
         .route("/account", get(account::account_page))
         .route("/account/signin/options", post(account::signin_options))
@@ -281,7 +350,10 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
         .route("/account/passkeys/options", post(account::add_options))
         .route("/account/passkeys/verify", post(account::add_verify))
         .route("/account/passkeys/delete", post(account::delete_passkey))
-        .route("/recover", get(recover::recover_page).post(recover::recover_submit))
+        .route(
+            "/recover",
+            get(recover::recover_page).post(recover::recover_submit),
+        )
         .route("/recover/options", post(recover::recover_options))
         .route("/recover/verify", post(recover::recover_verify))
         .route("/invites", post(register::invite_create))
@@ -298,16 +370,31 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
         .route("/admin", get(admin::admin_home))
         .route("/admin/users", get(admin::users_list))
         .route("/admin/users/{account_id}", get(admin::user_detail))
-        .route("/admin/users/{account_id}/disable", post(admin::user_disable))
+        .route(
+            "/admin/users/{account_id}/disable",
+            post(admin::user_disable),
+        )
         .route("/admin/users/{account_id}/enable", post(admin::user_enable))
         .route("/admin/users/{account_id}/delete", post(admin::user_delete))
-        .route("/admin/users/{account_id}/delete-passkeys", post(admin::user_delete_passkeys))
-        .route("/admin/users/{account_id}/grant-admin", post(admin::user_grant_admin))
-        .route("/admin/users/{account_id}/revoke-admin", post(admin::user_revoke_admin))
+        .route(
+            "/admin/users/{account_id}/delete-passkeys",
+            post(admin::user_delete_passkeys),
+        )
+        .route(
+            "/admin/users/{account_id}/grant-admin",
+            post(admin::user_grant_admin),
+        )
+        .route(
+            "/admin/users/{account_id}/revoke-admin",
+            post(admin::user_revoke_admin),
+        )
         .route("/admin/audit", get(admin::audit_list))
         .route("/admin/clients", get(admin::clients_list))
         .route("/admin/clients/{client_id}", get(admin::client_detail))
-        .route("/admin/clients/{client_id}/revoke", post(admin::client_revoke))
+        .route(
+            "/admin/clients/{client_id}/revoke",
+            post(admin::client_revoke),
+        )
         .route(
             "/admin/clients/{client_id}/post-logout",
             post(admin::client_set_post_logout),
@@ -317,17 +404,29 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
             post(admin::client_set_initiate_login),
         )
         .route("/admin/iats", get(admin::iats_pending_list))
-        .route("/admin/iats/new", get(admin::iat_mint_form).post(admin::iat_mint_submit))
+        .route(
+            "/admin/iats/new",
+            get(admin::iat_mint_form).post(admin::iat_mint_submit),
+        )
         .route("/admin/iats/{hash}/revoke", post(admin::iat_revoke))
         .route("/admin/iats/flash/{flash_id}", get(admin::iat_show_once))
-        .route_layer(axum::middleware::from_fn_with_state(shared.clone(), admin_same_origin));
+        .route_layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            admin_same_origin,
+        ));
 
     // 本人の画面の form の POST も、同じ門で自分の origin から来たものだけを通す。
     let account_forms = Router::new()
         .route("/account/profile", post(account::save_name))
-        .route_layer(axum::middleware::from_fn_with_state(shared.clone(), admin_same_origin));
+        .route_layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            admin_same_origin,
+        ));
 
-    let inner = inner.merge(admin).merge(account_forms).with_state(shared.clone());
+    let inner = inner
+        .merge(admin)
+        .merge(account_forms)
+        .with_state(shared.clone());
 
     // メールリンク /r はトップレベル（base_path 非依存、AASA の paths と一致）。
     let magic = Router::new()
@@ -368,7 +467,10 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
     let app = app.layer(axum::middleware::from_fn(localize_rejections));
     // 経路より前で転送するので、表に無い path も新しいホストへ送る。転送にも HSTS を付け、request_trace に残す。
     let app = match legacy {
-        Some(l) => app.layer(axum::middleware::from_fn_with_state(Arc::new(l), redirect_legacy_host)),
+        Some(l) => app.layer(axum::middleware::from_fn_with_state(
+            Arc::new(l),
+            redirect_legacy_host,
+        )),
         None => app,
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
@@ -401,7 +503,11 @@ fn from_own_origin(h: &HeaderMap, origin: &str) -> bool {
     }
     h.get(header::REFERER)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|r| r == origin || r.strip_prefix(origin).is_some_and(|rest| rest.starts_with('/')))
+        .is_some_and(|r| {
+            r == origin
+                || r.strip_prefix(origin)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 /// 移す前のホスト（LEGACY_HOSTS）と、転送先の ORIGIN（scheme とホスト）。
@@ -422,7 +528,9 @@ impl LegacyHosts {
                     tracing::warn!(event = "legacy_host_is_origin", host = %h, "LEGACY_HOSTS の ORIGIN のホストは転送しない");
                 }
                 Some(h) => hosts.push(h),
-                None => tracing::warn!(event = "legacy_host_unparsable", host = %h, "LEGACY_HOSTS の読めない値を捨てる"),
+                None => {
+                    tracing::warn!(event = "legacy_host_unparsable", host = %h, "LEGACY_HOSTS の読めない値を捨てる")
+                }
             }
         }
         (!hosts.is_empty()).then_some(Self { hosts, origin })
@@ -448,7 +556,12 @@ async fn redirect_legacy_host(
         .uri()
         .authority()
         .map(|a| a.as_str().to_string())
-        .or_else(|| req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).map(str::to_string))
+        .or_else(|| {
+            req.headers()
+                .get(header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        })
         .and_then(|h| host_of(&h));
     let is_legacy = host.as_ref().is_some_and(|h| l.hosts.contains(h));
     if !is_legacy || req.uri().path() == "/.well-known/apple-app-site-association" {
@@ -464,7 +577,10 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
     if !h.contains_key(header::STRICT_TRANSPORT_SECURITY) {
-        h.insert(header::STRICT_TRANSPORT_SECURITY, header::HeaderValue::from_static("max-age=31536000"));
+        h.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            header::HeaderValue::from_static("max-age=31536000"),
+        );
     }
     let is_html = h
         .get(header::CONTENT_TYPE)
@@ -473,7 +589,9 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
     if is_html && !h.contains_key(header::CONTENT_SECURITY_POLICY) {
         h.insert(
             header::CONTENT_SECURITY_POLICY,
-            header::HeaderValue::from_static("frame-ancestors 'none'; base-uri 'none'; object-src 'none'"),
+            header::HeaderValue::from_static(
+                "frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
+            ),
         );
     }
     resp
@@ -482,7 +600,10 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
 /// 名前に `%` を含む cookie を、ハンドラが読む前に Cookie の見出しから落とす。
 /// CookieJar は名前も %-符号から戻して読む（cookie crate の percent-encode）。`__Host%2Dsid` は `__Host-` で始まらないので
 /// ブラウザは別のサブドメインからの `Domain=` 付きでも受け取るが、読むと `__Host-sid` になり、`__Host-` の守りを迂回される。
-async fn drop_encoded_cookie_names(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+async fn drop_encoded_cookie_names(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
     // bytes のまま組に分ける。ASCII でない組が 1 つあるだけで見出しごと読めなくなると、別のサブドメインから
     // 植えた 1 つで印とセッションを読ませなくできるので、その組だけを落とす。
     let pairs: Vec<String> = req
@@ -510,7 +631,10 @@ async fn drop_encoded_cookie_names(mut req: axum::extract::Request, next: axum::
 
 /// axum の Query・Path・Form の取り出しの失敗は英語の説明を text/plain の本文に入れて返すので、
 /// ブラウザの言語の文に差し替える。Content-Type 違いの 415 は RP の開発者向けなので英語のまま通す。
-async fn localize_rejections(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+async fn localize_rejections(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
     let lang = Lang::from_headers(req.headers());
     let resp = next.run(req).await;
     let is_plain = resp
@@ -525,21 +649,31 @@ async fn localize_rejections(req: axum::extract::Request, next: axum::middleware
     let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
         Ok(b) => b,
         Err(e) => {
-            tracing::warn!(event = "rejection_body_unreadable", status = parts.status.as_u16(), "{e}");
+            tracing::warn!(
+                event = "rejection_body_unreadable",
+                status = parts.status.as_u16(),
+                "{e}"
+            );
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
     let detail = String::from_utf8_lossy(&bytes);
     let msg = if detail.starts_with("Failed to deserialize form") {
         "[[Some of the entered values are invalid. Please check them and try again.]]"
-    } else if detail.starts_with("Failed to deserialize query string") || detail.starts_with("Invalid URL") {
+    } else if detail.starts_with("Failed to deserialize query string")
+        || detail.starts_with("Invalid URL")
+    {
         "[[The URL of this page is not valid. Please check the link and try again.]]"
     } else {
         return Response::from_parts(parts, axum::body::Body::from(bytes));
     };
     // serde の説明は値を含みうるので、どの取り出しで落ちたかだけを残す。
     let kind = detail.split(':').next().unwrap_or_default();
-    tracing::warn!(event = "request_rejected", status = parts.status.as_u16(), kind);
+    tracing::warn!(
+        event = "request_rejected",
+        status = parts.status.as_u16(),
+        kind
+    );
     (parts.status, localize(msg, lang)).into_response()
 }
 
@@ -591,10 +725,17 @@ pub(crate) fn pseudonymize_sub(sub: &str) -> String {
 }
 
 /// 未マッチのリクエストをログする（MDS3 等が叩く未実装パスの特定用）。
-async fn log_unmatched(method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap) -> impl IntoResponse {
+async fn log_unmatched(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     // query は出さない（パスが少し違うだけで、メール確認の token や code が載りうる）。
     tracing::info!("UNMATCHED {} {}", method, uri.path());
-    (StatusCode::NOT_FOUND, localize("[[Page not found]]", Lang::from_headers(&headers)))
+    (
+        StatusCode::NOT_FOUND,
+        localize("[[Page not found]]", Lang::from_headers(&headers)),
+    )
 }
 
 fn plain_error(msg: &str) -> Response {
@@ -689,9 +830,15 @@ fn dpop_header(headers: &HeaderMap) -> Option<String> {
 /// レート制限に使う送り手の IP。Cloud Run は自分が見た送り手の IP を X-Forwarded-For の末尾に足し、
 /// 送り手が書いた値はその前に残る。先頭を使うと、送り手が好きな値で制限をすり抜けられる。
 pub(super) fn client_ip(headers: &HeaderMap) -> String {
-    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let xff = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     // 末尾が本当に送り手かを本番の前段で確かめるための数（値は出さない）。
-    tracing::info!(event = "forwarded_for_hops", hops = xff.split(',').filter(|s| !s.trim().is_empty()).count());
+    tracing::info!(
+        event = "forwarded_for_hops",
+        hops = xff.split(',').filter(|s| !s.trim().is_empty()).count()
+    );
     xff.rsplit(',')
         .map(str::trim)
         .find(|s| !s.is_empty())
@@ -733,10 +880,9 @@ async fn authenticate_client(
         body_client_id: form.get("client_id").cloned(),
         client_assertion: form.get("client_assertion").cloned(),
     };
-    let auth = p
-        .client_auth
-        .get(method)
-        .ok_or_else(|| OAuthError::InvalidClient("unsupported auth method".into()).into_response())?;
+    let auth = p.client_auth.get(method).ok_or_else(|| {
+        OAuthError::InvalidClient("unsupported auth method".into()).into_response()
+    })?;
     auth.authenticate(p, &input).await.map_err(|e| {
         tracing::warn!(event = "client_auth_failed", method = method);
         e.into_response()
@@ -772,17 +918,20 @@ async fn authenticate_token(
         Some(x) => x,
         None => match body_token {
             Some(t) => ("Bearer".into(), t),
-            None => {
-                return Err((StatusCode::UNAUTHORIZED, "access token required").into_response())
-            }
+            None => return Err((StatusCode::UNAUTHORIZED, "access token required").into_response()),
         },
     };
     let at = match p.store.get_access_token(&token).await {
         Ok(Some(at)) => at,
         Err(e) => {
             // 401 にすると、RP は生きているトークンを捨ててログインし直させる。
-            tracing::error!(event = "store_error", "token auth [{method} {path_suffix}]: {e}");
-            return Err((StatusCode::SERVICE_UNAVAILABLE, "temporarily unavailable").into_response());
+            tracing::error!(
+                event = "store_error",
+                "token auth [{method} {path_suffix}]: {e}"
+            );
+            return Err(
+                (StatusCode::SERVICE_UNAVAILABLE, "temporarily unavailable").into_response()
+            );
         }
         Ok(None) => {
             tracing::warn!("token auth failed [{method} {path_suffix}]: invalid/expired token");
@@ -792,13 +941,17 @@ async fn authenticate_token(
     // DPoP 束縛トークンは DPoP scheme + proof（jkt 一致 / ath 一致）を要求。
     if let Some(jkt) = &at.jkt {
         if scheme != "DPoP" {
-            tracing::warn!("token auth failed [{path_suffix}]: DPoP scheme required (got {scheme})");
+            tracing::warn!(
+                "token auth failed [{path_suffix}]: DPoP scheme required (got {scheme})"
+            );
             return Err((StatusCode::UNAUTHORIZED, "DPoP scheme required").into_response());
         }
         let proof = match dpop_header(headers) {
             Some(p) => p,
             None => {
-                tracing::warn!("token auth failed [{path_suffix}]: DPoP proof missing or duplicated");
+                tracing::warn!(
+                    "token auth failed [{path_suffix}]: DPoP proof missing or duplicated"
+                );
                 return Err((StatusCode::UNAUTHORIZED, "DPoP proof required").into_response());
             }
         };
@@ -807,7 +960,9 @@ async fn authenticate_token(
         match p.dpop.verify(&proof, method, &htu, Some(&want_ath)).await {
             Ok(got) if &got == jkt => {}
             Ok(_) => {
-                tracing::warn!("token auth failed [{path_suffix}]: DPoP jkt mismatch (token bound to different key)");
+                tracing::warn!(
+                    "token auth failed [{path_suffix}]: DPoP jkt mismatch (token bound to different key)"
+                );
                 return Err((StatusCode::UNAUTHORIZED, "DPoP jkt mismatch").into_response());
             }
             Err(e) => {
@@ -836,19 +991,33 @@ mod browser_guard_tests {
         if let Some(r) = referer {
             req = req.header(header::REFERER, r);
         }
-        app().oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap().status()
+        app()
+            .oneshot(req.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
     }
 
     /// 他の origin からの POST、どこから来たか分からない POST は、管理者の確かめより前に断る。
     #[tokio::test]
     async fn an_admin_post_from_another_origin_is_refused() {
         assert_eq!(post_admin(None, None).await, StatusCode::FORBIDDEN);
-        assert_eq!(post_admin(Some("https://test.idp.example"), None).await, StatusCode::FORBIDDEN);
+        assert_eq!(
+            post_admin(Some("https://test.idp.example"), None).await,
+            StatusCode::FORBIDDEN
+        );
         assert_eq!(post_admin(Some("null"), None).await, StatusCode::FORBIDDEN);
-        assert_eq!(post_admin(None, Some("https://idp.example.evil/oidc/admin")).await, StatusCode::FORBIDDEN);
+        assert_eq!(
+            post_admin(None, Some("https://idp.example.evil/oidc/admin")).await,
+            StatusCode::FORBIDDEN
+        );
         // Origin があれば Referer より先に見る。
         assert_eq!(
-            post_admin(Some("https://evil.example"), Some("https://idp.example/oidc/admin")).await,
+            post_admin(
+                Some("https://evil.example"),
+                Some("https://idp.example/oidc/admin")
+            )
+            .await,
             StatusCode::FORBIDDEN
         );
     }
@@ -860,18 +1029,30 @@ mod browser_guard_tests {
             post_admin(Some("https://idp.example"), None).await,
             post_admin(None, Some("https://idp.example/oidc/admin/users/acc-1")).await,
         ] {
-            assert!(s != StatusCode::FORBIDDEN && s != StatusCode::NOT_FOUND, "{s}");
+            assert!(
+                s != StatusCode::FORBIDDEN && s != StatusCode::NOT_FOUND,
+                "{s}"
+            );
         }
     }
 
     #[tokio::test]
     async fn html_gets_hsts_and_a_frame_ban_and_json_gets_only_hsts() {
         let html = app()
-            .oneshot(axum::http::Request::get("/oidc/signup").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::get("/oidc/signup")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        assert_eq!(html.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
-        let csp = html.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert_eq!(
+            html.headers()[header::STRICT_TRANSPORT_SECURITY],
+            "max-age=31536000"
+        );
+        let csp = html.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
         assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
         let json = app()
             .oneshot(
@@ -881,7 +1062,10 @@ mod browser_guard_tests {
             )
             .await
             .unwrap();
-        assert_eq!(json.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
+        assert_eq!(
+            json.headers()[header::STRICT_TRANSPORT_SECURITY],
+            "max-age=31536000"
+        );
         assert!(!json.headers().contains_key(header::CONTENT_SECURITY_POLICY));
     }
 }
@@ -919,7 +1103,13 @@ mod token_auth_tests {
 
     #[async_trait::async_trait]
     impl crate::dpop::DpopVerifier for ProofIsItsJkt {
-        async fn verify(&self, proof: &str, _: &str, _: &str, _: Option<&str>) -> Result<String, String> {
+        async fn verify(
+            &self,
+            proof: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<String, String> {
             Ok(proof.to_string())
         }
     }
@@ -939,13 +1129,17 @@ mod token_auth_tests {
                 authorization_details: None,
                 mandate_consumed: false,
             })
-            .await.unwrap();
+            .await
+            .unwrap();
         p
     }
 
     fn headers(scheme: &str, proof: Option<&str>) -> HeaderMap {
         let mut h = HeaderMap::new();
-        h.insert(header::AUTHORIZATION, format!("{scheme} AT").parse().unwrap());
+        h.insert(
+            header::AUTHORIZATION,
+            format!("{scheme} AT").parse().unwrap(),
+        );
         if let Some(pr) = proof {
             h.insert("dpop", pr.parse().unwrap());
         }
@@ -955,11 +1149,32 @@ mod token_auth_tests {
     #[tokio::test]
     async fn bound_token_needs_a_proof_from_the_key_it_was_bound_to() {
         let p = provider_with_token_bound_to("JKT-OWNER").await;
-        let ok = authenticate_token(&p, &headers("DPoP", Some("JKT-OWNER")), "GET", "/userinfo", None).await;
+        let ok = authenticate_token(
+            &p,
+            &headers("DPoP", Some("JKT-OWNER")),
+            "GET",
+            "/userinfo",
+            None,
+        )
+        .await;
         assert!(ok.is_ok());
-        let stolen = authenticate_token(&p, &headers("DPoP", Some("JKT-ATTACKER")), "GET", "/userinfo", None).await;
+        let stolen = authenticate_token(
+            &p,
+            &headers("DPoP", Some("JKT-ATTACKER")),
+            "GET",
+            "/userinfo",
+            None,
+        )
+        .await;
         assert_eq!(stolen.unwrap_err().status(), StatusCode::UNAUTHORIZED);
-        let bearer = authenticate_token(&p, &headers("Bearer", Some("JKT-OWNER")), "GET", "/userinfo", None).await;
+        let bearer = authenticate_token(
+            &p,
+            &headers("Bearer", Some("JKT-OWNER")),
+            "GET",
+            "/userinfo",
+            None,
+        )
+        .await;
         assert_eq!(bearer.unwrap_err().status(), StatusCode::UNAUTHORIZED);
     }
 }
@@ -1015,7 +1230,7 @@ mod obs_tests {
     /// `fmt().json()` の記録のどこにも出ない。router を丸ごと通し、中間層とハンドラの両方の記録を見る。
     #[tokio::test]
     async fn the_authorization_header_value_never_reaches_the_log() {
-        use axum::http::{header, Request};
+        use axum::http::{Request, header};
         use tower::ServiceExt;
 
         let buf = Arc::new(Mutex::new(Vec::new()));
@@ -1033,45 +1248,83 @@ mod obs_tests {
 
         const BEARER: &str = "SECRET-BEARER-7f3a9c";
         const CLIENT_SECRET: &str = "SECRET-CLIENT-2b8e41";
-        let basic = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, format!("rp:{CLIENT_SECRET}"));
-        let p = crate::provider::Provider::new("https://op.example").with_client(crate::model::Client {
-            client_id: "rp".into(),
-            redirect_uris: vec![],
-            token_endpoint_auth_method: "client_secret_basic".into(),
-            client_secret: Some(crate::dcr::hash_token("other")),
-            grant_types: vec!["authorization_code".into()],
-            post_logout_redirect_uris: vec![],
-            initiate_login_uri: None,
-            dpop_bound: false,
-            jwks: vec![],
-            jwks_uri: None,
-            require_par: false,
-            require_pkce: false,
-            id_token_signed_response_alg: None,
-        });
+        let basic = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            format!("rp:{CLIENT_SECRET}"),
+        );
+        let p = crate::provider::Provider::new("https://op.example").with_client(
+            crate::model::Client {
+                client_id: "rp".into(),
+                redirect_uris: vec![],
+                token_endpoint_auth_method: "client_secret_basic".into(),
+                client_secret: Some(crate::dcr::hash_token("other")),
+                grant_types: vec!["authorization_code".into()],
+                post_logout_redirect_uris: vec![],
+                initiate_login_uri: None,
+                dpop_bound: false,
+                jwks: vec![],
+                jwks_uri: None,
+                require_par: false,
+                require_pkce: false,
+                id_token_signed_response_alg: None,
+            },
+        );
         let app = super::router_with_legacy_hosts(p, "");
         let form = "application/x-www-form-urlencoded";
         let requests = [
             ("GET", "/userinfo", format!("Bearer {BEARER}"), None),
             ("GET", "/me/profile", format!("DPoP {BEARER}"), None),
-            ("POST", "/oauth/register", format!("Bearer {BEARER}"), Some(("application/json", "{}"))),
-            ("POST", "/token", format!("Basic {basic}"), Some((form, "grant_type=authorization_code&code=C"))),
-            ("POST", "/introspect", format!("Basic {basic}"), Some((form, "token=AT"))),
-            ("POST", "/oauth/mandate/consume", format!("Basic {basic}"), Some((form, "token=AT"))),
+            (
+                "POST",
+                "/oauth/register",
+                format!("Bearer {BEARER}"),
+                Some(("application/json", "{}")),
+            ),
+            (
+                "POST",
+                "/token",
+                format!("Basic {basic}"),
+                Some((form, "grant_type=authorization_code&code=C")),
+            ),
+            (
+                "POST",
+                "/introspect",
+                format!("Basic {basic}"),
+                Some((form, "token=AT")),
+            ),
+            (
+                "POST",
+                "/oauth/mandate/consume",
+                format!("Basic {basic}"),
+                Some((form, "token=AT")),
+            ),
         ];
         for (method, path, authorization, body) in requests {
-            let mut req = Request::builder().method(method).uri(path).header(header::AUTHORIZATION, authorization);
+            let mut req = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::AUTHORIZATION, authorization);
             if let Some((ct, _)) = body {
                 req = req.header(header::CONTENT_TYPE, ct);
             }
             let body = body.map(|(_, b)| b.to_string()).unwrap_or_default();
-            app.clone().oneshot(req.body(axum::body::Body::from(body)).unwrap()).await.unwrap();
+            app.clone()
+                .oneshot(req.body(axum::body::Body::from(body)).unwrap())
+                .await
+                .unwrap();
         }
 
         let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        assert_eq!(out.matches("\"http_request\"").count(), 6, "要求の記録が出ていない: {out}");
+        assert_eq!(
+            out.matches("\"http_request\"").count(),
+            6,
+            "要求の記録が出ていない: {out}"
+        );
         for secret in [BEARER, CLIENT_SECRET, basic.as_str()] {
-            assert!(!out.contains(secret), "Authorization の値 {secret} が記録に出た: {out}");
+            assert!(
+                !out.contains(secret),
+                "Authorization の値 {secret} が記録に出た: {out}"
+            );
         }
     }
 
@@ -1083,7 +1336,10 @@ mod obs_tests {
         let c = super::pseudonymize_sub("other@example.com");
         assert_eq!(a, b, "同じ sub は安定な相関トークン");
         assert_ne!(a, c, "異なる sub は異なる");
-        assert!(!a.contains("alice") && !a.contains('@'), "生メールを含まない: {a}");
+        assert!(
+            !a.contains("alice") && !a.contains('@'),
+            "生メールを含まない: {a}"
+        );
         assert!(a.starts_with("h:"), "擬似化マーカー h: 付き: {a}");
     }
 }
@@ -1094,7 +1350,10 @@ mod legacy_host_tests {
     use tower::ServiceExt;
 
     fn app(legacy: &str) -> Router {
-        router_with_legacy_hosts(Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"), legacy)
+        router_with_legacy_hosts(
+            Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"),
+            legacy,
+        )
     }
 
     async fn send(app: Router, method: &str, uri: &str, host: Option<&str>) -> Response {
@@ -1102,7 +1361,9 @@ mod legacy_host_tests {
         if let Some(h) = host {
             req = req.header(header::HOST, h);
         }
-        app.oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap()
+        app.oneshot(req.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap()
     }
 
     fn location(r: &Response) -> &str {
@@ -1111,16 +1372,31 @@ mod legacy_host_tests {
 
     #[tokio::test]
     async fn get_on_a_legacy_host_goes_to_the_origin_with_the_same_path_and_query() {
-        let r = send(app("old.example"), "GET", "/oidc/authorize?client_id=a&state=x%20y", Some("old.example")).await;
+        let r = send(
+            app("old.example"),
+            "GET",
+            "/oidc/authorize?client_id=a&state=x%20y",
+            Some("old.example"),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
-        assert_eq!(location(&r), "https://new.example/oidc/authorize?client_id=a&state=x%20y");
+        assert_eq!(
+            location(&r),
+            "https://new.example/oidc/authorize?client_id=a&state=x%20y"
+        );
         assert!(r.headers().contains_key(header::STRICT_TRANSPORT_SECURITY));
     }
 
     /// 308 なので、RP の POST（token の交換など）は body ごと送り直される。
     #[tokio::test]
     async fn post_on_a_legacy_host_is_redirected_with_308() {
-        let r = send(app("old.example"), "POST", "/oidc/token?x=1", Some("old.example")).await;
+        let r = send(
+            app("old.example"),
+            "POST",
+            "/oidc/token?x=1",
+            Some("old.example"),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(location(&r), "https://new.example/oidc/token?x=1");
     }
@@ -1128,18 +1404,36 @@ mod legacy_host_tests {
     #[tokio::test]
     async fn host_is_compared_without_case_port_or_trailing_dot() {
         for host in ["OLD.Example", "old.example:443", "old.example."] {
-            let r = send(app(" Old.Example , other.example"), "GET", "/oidc/jwks", Some(host)).await;
+            let r = send(
+                app(" Old.Example , other.example"),
+                "GET",
+                "/oidc/jwks",
+                Some(host),
+            )
+            .await;
             assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT, "{host}");
             assert_eq!(location(&r), "https://new.example/oidc/jwks", "{host}");
         }
-        let r = send(app("old.example,other.example"), "GET", "/oidc/jwks", Some("other.example")).await;
+        let r = send(
+            app("old.example,other.example"),
+            "GET",
+            "/oidc/jwks",
+            Some("other.example"),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
     }
 
     /// HTTP/2 では Host の見出しが無く、URI の authority にホストが入る。
     #[tokio::test]
     async fn the_authority_of_the_uri_is_used_when_there_is_no_host_header() {
-        let r = send(app("old.example"), "GET", "https://old.example/oidc/jwks?a=1", None).await;
+        let r = send(
+            app("old.example"),
+            "GET",
+            "https://old.example/oidc/jwks?a=1",
+            None,
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(location(&r), "https://new.example/oidc/jwks?a=1");
     }
@@ -1147,7 +1441,13 @@ mod legacy_host_tests {
     /// 表に無い path も、経路より前で転送する。
     #[tokio::test]
     async fn unknown_paths_on_a_legacy_host_are_redirected_too() {
-        let r = send(app("old.example"), "GET", "/no/such/path", Some("old.example")).await;
+        let r = send(
+            app("old.example"),
+            "GET",
+            "/no/such/path",
+            Some("old.example"),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(location(&r), "https://new.example/no/such/path");
     }
@@ -1163,10 +1463,19 @@ mod legacy_host_tests {
 
     #[tokio::test]
     async fn aasa_is_served_on_a_legacy_host_without_redirect() {
-        let p = with_app(Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"));
-        let r = send(router_with_legacy_hosts(p, "old.example"), "GET", "/.well-known/apple-app-site-association", Some("old.example")).await;
+        let p =
+            with_app(Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"));
+        let r = send(
+            router_with_legacy_hosts(p, "old.example"),
+            "GET",
+            "/.well-known/apple-app-site-association",
+            Some("old.example"),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(r.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert_eq!(
             std::str::from_utf8(&body).unwrap(),
             r#"{"applinks":{"apps":[],"details":[{"appID":"TEAM123456.com.example.demo","paths":["/r","/r?*"]}]},"webcredentials":{"apps":["TEAM123456.com.example.demo"]}}"#
@@ -1176,14 +1485,26 @@ mod legacy_host_tests {
     /// アプリを設定していなければ AASA を出さない（他社のアプリを名乗らない）。
     #[tokio::test]
     async fn aasa_is_not_found_without_a_mobile_app() {
-        let r = send(app(""), "GET", "/.well-known/apple-app-site-association", None).await;
+        let r = send(
+            app(""),
+            "GET",
+            "/.well-known/apple-app-site-association",
+            None,
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn nothing_is_redirected_when_legacy_hosts_is_empty() {
         for legacy in ["", " , "] {
-            let r = send(app(legacy), "GET", "/oidc/.well-known/openid-configuration", Some("old.example")).await;
+            let r = send(
+                app(legacy),
+                "GET",
+                "/oidc/.well-known/openid-configuration",
+                Some("old.example"),
+            )
+            .await;
             assert_eq!(r.status(), StatusCode::OK, "{legacy:?}");
             let r = send(app(legacy), "POST", "/oidc/token", Some("old.example")).await;
             assert_ne!(r.status(), StatusCode::PERMANENT_REDIRECT, "{legacy:?}");
@@ -1193,8 +1514,19 @@ mod legacy_host_tests {
     /// run.app など、ORIGIN でも LEGACY_HOSTS でもないホストは今までどおり。
     #[tokio::test]
     async fn other_hosts_pass_through() {
-        for host in [Some("rust-idp-xyz-an.a.run.app"), Some("new.example"), Some("sub.old.example"), None] {
-            let r = send(app("old.example"), "GET", "/oidc/.well-known/openid-configuration", host).await;
+        for host in [
+            Some("rust-idp-xyz-an.a.run.app"),
+            Some("new.example"),
+            Some("sub.old.example"),
+            None,
+        ] {
+            let r = send(
+                app("old.example"),
+                "GET",
+                "/oidc/.well-known/openid-configuration",
+                host,
+            )
+            .await;
             assert_eq!(r.status(), StatusCode::OK, "{host:?}");
         }
     }
@@ -1202,8 +1534,13 @@ mod legacy_host_tests {
     /// ORIGIN のホストを LEGACY_HOSTS に入れても、自分へ転送し続けない。
     #[tokio::test]
     async fn the_origin_host_in_legacy_hosts_is_ignored() {
-        let r = send(app("NEW.example"), "GET", "/oidc/.well-known/openid-configuration", Some("new.example")).await;
+        let r = send(
+            app("NEW.example"),
+            "GET",
+            "/oidc/.well-known/openid-configuration",
+            Some("new.example"),
+        )
+        .await;
         assert_eq!(r.status(), StatusCode::OK);
     }
 }
-

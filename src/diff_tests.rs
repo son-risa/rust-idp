@@ -8,11 +8,11 @@
 //! parse_cose_key は登録時に検証鍵そのものを取り出す最重要パーサ（ここが誤れば
 //! 別人の鍵で署名検証が通る等の致命傷になりうる）なので、独立実装と一致を取る価値が高い。
 
-use p256::elliptic_curve::Generate;
 use crate::fido::verify::{self, CredKey};
-use coset::{iana, CborSerializable, CoseKeyBuilder};
-use p256::elliptic_curve::sec1::ToSec1Point;
+use coset::{CborSerializable, CoseKeyBuilder, iana};
 use p256::SecretKey;
+use p256::elliptic_curve::Generate;
+use p256::elliptic_curve::sec1::ToSec1Point;
 
 /// coset がエンコードした EC2/ES256/P-256 の COSE_Key を rust-idp がパースし、
 /// 取り出した (x,y) が元の鍵と完全一致することを多数のランダム鍵で確認する。
@@ -25,17 +25,24 @@ fn parse_cose_key_agrees_with_coset_oracle_es256() {
         let y = ep.y().expect("ec y").to_vec();
 
         // 独立実装で COSE_Key を組み立てる（map のラベル付けは coset の責務）。
-        let bytes = CoseKeyBuilder::new_ec2_pub_key(iana::EllipticCurve::P_256, x.clone(), y.clone())
-            .algorithm(iana::Algorithm::ES256)
-            .build()
-            .to_vec()
-            .expect("coset encode COSE_Key");
+        let bytes =
+            CoseKeyBuilder::new_ec2_pub_key(iana::EllipticCurve::P_256, x.clone(), y.clone())
+                .algorithm(iana::Algorithm::ES256)
+                .build()
+                .to_vec()
+                .expect("coset encode COSE_Key");
 
         // rust-idp の手書きパーサが、独立実装の出力を同じ (x,y) として解釈すること。
         match verify::parse_cose_key(&bytes) {
             Ok((CredKey::Es256 { x: rx, y: ry }, _)) => {
-                assert_eq!(rx, x, "x が coset オラクルと不一致（ラベル -2 の取り違え等）");
-                assert_eq!(ry, y, "y が coset オラクルと不一致（ラベル -3 の取り違え等）");
+                assert_eq!(
+                    rx, x,
+                    "x が coset オラクルと不一致（ラベル -2 の取り違え等）"
+                );
+                assert_eq!(
+                    ry, y,
+                    "y が coset オラクルと不一致（ラベル -3 の取り違え等）"
+                );
             }
             Ok((other, _)) => panic!("ES256 を期待したが alg {}", other.cose_alg()),
             Err(e) => panic!("rust-idp が coset 生成の正当な COSE_Key を拒否: {e}"),

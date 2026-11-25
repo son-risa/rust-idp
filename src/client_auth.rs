@@ -37,7 +37,11 @@ pub struct ClientAuthInput {
 #[async_trait]
 pub trait ClientAuthMethod: Send + Sync {
     fn method(&self) -> &'static str;
-    async fn authenticate(&self, p: &Provider, input: &ClientAuthInput) -> Result<Client, OAuthError>;
+    async fn authenticate(
+        &self,
+        p: &Provider,
+        input: &ClientAuthInput,
+    ) -> Result<Client, OAuthError>;
 }
 
 /// token_endpoint_auth_method = none（public client + PKCE）。
@@ -47,7 +51,11 @@ impl ClientAuthMethod for NoneAuth {
     fn method(&self) -> &'static str {
         "none"
     }
-    async fn authenticate(&self, p: &Provider, input: &ClientAuthInput) -> Result<Client, OAuthError> {
+    async fn authenticate(
+        &self,
+        p: &Provider,
+        input: &ClientAuthInput,
+    ) -> Result<Client, OAuthError> {
         let id = input
             .body_client_id
             .as_deref()
@@ -79,7 +87,11 @@ impl ClientAuthMethod for ClientSecretBasic {
     fn method(&self) -> &'static str {
         "client_secret_basic"
     }
-    async fn authenticate(&self, p: &Provider, input: &ClientAuthInput) -> Result<Client, OAuthError> {
+    async fn authenticate(
+        &self,
+        p: &Provider,
+        input: &ClientAuthInput,
+    ) -> Result<Client, OAuthError> {
         let (id, secret) = input
             .basic
             .as_ref()
@@ -89,8 +101,13 @@ impl ClientAuthMethod for ClientSecretBasic {
             .await
             .ok_or_else(|| OAuthError::InvalidClient(format!("unknown client {id}")))?;
         // 登録した方式が別なら、secret を持っていても通さない。空は RFC 7591 §2 の既定（client_secret_basic）とみなす。
-        if !matches!(client.token_endpoint_auth_method.as_str(), "client_secret_basic" | "") {
-            return Err(OAuthError::InvalidClient("client is not client_secret_basic".into()));
+        if !matches!(
+            client.token_endpoint_auth_method.as_str(),
+            "client_secret_basic" | ""
+        ) {
+            return Err(OAuthError::InvalidClient(
+                "client is not client_secret_basic".into(),
+            ));
         }
         let presented_hash = crate::dcr::hash_token(secret);
         match &client.client_secret {
@@ -110,7 +127,9 @@ pub struct PrivateKeyJwt {
 impl PrivateKeyJwt {
     /// 本番: Firestore 連携で client_assertion の jti をインスタンス跨ぎ単回化。
     pub fn with_store(fs: std::sync::Arc<crate::firestore::Firestore>) -> Self {
-        Self { jti: crate::nonce::NonceStore::firestore(fs) }
+        Self {
+            jti: crate::nonce::NonceStore::firestore(fs),
+        }
     }
 }
 
@@ -119,7 +138,11 @@ impl ClientAuthMethod for PrivateKeyJwt {
     fn method(&self) -> &'static str {
         "private_key_jwt"
     }
-    async fn authenticate(&self, p: &Provider, input: &ClientAuthInput) -> Result<Client, OAuthError> {
+    async fn authenticate(
+        &self,
+        p: &Provider,
+        input: &ClientAuthInput,
+    ) -> Result<Client, OAuthError> {
         let bad = |m: &str| OAuthError::InvalidClient(m.to_string());
         let assertion = input
             .client_assertion
@@ -145,7 +168,10 @@ impl ClientAuthMethod for PrivateKeyJwt {
         if sub.is_empty() || sub != iss {
             return Err(bad("assertion iss/sub mismatch"));
         }
-        let client = p.resolve_client(sub).await.ok_or_else(|| bad("unknown client"))?;
+        let client = p
+            .resolve_client(sub)
+            .await
+            .ok_or_else(|| bad("unknown client"))?;
         if client.token_endpoint_auth_method != "private_key_jwt" {
             return Err(bad("client is not private_key_jwt"));
         }
@@ -166,7 +192,8 @@ impl ClientAuthMethod for PrivateKeyJwt {
         let vk = crate::es256::verifying_key_from_xy(&dec(&jwk.x)?, &dec(&jwk.y)?)
             .map_err(|e| bad(&e))?;
         let signing_input = format!("{}.{}", parts[0], parts[1]);
-        let sig = p256::ecdsa::Signature::from_slice(&dec(parts[2])?).map_err(|_| bad("assertion sig"))?;
+        let sig = p256::ecdsa::Signature::from_slice(&dec(parts[2])?)
+            .map_err(|_| bad("assertion sig"))?;
         use p256::ecdsa::signature::Verifier;
         vk.verify(signing_input.as_bytes(), &sig)
             .map_err(|_| bad("assertion signature invalid"))?;
@@ -222,12 +249,12 @@ impl ClientAuthMethod for PrivateKeyJwt {
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::es256::b64url_encode;
     use crate::model::JwkPub;
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
+    use p256::elliptic_curve::Generate;
 
     const ISS: &str = "https://op.example.com";
 
@@ -256,7 +283,11 @@ mod tests {
         }
     }
 
-    fn input(assertion: Option<&str>, body: Option<(&str, &str)>, basic: Option<(&str, &str)>) -> ClientAuthInput {
+    fn input(
+        assertion: Option<&str>,
+        body: Option<(&str, &str)>,
+        basic: Option<(&str, &str)>,
+    ) -> ClientAuthInput {
         ClientAuthInput {
             basic: basic.map(|(i, s)| (i.into(), s.into())),
             body_client_id: body.map(|(i, _)| i.into()),
@@ -274,10 +305,12 @@ mod tests {
     #[tokio::test]
     async fn secret_basic_unknown_client_rejected() {
         let p = provider();
-        assert!(ClientSecretBasic
-            .authenticate(&p, &input(None, None, Some(("ghost", "x"))))
-            .await
-            .is_err());
+        assert!(
+            ClientSecretBasic
+                .authenticate(&p, &input(None, None, Some(("ghost", "x"))))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -307,7 +340,12 @@ mod tests {
             .with_client(secret_client("pub", "hunter2", "none"))
             .with_client(secret_client("pk", "hunter2", "private_key_jwt"));
         let auth = |id: &str| input(None, None, Some((id, "hunter2")));
-        assert!(ClientSecretBasic.authenticate(&p, &auth("unset")).await.is_ok());
+        assert!(
+            ClientSecretBasic
+                .authenticate(&p, &auth("unset"))
+                .await
+                .is_ok()
+        );
         for id in ["pub", "pk"] {
             let r = ClientSecretBasic.authenticate(&p, &auth(id)).await;
             assert!(matches!(r, Err(OAuthError::InvalidClient(_))), "{id}");
@@ -319,16 +357,21 @@ mod tests {
         // client_secret フィールドには平文でなくハッシュが入る契約そのものを固定する回帰テスト。
         let c = secret_client("rp", "hunter2", "client_secret_basic");
         assert_ne!(c.client_secret.as_deref(), Some("hunter2"));
-        assert_eq!(c.client_secret.as_deref(), Some(crate::dcr::hash_token("hunter2").as_str()));
+        assert_eq!(
+            c.client_secret.as_deref(),
+            Some(crate::dcr::hash_token("hunter2").as_str())
+        );
     }
 
     #[tokio::test]
     async fn none_auth_rejects_confidential_client() {
         let p = provider().with_client(secret_client("rp", "s", "client_secret_basic"));
-        assert!(NoneAuth
-            .authenticate(&p, &input(None, Some(("rp", "")), None))
-            .await
-            .is_err());
+        assert!(
+            NoneAuth
+                .authenticate(&p, &input(None, Some(("rp", "")), None))
+                .await
+                .is_err()
+        );
     }
 
     fn pkjwt_client(id: &str, key: &SigningKey, kid: &str) -> Client {
@@ -377,10 +420,12 @@ mod tests {
         let key = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
         let a = assertion(&key, "k1", "ES256", good_claims("rp", "j1"));
-        assert!(PrivateKeyJwt::default()
-            .authenticate(&p, &input(Some(&a), None, None))
-            .await
-            .is_ok());
+        assert!(
+            PrivateKeyJwt::default()
+                .authenticate(&p, &input(Some(&a), None, None))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -390,17 +435,29 @@ mod tests {
         let auth = PrivateKeyJwt::default();
         // alg != ES256
         let none_alg = assertion(&key, "k1", "none", good_claims("rp", "ja"));
-        assert!(auth.authenticate(&p, &input(Some(&none_alg), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&none_alg), None, None))
+                .await
+                .is_err()
+        );
         // aud が issuer 以外
         let mut c = good_claims("rp", "jb");
         c["aud"] = serde_json::json!("https://evil");
         let wrong_aud = assertion(&key, "k1", "ES256", c);
-        assert!(auth.authenticate(&p, &input(Some(&wrong_aud), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&wrong_aud), None, None))
+                .await
+                .is_err()
+        );
         // 期限切れ
         let mut c2 = good_claims("rp", "jc");
         c2["exp"] = serde_json::json!(1000);
         let expired = assertion(&key, "k1", "ES256", c2);
-        assert!(auth.authenticate(&p, &input(Some(&expired), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&expired), None, None))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -416,7 +473,11 @@ mod tests {
         let mut c = good_claims("rp", "far");
         c["exp"] = serde_json::json!(now + 7200); // 2h > 上限1h
         let far = assertion(&key, "k1", "ES256", c);
-        assert!(auth.authenticate(&p, &input(Some(&far), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&far), None, None))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -426,8 +487,16 @@ mod tests {
         let auth = PrivateKeyJwt::default();
         let a1 = assertion(&key, "k1", "ES256", good_claims("rp", "dup"));
         let a2 = assertion(&key, "k1", "ES256", good_claims("rp", "dup"));
-        assert!(auth.authenticate(&p, &input(Some(&a1), None, None)).await.is_ok());
-        assert!(auth.authenticate(&p, &input(Some(&a2), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&a1), None, None))
+                .await
+                .is_ok()
+        );
+        assert!(
+            auth.authenticate(&p, &input(Some(&a2), None, None))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -440,9 +509,17 @@ mod tests {
         let mut c = good_claims("rp", "je");
         c["iss"] = serde_json::json!("other");
         let mismatch = assertion(&key, "k1", "ES256", c);
-        assert!(auth.authenticate(&p, &input(Some(&mismatch), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&mismatch), None, None))
+                .await
+                .is_err()
+        );
         // 別鍵署名（署名検証で落ちる）
         let bad_sig = assertion(&other, "k1", "ES256", good_claims("rp", "jf"));
-        assert!(auth.authenticate(&p, &input(Some(&bad_sig), None, None)).await.is_err());
+        assert!(
+            auth.authenticate(&p, &input(Some(&bad_sig), None, None))
+                .await
+                .is_err()
+        );
     }
 }

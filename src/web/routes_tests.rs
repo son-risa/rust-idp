@@ -34,7 +34,8 @@ fn manifest_path(rel: &str) -> std::path::PathBuf {
 /// crates.io の package には docs/ を入れない。package から取り出した crate（`.cargo_vcs_info.json` が在る）で
 /// cargo test を回したときだけ、表との照合を飛ばす。repo の中で docs/routes.md が消えたときは飛ばさずに落とす。
 fn skipped_in_package() -> bool {
-    let skip = !manifest_path("docs/routes.md").is_file() && manifest_path(".cargo_vcs_info.json").is_file();
+    let skip = !manifest_path("docs/routes.md").is_file()
+        && manifest_path(".cargo_vcs_info.json").is_file();
     if skip {
         eprintln!("skip: docs/routes.md は package に入らない");
     }
@@ -43,7 +44,10 @@ fn skipped_in_package() -> bool {
 
 fn documented() -> Vec<Row> {
     let doc = std::fs::read_to_string(manifest_path("docs/routes.md")).expect("docs/routes.md");
-    let after = doc.split("## 一覧").nth(1).expect("docs/routes.md に「## 一覧」が無い");
+    let after = doc
+        .split("## 一覧")
+        .nth(1)
+        .expect("docs/routes.md に「## 一覧」が無い");
     let table = after.split("## 注記").next().unwrap().trim();
     // 表の途中の空行や地の文で、後ろの行を黙って捨てないよう、「## 注記」まで表の行だけが続くことを求める。
     let lines: Vec<&str> = table.lines().collect();
@@ -54,12 +58,24 @@ fn documented() -> Vec<Row> {
     for line in lines.into_iter().skip(2) {
         let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
         assert_eq!(cells.len(), 7, "列の数が違う: {line}");
-        assert!(["base", "top", "fido"].contains(&cells[0]), "置き場が分からない: {line}");
-        assert!(["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&cells[1]), "method が分からない: {line}");
+        assert!(
+            ["base", "top", "fido"].contains(&cells[0]),
+            "置き場が分からない: {line}"
+        );
+        assert!(
+            ["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&cells[1]),
+            "method が分からない: {line}"
+        );
         for c in [cells[5], cells[6]] {
-            assert!(c == "はい" || c == "いいえ", "「はい」か「いいえ」で書く: {line}");
+            assert!(
+                c == "はい" || c == "いいえ",
+                "「はい」か「いいえ」で書く: {line}"
+            );
         }
-        assert!(cells[3..5].iter().all(|c| !c.is_empty()), "呼び手と認証を書く: {line}");
+        assert!(
+            cells[3..5].iter().all(|c| !c.is_empty()),
+            "呼び手と認証を書く: {line}"
+        );
         rows.push(Row {
             place: cells[0].to_string(),
             method: cells[1].to_string(),
@@ -75,7 +91,9 @@ fn documented() -> Vec<Row> {
 fn by_path(rows: &[Row]) -> BTreeMap<(String, String), (BTreeSet<String>, bool)> {
     let mut m: BTreeMap<(String, String), (BTreeSet<String>, bool)> = BTreeMap::new();
     for r in rows {
-        let e = m.entry((r.place.clone(), r.path.clone())).or_insert_with(|| (BTreeSet::new(), r.gate));
+        let e = m
+            .entry((r.place.clone(), r.path.clone()))
+            .or_insert_with(|| (BTreeSet::new(), r.gate));
         assert!(e.0.insert(r.method.clone()), "同じ行が 2 つある: {r:?}");
         assert_eq!(e.1, r.gate, "同じ path で門の欄が食い違う: {r:?}");
     }
@@ -93,11 +111,17 @@ fn concrete(place: &str, path: &str) -> String {
 }
 
 async fn probe(app: &Router, url: &str, origin: Option<&str>) -> (StatusCode, BTreeSet<String>) {
-    let mut req = axum::http::Request::builder().method(axum::http::Method::from_bytes(b"PROBE").unwrap()).uri(url);
+    let mut req = axum::http::Request::builder()
+        .method(axum::http::Method::from_bytes(b"PROBE").unwrap())
+        .uri(url);
     if let Some(o) = origin {
         req = req.header(header::ORIGIN, o);
     }
-    let resp = app.clone().oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(req.body(axum::body::Body::empty()).unwrap())
+        .await
+        .unwrap();
     let allow = resp
         .headers()
         .get(header::ALLOW)
@@ -129,15 +153,23 @@ async fn every_documented_route_is_served_with_exactly_the_documented_methods_an
             continue;
         }
         if allow != methods {
-            errors.push(format!("{place} {path}: 表は {methods:?}、実際は {allow:?}"));
+            errors.push(format!(
+                "{place} {path}: 表は {methods:?}、実際は {allow:?}"
+            ));
         }
         let (status, _) = probe(app, &url, None).await;
         let actual_gate = status == StatusCode::FORBIDDEN;
         if actual_gate != gate {
-            errors.push(format!("{place} {path}: 門の欄は {gate}、実際は {actual_gate}（{status}）"));
+            errors.push(format!(
+                "{place} {path}: 門の欄は {gate}、実際は {actual_gate}（{status}）"
+            ));
         }
     }
-    assert!(errors.is_empty(), "docs/routes.md と router() が食い違う:\n{}", errors.join("\n"));
+    assert!(
+        errors.is_empty(),
+        "docs/routes.md と router() が食い違う:\n{}",
+        errors.join("\n")
+    );
 }
 
 /// src の本番のコード（`#[cfg(test)]` の mod と `*_tests.rs` を除く）から、`.route(` の第 1 引数を拾う。
@@ -156,10 +188,17 @@ fn routes_in_source() -> BTreeMap<String, Vec<String>> {
                 continue;
             }
             let src = std::fs::read_to_string(&p).unwrap();
-            let shown = p.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap().display().to_string();
+            let shown = p
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap()
+                .display()
+                .to_string();
             let code = without_test_mods(&src);
             for bad in ["route_service(", "nest_service(", "fallback_service("] {
-                assert!(!code.contains(bad), "{shown} の {bad} は、この試験では経路を拾えない。拾い方を足す");
+                assert!(
+                    !code.contains(bad),
+                    "{shown} の {bad} は、この試験では経路を拾えない。拾い方を足す"
+                );
             }
             // 経路の前に接頭辞を付ける nest は、BASE_PATH の下へ置くこの 1 つだけを知っている。
             for (i, _) in code.match_indices(".nest(") {
@@ -176,7 +215,9 @@ fn routes_in_source() -> BTreeMap<String, Vec<String>> {
                         let expr = arg[..arg.find(',').unwrap()].trim();
                         match NON_LITERAL_PATHS.iter().find(|(e, _)| *e == expr) {
                             Some((_, doc)) => doc.to_string(),
-                            None => panic!("{shown}: 文字列でない path `{expr}` を NON_LITERAL_PATHS に足す"),
+                            None => panic!(
+                                "{shown}: 文字列でない path `{expr}` を NON_LITERAL_PATHS に足す"
+                            ),
                         }
                     }
                 };
@@ -192,7 +233,11 @@ fn without_test_mods(src: &str) -> String {
     let mut out = String::new();
     let mut lines = src.lines().peekable();
     while let Some(line) = lines.next() {
-        if line == "#[cfg(test)]" && lines.peek().is_some_and(|n| n.contains("mod ") && n.ends_with('{')) {
+        if line == "#[cfg(test)]"
+            && lines
+                .peek()
+                .is_some_and(|n| n.contains("mod ") && n.ends_with('{'))
+        {
             for l in lines.by_ref() {
                 if l == "}" {
                     break;
@@ -237,5 +282,9 @@ fn every_route_in_the_source_is_documented() {
             errors.push(format!("{path}: 表の置き場は {places:?}、src に無い"));
         }
     }
-    assert!(errors.is_empty(), "docs/routes.md と src の `.route(` が食い違う:\n{}", errors.join("\n"));
+    assert!(
+        errors.is_empty(),
+        "docs/routes.md と src の `.route(` が食い違う:\n{}",
+        errors.join("\n")
+    );
 }

@@ -18,8 +18,8 @@
 //! Conflict を返す（管理者の付与/剥奪は低頻度の手動操作なので、衝突時は呼び出し側=人間が
 //! 再実行すれば足りる）。
 
-use crate::firestore;
 use crate::document_store::DocumentStore;
+use crate::firestore;
 #[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,10 @@ const REGISTRY_COL: &str = "admins";
 const REGISTRY_ID: &str = "_registry";
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -40,8 +43,13 @@ struct AdminEntry {
 }
 
 /// レジストリを読む。ドキュメントが無ければ「管理者ゼロ人・未作成」として扱う。
-async fn load_registry(fs: &dyn DocumentStore) -> Result<(Vec<AdminEntry>, Option<String>), String> {
-    match fs.get_doc_with_update_time(REGISTRY_COL, REGISTRY_ID).await? {
+async fn load_registry(
+    fs: &dyn DocumentStore,
+) -> Result<(Vec<AdminEntry>, Option<String>), String> {
+    match fs
+        .get_doc_with_update_time(REGISTRY_COL, REGISTRY_ID)
+        .await?
+    {
         Some((fields, update_time)) => Ok((parse_entries(&fields), Some(update_time))),
         None => Ok((vec![], None)),
     }
@@ -95,10 +103,20 @@ pub async fn grant_admin(
         granted_at: now(),
     });
     let ok = match &update_time {
-        Some(ut) => fs.set_doc_if_unchanged(REGISTRY_COL, REGISTRY_ID, entries_field(&entries), ut).await?,
-        None => fs.create_if_absent(REGISTRY_COL, REGISTRY_ID, entries_field(&entries)).await?,
+        Some(ut) => {
+            fs.set_doc_if_unchanged(REGISTRY_COL, REGISTRY_ID, entries_field(&entries), ut)
+                .await?
+        }
+        None => {
+            fs.create_if_absent(REGISTRY_COL, REGISTRY_ID, entries_field(&entries))
+                .await?
+        }
     };
-    Ok(if ok { GrantAdminResult::Granted } else { GrantAdminResult::Conflict })
+    Ok(if ok {
+        GrantAdminResult::Granted
+    } else {
+        GrantAdminResult::Conflict
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -125,17 +143,29 @@ fn decide_revoke(entries: &[AdminEntry], target: &str) -> RevokeAdminResult {
 /// account_id の管理者権限を剥奪する。ガード判定と削除を同じ読み取り(updateTime)の上で
 /// 行い、CAS 書き込みで確定させるため、2つの revoke が競合しても両方が Revoked になることはない
 /// （片方は Conflict になる）。
-pub async fn revoke_admin(fs: &dyn DocumentStore, account_id: &str) -> Result<RevokeAdminResult, String> {
+pub async fn revoke_admin(
+    fs: &dyn DocumentStore,
+    account_id: &str,
+) -> Result<RevokeAdminResult, String> {
     let (entries, update_time) = load_registry(fs).await?;
     match decide_revoke(&entries, account_id) {
         RevokeAdminResult::Revoked => {
-            let remaining: Vec<AdminEntry> =
-                entries.into_iter().filter(|e| e.account_id != account_id).collect();
+            let remaining: Vec<AdminEntry> = entries
+                .into_iter()
+                .filter(|e| e.account_id != account_id)
+                .collect();
             // decide_revoke が Revoked を返すのは entries が非空(≥2件)の場合のみなので
             // update_time は必ず Some(そのドキュメントを読んで entries を得ている)。
-            let ut = update_time.ok_or_else(|| "admin_store: revoke_admin: inconsistent state".to_string())?;
-            let ok = fs.set_doc_if_unchanged(REGISTRY_COL, REGISTRY_ID, entries_field(&remaining), &ut).await?;
-            Ok(if ok { RevokeAdminResult::Revoked } else { RevokeAdminResult::Conflict })
+            let ut = update_time
+                .ok_or_else(|| "admin_store: revoke_admin: inconsistent state".to_string())?;
+            let ok = fs
+                .set_doc_if_unchanged(REGISTRY_COL, REGISTRY_ID, entries_field(&remaining), &ut)
+                .await?;
+            Ok(if ok {
+                RevokeAdminResult::Revoked
+            } else {
+                RevokeAdminResult::Conflict
+            })
         }
         other => Ok(other),
     }
@@ -151,7 +181,10 @@ mod tests {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
         assert!(!is_admin(&fs, "u1").await.unwrap());
-        assert_eq!(grant_admin(&fs, "u1", "cli").await.unwrap(), GrantAdminResult::Granted);
+        assert_eq!(
+            grant_admin(&fs, "u1", "cli").await.unwrap(),
+            GrantAdminResult::Granted
+        );
         assert!(is_admin(&fs, "u1").await.unwrap());
     }
 
@@ -159,8 +192,14 @@ mod tests {
     async fn grant_is_idempotent() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        assert_eq!(grant_admin(&fs, "u1", "cli").await.unwrap(), GrantAdminResult::Granted);
-        assert_eq!(grant_admin(&fs, "u1", "cli").await.unwrap(), GrantAdminResult::AlreadyAdmin);
+        assert_eq!(
+            grant_admin(&fs, "u1", "cli").await.unwrap(),
+            GrantAdminResult::Granted
+        );
+        assert_eq!(
+            grant_admin(&fs, "u1", "cli").await.unwrap(),
+            GrantAdminResult::AlreadyAdmin
+        );
         assert!(is_admin(&fs, "u1").await.unwrap());
     }
 
@@ -179,7 +218,10 @@ mod tests {
         grant_admin(&fs, "u2", "cli").await.unwrap();
         let listed = list_admins(&fs).await.unwrap();
         for id in ["u1", "u2"] {
-            assert_eq!(is_admin(&fs, id).await.unwrap(), listed.iter().any(|a| a == id));
+            assert_eq!(
+                is_admin(&fs, id).await.unwrap(),
+                listed.iter().any(|a| a == id)
+            );
         }
     }
 
@@ -188,8 +230,14 @@ mod tests {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
         grant_admin(&fs, "u1", "cli").await.unwrap();
-        assert_eq!(revoke_admin(&fs, "u1").await.unwrap(), RevokeAdminResult::LastAdminGuard);
-        assert!(is_admin(&fs, "u1").await.unwrap(), "拒否されたので管理者のまま");
+        assert_eq!(
+            revoke_admin(&fs, "u1").await.unwrap(),
+            RevokeAdminResult::LastAdminGuard
+        );
+        assert!(
+            is_admin(&fs, "u1").await.unwrap(),
+            "拒否されたので管理者のまま"
+        );
     }
 
     #[tokio::test]
@@ -198,7 +246,10 @@ mod tests {
         let fs = Firestore::new_for_test("proj", host);
         grant_admin(&fs, "u1", "cli").await.unwrap();
         grant_admin(&fs, "u2", "cli").await.unwrap();
-        assert_eq!(revoke_admin(&fs, "u1").await.unwrap(), RevokeAdminResult::Revoked);
+        assert_eq!(
+            revoke_admin(&fs, "u1").await.unwrap(),
+            RevokeAdminResult::Revoked
+        );
         assert!(!is_admin(&fs, "u1").await.unwrap());
         assert!(is_admin(&fs, "u2").await.unwrap());
     }
@@ -208,7 +259,10 @@ mod tests {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
         grant_admin(&fs, "u1", "cli").await.unwrap();
-        assert_eq!(revoke_admin(&fs, "nope").await.unwrap(), RevokeAdminResult::NotAdmin);
+        assert_eq!(
+            revoke_admin(&fs, "nope").await.unwrap(),
+            RevokeAdminResult::NotAdmin
+        );
     }
 
     #[tokio::test]
@@ -227,18 +281,32 @@ mod tests {
         let (entries_for_u2, ut2) = load_registry(&fs).await.unwrap();
         assert_eq!(ut1, ut2, "同じ版を読んでいる前提");
 
-        let remaining_after_u1 =
-            entries_for_u1.into_iter().filter(|e| e.account_id != "u1").collect::<Vec<_>>();
-        let remaining_after_u2 =
-            entries_for_u2.into_iter().filter(|e| e.account_id != "u2").collect::<Vec<_>>();
+        let remaining_after_u1 = entries_for_u1
+            .into_iter()
+            .filter(|e| e.account_id != "u1")
+            .collect::<Vec<_>>();
+        let remaining_after_u2 = entries_for_u2
+            .into_iter()
+            .filter(|e| e.account_id != "u2")
+            .collect::<Vec<_>>();
         let ut = ut1.unwrap();
 
         let r1 = fs
-            .set_doc_if_unchanged(REGISTRY_COL, REGISTRY_ID, entries_field(&remaining_after_u1), &ut)
+            .set_doc_if_unchanged(
+                REGISTRY_COL,
+                REGISTRY_ID,
+                entries_field(&remaining_after_u1),
+                &ut,
+            )
             .await
             .unwrap();
         let r2 = fs
-            .set_doc_if_unchanged(REGISTRY_COL, REGISTRY_ID, entries_field(&remaining_after_u2), &ut)
+            .set_doc_if_unchanged(
+                REGISTRY_COL,
+                REGISTRY_ID,
+                entries_field(&remaining_after_u2),
+                &ut,
+            )
             .await
             .unwrap();
 

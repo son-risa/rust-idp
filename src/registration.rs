@@ -7,8 +7,8 @@
 //!   passkey ログイン（userHandle = accountId しか分からない）で email を引くために使う。
 //!   sub/account_id は email ではなく accountId（登録時に発行する UUID v4）。
 
-use crate::firestore;
 use crate::document_store::DocumentStore;
+use crate::firestore;
 #[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
 use crate::jws::b64url;
@@ -28,7 +28,10 @@ const PURPOSE_RECOVERY: &str = "recovery";
 pub(crate) const CEREMONY_TTL_SECS: u64 = 5 * 60;
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn random_token() -> String {
@@ -39,7 +42,8 @@ fn random_token() -> String {
 
 fn token_ok(t: &str) -> bool {
     (20..=100).contains(&t.len())
-        && t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        && t.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
 /* ===== email 所有確認チャレンジ ===== */
@@ -65,13 +69,18 @@ pub async fn create_email_challenge(fs: &dyn DocumentStore, email: &str) -> Resu
     create_email_challenge_from(fs, email, &CameFrom::default()).await
 }
 
-pub async fn create_email_challenge_from(fs: &dyn DocumentStore, email: &str, from: &CameFrom) -> Result<String, String> {
+pub async fn create_email_challenge_from(
+    fs: &dyn DocumentStore,
+    email: &str,
+    from: &CameFrom,
+) -> Result<String, String> {
     let token = random_token();
     let fields = json!({
         "email": firestore::s(email),
         "expiresAt": firestore::ts(&firestore::rfc3339(now() + EMAIL_TTL_SECS)),
     });
-    fs.set_doc("emailChallenges", &token, with_came_from(fields, from)).await?;
+    fs.set_doc("emailChallenges", &token, with_came_from(fields, from))
+        .await?;
     Ok(token)
 }
 
@@ -83,7 +92,9 @@ pub async fn came_from(fs: &dyn DocumentStore, token: &str) -> CameFrom {
     match fs.get_doc("emailChallenges", token).await {
         Ok(Some(f)) => CameFrom {
             uid: firestore::field_str(&f, "uid").unwrap_or("").to_string(),
-            client_id: firestore::field_str(&f, "clientId").unwrap_or("").to_string(),
+            client_id: firestore::field_str(&f, "clientId")
+                .unwrap_or("")
+                .to_string(),
         },
         _ => CameFrom::default(),
     }
@@ -92,7 +103,11 @@ pub async fn came_from(fs: &dyn DocumentStore, token: &str) -> CameFrom {
 /// 招待（RP の管理者が発行を頼む登録リンク）。emailChallenges に置くので、
 /// passkey の options / verify は通常の登録と同じ口をそのまま使う。
 /// returnTo は登録後の戻り先（RP の登録済み origin 配下であることは呼び出し側が確かめる）。
-pub async fn create_invite_challenge(fs: &dyn DocumentStore, email: &str, return_to: &str) -> Result<String, String> {
+pub async fn create_invite_challenge(
+    fs: &dyn DocumentStore,
+    email: &str,
+    return_to: &str,
+) -> Result<String, String> {
     let token = random_token();
     fs.set_doc(
         "emailChallenges",
@@ -108,7 +123,10 @@ pub async fn create_invite_challenge(fs: &dyn DocumentStore, email: &str, return
 }
 
 /// 招待の token を消費せず覗き、(email, returnTo) を返す。returnTo を持たない（通常の登録の）token は None。
-pub async fn peek_invite(fs: &dyn DocumentStore, token: &str) -> Result<Option<(String, String)>, String> {
+pub async fn peek_invite(
+    fs: &dyn DocumentStore,
+    token: &str,
+) -> Result<Option<(String, String)>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
@@ -119,7 +137,10 @@ pub async fn peek_invite(fs: &dyn DocumentStore, token: &str) -> Result<Option<(
     if challenge_expired(&fields) {
         return Ok(None);
     }
-    match (firestore::field_str(&fields, "email"), firestore::field_str(&fields, "returnTo")) {
+    match (
+        firestore::field_str(&fields, "email"),
+        firestore::field_str(&fields, "returnTo"),
+    ) {
         (Some(e), Some(r)) if !r.is_empty() => Ok(Some((e.to_string(), r.to_string()))),
         _ => Ok(None),
     }
@@ -127,18 +148,26 @@ pub async fn peek_invite(fs: &dyn DocumentStore, token: &str) -> Result<Option<(
 
 /// 復旧のリンク（登録済みの人が、メールで確かめて passkey を 1 本足す）。
 #[cfg(test)]
-pub async fn create_recovery_challenge(fs: &dyn DocumentStore, email: &str) -> Result<String, String> {
+pub async fn create_recovery_challenge(
+    fs: &dyn DocumentStore,
+    email: &str,
+) -> Result<String, String> {
     create_recovery_challenge_from(fs, email, &CameFrom::default()).await
 }
 
-pub async fn create_recovery_challenge_from(fs: &dyn DocumentStore, email: &str, from: &CameFrom) -> Result<String, String> {
+pub async fn create_recovery_challenge_from(
+    fs: &dyn DocumentStore,
+    email: &str,
+    from: &CameFrom,
+) -> Result<String, String> {
     let token = random_token();
     let fields = json!({
         "email": firestore::s(email),
         "purpose": firestore::s(PURPOSE_RECOVERY),
         "expiresAt": firestore::ts(&firestore::rfc3339(now() + RECOVERY_TTL_SECS)),
     });
-    fs.set_doc("emailChallenges", &token, with_came_from(fields, from)).await?;
+    fs.set_doc("emailChallenges", &token, with_came_from(fields, from))
+        .await?;
     Ok(token)
 }
 
@@ -153,27 +182,47 @@ fn token_email(fields: &serde_json::Value, recovery: bool) -> Option<String> {
     firestore::field_str(fields, "email").map(|s| s.to_string())
 }
 
-async fn peek_token(fs: &dyn DocumentStore, token: &str, recovery: bool) -> Result<Option<String>, String> {
+async fn peek_token(
+    fs: &dyn DocumentStore,
+    token: &str,
+    recovery: bool,
+) -> Result<Option<String>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
-    Ok(fs.get_doc("emailChallenges", token).await?.and_then(|f| token_email(&f, recovery)))
+    Ok(fs
+        .get_doc("emailChallenges", token)
+        .await?
+        .and_then(|f| token_email(&f, recovery)))
 }
 
-async fn consume_token(fs: &dyn DocumentStore, token: &str, recovery: bool) -> Result<Option<String>, String> {
+async fn consume_token(
+    fs: &dyn DocumentStore,
+    token: &str,
+    recovery: bool,
+) -> Result<Option<String>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
-    Ok(fs.take_doc("emailChallenges", token).await?.and_then(|f| token_email(&f, recovery)))
+    Ok(fs
+        .take_doc("emailChallenges", token)
+        .await?
+        .and_then(|f| token_email(&f, recovery)))
 }
 
 /// 消費せず email を覗く（passkey options 生成時に使用）。復旧の token は None。
-pub async fn peek_email_challenge(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
+pub async fn peek_email_challenge(
+    fs: &dyn DocumentStore,
+    token: &str,
+) -> Result<Option<String>, String> {
     peek_token(fs, token, false).await
 }
 
 /// 単回消費して email を返す（passkey verify 成功時）。復旧の token は None。
-pub async fn consume_email_challenge(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
+pub async fn consume_email_challenge(
+    fs: &dyn DocumentStore,
+    token: &str,
+) -> Result<Option<String>, String> {
     consume_token(fs, token, false).await
 }
 
@@ -181,7 +230,10 @@ pub async fn peek_recovery(fs: &dyn DocumentStore, token: &str) -> Result<Option
     peek_token(fs, token, true).await
 }
 
-pub async fn consume_recovery(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
+pub async fn consume_recovery(
+    fs: &dyn DocumentStore,
+    token: &str,
+) -> Result<Option<String>, String> {
     consume_token(fs, token, true).await
 }
 
@@ -255,9 +307,15 @@ pub async fn consume_webauthn_challenge(
         Some(k) => k,
         None => return Ok(None),
     };
-    let email = firestore::field_str(&fields, "email").unwrap_or("").to_string();
-    let uid = firestore::field_str(&fields, "uid").unwrap_or("").to_string();
-    let account_id = firestore::field_str(&fields, "accountId").unwrap_or("").to_string();
+    let email = firestore::field_str(&fields, "email")
+        .unwrap_or("")
+        .to_string();
+    let uid = firestore::field_str(&fields, "uid")
+        .unwrap_or("")
+        .to_string();
+    let account_id = firestore::field_str(&fields, "accountId")
+        .unwrap_or("")
+        .to_string();
     Ok(Some((email, kind, uid, account_id)))
 }
 
@@ -320,11 +378,15 @@ fn account_from(email: &str, f: &serde_json::Value) -> Account {
         .flatten();
     Account {
         email: email.to_string(),
-        account_id: firestore::field_str(f, "accountId").unwrap_or("").to_string(),
+        account_id: firestore::field_str(f, "accountId")
+            .unwrap_or("")
+            .to_string(),
         disabled: firestore::field_bool(f, "disabled").unwrap_or(false),
         created_at: firestore::field_ts_secs(f, "createdAt").unwrap_or(0),
         recovered_at: firestore::field_ts_secs(f, "recoveredAt").unwrap_or(0),
-        recovered_with: firestore::field_str(f, "recoveredWith").unwrap_or("").to_string(),
+        recovered_with: firestore::field_str(f, "recoveredWith")
+            .unwrap_or("")
+            .to_string(),
         migrated,
         legacy,
     }
@@ -332,15 +394,17 @@ fn account_from(email: &str, f: &serde_json::Value) -> Account {
 
 /// 文書の保存先に登録された account の claim（sub・email・保存済みの編集できる claim）。
 /// 登録の無い sub には sub だけを返す（値をでっち上げない）。
-pub(crate) async fn account_from_documents(fs: &dyn DocumentStore, sub: &str) -> crate::model::Account {
+pub(crate) async fn account_from_documents(
+    fs: &dyn DocumentStore,
+    sub: &str,
+) -> crate::model::Account {
     // sub は account_id(UUID)。profiles/{sub} は accountId をキーとして保存済み編集可能 claim を持つ
     // （profile_get/profile_put が at.account_id をそのまま渡すため、re-key 不要で自然に対応する）。
-    let saved = get_profile(fs, sub)
-        .await
-        .unwrap_or_default();
+    let saved = get_profile(fs, sub).await.unwrap_or_default();
     // 実データ（sub / email / email_verified / 保存済み編集 claim）のみを返す。
     // 未設定 claim はダミーで埋めず欠落させる（OP は“真の属性”だけを主張する）。
-    let mut claims: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut claims: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     claims.insert("sub".to_string(), json!(sub));
     // sub(account_id) から email を逆引き（accountsByUuid）。取れた場合のみ email claim を出す。
     if let Ok(Some(email)) = find_email_by_account_id(fs, sub).await {
@@ -351,14 +415,23 @@ pub(crate) async fn account_from_documents(fs: &dyn DocumentStore, sub: &str) ->
     for (k, v) in saved {
         claims.insert(k, json!(v));
     }
-    crate::model::Account { sub: sub.to_string(), claims }
+    crate::model::Account {
+        sub: sub.to_string(),
+        claims,
+    }
 }
 
 pub async fn get_account(fs: &dyn DocumentStore, email: &str) -> Result<Option<Account>, String> {
-    Ok(fs.get_doc("accounts", email).await?.map(|f| account_from(email, &f)))
+    Ok(fs
+        .get_doc("accounts", email)
+        .await?
+        .map(|f| account_from(email, &f)))
 }
 
-pub async fn list_credentials(fs: &dyn DocumentStore, account: &Account) -> Result<Vec<Credential>, String> {
+pub async fn list_credentials(
+    fs: &dyn DocumentStore,
+    account: &Account,
+) -> Result<Vec<Credential>, String> {
     if !account.migrated {
         return Ok(account.legacy.iter().cloned().collect());
     }
@@ -377,9 +450,16 @@ pub async fn list_credentials(fs: &dyn DocumentStore, account: &Account) -> Resu
 
 /// assertion が名乗った credential id を、このアカウントの passkey として引く。
 /// 文書を id で直に引き、持ち主の accountId が合うことを確かめる。
-pub async fn find_credential(fs: &dyn DocumentStore, account: &Account, credential_id: &str) -> Result<Option<Credential>, String> {
+pub async fn find_credential(
+    fs: &dyn DocumentStore,
+    account: &Account,
+    credential_id: &str,
+) -> Result<Option<Credential>, String> {
     if !account.migrated {
-        return Ok(account.legacy.clone().filter(|c| c.credential_id == credential_id));
+        return Ok(account
+            .legacy
+            .clone()
+            .filter(|c| c.credential_id == credential_id));
     }
     if account.account_id.is_empty() || !credential_id_ok(credential_id) {
         return Ok(None);
@@ -408,7 +488,9 @@ pub async fn has_passkey(fs: &dyn DocumentStore, email: &str) -> Result<bool, St
 fn credential_id_ok(id: &str) -> bool {
     (1..=1400).contains(&id.len())
         && !(id.len() >= 4 && id.starts_with("__") && id.ends_with("__"))
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 fn credential_fields(email: &str, account_id: &str, c: &Credential) -> serde_json::Value {
@@ -431,15 +513,35 @@ fn credential_fields(email: &str, account_id: &str, c: &Credential) -> serde_jso
 /// （別のアカウントの passkey を、同じ id を名乗る登録で乗っ取らせない）。
 /// まだ移していないアカウントの passkey は credentials に無いので、accounts の古いフィールドも見る
 /// （id はログインの options で誰でも知れる。先に取られると、持ち主がいつまでも移れなくなる）。
-async fn create_credential(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &Credential) -> Result<(), String> {
+async fn create_credential(
+    fs: &dyn DocumentStore,
+    email: &str,
+    account_id: &str,
+    c: &Credential,
+) -> Result<(), String> {
     if !credential_id_ok(&c.credential_id) {
-        return Err(format!("credential id not storable (len {})", c.credential_id.len()));
+        return Err(format!(
+            "credential id not storable (len {})",
+            c.credential_id.len()
+        ));
     }
-    let holders = fs.query_eq("accounts", "credentialId", &c.credential_id).await?;
-    if holders.iter().any(|(_, f)| firestore::field_str(f, "accountId") != Some(account_id)) {
+    let holders = fs
+        .query_eq("accounts", "credentialId", &c.credential_id)
+        .await?;
+    if holders
+        .iter()
+        .any(|(_, f)| firestore::field_str(f, "accountId") != Some(account_id))
+    {
         return Err("credential id already registered".into());
     }
-    if fs.create_if_absent("credentials", &c.credential_id, credential_fields(email, account_id, c)).await? {
+    if fs
+        .create_if_absent(
+            "credentials",
+            &c.credential_id,
+            credential_fields(email, account_id, c),
+        )
+        .await?
+    {
         Ok(())
     } else {
         Err("credential id already registered".into())
@@ -474,14 +576,17 @@ async fn migrate_locked(fs: &dyn DocumentStore, email: &str) -> Result<bool, Str
                 let mine = fs
                     .get_doc("credentials", &c.credential_id)
                     .await?
-                    .is_some_and(|f| firestore::field_str(&f, "accountId") == Some(a.account_id.as_str()));
+                    .is_some_and(|f| {
+                        firestore::field_str(&f, "accountId") == Some(a.account_id.as_str())
+                    });
                 if !mine {
                     return Err(format!("{email}: {e}"));
                 }
             }
         }
     }
-    fs.update_field("accounts", email, MIGRATED, firestore::b(true)).await?;
+    fs.update_field("accounts", email, MIGRATED, firestore::b(true))
+        .await?;
     Ok(true)
 }
 
@@ -491,14 +596,24 @@ async fn migrate_locked(fs: &dyn DocumentStore, email: &str) -> Result<bool, Str
 ///
 /// accountsByUuid の逆引きの書き込みが失敗しても登録自体は失敗させない（email 入力でのログインは
 /// 影響を受けない、discoverable ログインのみ縮退する）。
-pub async fn save_credential(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
+pub async fn save_credential(
+    fs: &dyn DocumentStore,
+    email: &str,
+    account_id: &str,
+    c: &RegOutcome,
+) -> Result<(), String> {
     let lock = lock_account(fs, email).await?;
     let r = save_locked(fs, email, account_id, c).await;
     lock.release().await;
     r
 }
 
-async fn save_locked(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
+async fn save_locked(
+    fs: &dyn DocumentStore,
+    email: &str,
+    account_id: &str,
+    c: &RegOutcome,
+) -> Result<(), String> {
     let cred = Credential {
         credential_id: c.credential_id.clone(),
         pub_x: c.pub_x.clone(),
@@ -511,12 +626,20 @@ async fn save_locked(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &
     match get_account(fs, email).await? {
         Some(a) => {
             if a.account_id != account_id {
-                return Err(format!("account_id mismatch for existing account ({} vs {account_id})", a.account_id));
+                return Err(format!(
+                    "account_id mismatch for existing account ({} vs {account_id})",
+                    a.account_id
+                ));
             }
             if !a.migrated {
                 migrate_locked(fs, email).await?;
             }
-            let had_none = list_credentials(fs, &get_account(fs, email).await?.ok_or("account vanished")?).await?.is_empty();
+            let had_none = list_credentials(
+                fs,
+                &get_account(fs, email).await?.ok_or("account vanished")?,
+            )
+            .await?
+            .is_empty();
             create_credential(fs, email, account_id, &cred).await?;
             if had_none {
                 // passkey を全部消して登録し直したとき。古いフィールドを新しい 1 本に向ける
@@ -544,7 +667,11 @@ async fn save_locked(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &
         }
     }
     if let Err(e) = fs
-        .set_doc("accountsByUuid", account_id, json!({ "email": firestore::s(email) }))
+        .set_doc(
+            "accountsByUuid",
+            account_id,
+            json!({ "email": firestore::s(email) }),
+        )
         .await
     {
         tracing::error!("accountsByUuid index write failed for account_id={account_id}: {e}");
@@ -554,9 +681,19 @@ async fn save_locked(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &
 
 /// 古いフィールド（前の版が読む 1 本）を c に向ける。None なら空にする（前の版へ戻しても、
 /// 消した passkey で入れないように）。createdAt はアカウントの登録日時なので書き換えない。
-async fn point_mirror(fs: &dyn DocumentStore, email: &str, c: Option<&Credential>) -> Result<(), String> {
+async fn point_mirror(
+    fs: &dyn DocumentStore,
+    email: &str,
+    c: Option<&Credential>,
+) -> Result<(), String> {
     let (id, x, y, count, aaguid) = match c {
-        Some(c) => (c.credential_id.as_str(), c.pub_x.as_str(), c.pub_y.as_str(), c.sign_count, c.aaguid.as_str()),
+        Some(c) => (
+            c.credential_id.as_str(),
+            c.pub_x.as_str(),
+            c.pub_y.as_str(),
+            c.sign_count,
+            c.aaguid.as_str(),
+        ),
         None => ("", "", "", 0, ""),
     };
     fs.update_fields(
@@ -582,20 +719,31 @@ pub enum RemoveOutcome {
 }
 
 /// 本人が passkey を 1 本消す。
-pub async fn remove_credential(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
+pub async fn remove_credential(
+    fs: &dyn DocumentStore,
+    email: &str,
+    credential_id: &str,
+) -> Result<RemoveOutcome, String> {
     let lock = lock_account(fs, email).await?;
     let r = remove_locked(fs, email, credential_id).await;
     lock.release().await;
     r
 }
 
-async fn remove_locked(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
+async fn remove_locked(
+    fs: &dyn DocumentStore,
+    email: &str,
+    credential_id: &str,
+) -> Result<RemoveOutcome, String> {
     migrate_locked(fs, email).await?;
     let Some(a) = get_account(fs, email).await? else {
         return Ok(RemoveOutcome::NotFound);
     };
     let creds = list_credentials(fs, &a).await?;
-    let rest: Vec<&Credential> = creds.iter().filter(|c| c.credential_id != credential_id).collect();
+    let rest: Vec<&Credential> = creds
+        .iter()
+        .filter(|c| c.credential_id != credential_id)
+        .collect();
     // 古いフィールドが一覧に無い passkey を指していたら（前回の向け直しが途中で失敗した）、ここで直す。
     // 消すときは、消す前に向け直す（向け直しが失敗したら消さない）。
     let mirrored = fs
@@ -621,16 +769,27 @@ async fn remove_locked(fs: &dyn DocumentStore, email: &str, credential_id: &str)
 
 /// 足したばかりの passkey を取り消す（足している間にセッションが失効していたとき）。最後の 1 本でも消し、
 /// 古いフィールドが指していれば、残りの 1 本へ向け直す（無ければ空にする）。
-pub async fn discard_credential(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<(), String> {
+pub async fn discard_credential(
+    fs: &dyn DocumentStore,
+    email: &str,
+    credential_id: &str,
+) -> Result<(), String> {
     let lock = lock_account(fs, email).await?;
     let r = async {
         let Some(a) = get_account(fs, email).await? else {
             return Ok(());
         };
-        let rest: Vec<Credential> =
-            list_credentials(fs, &a).await?.into_iter().filter(|c| c.credential_id != credential_id).collect();
+        let rest: Vec<Credential> = list_credentials(fs, &a)
+            .await?
+            .into_iter()
+            .filter(|c| c.credential_id != credential_id)
+            .collect();
         let mirrored = fs.get_doc("accounts", email).await?;
-        if mirrored.as_ref().and_then(|f| firestore::field_str(f, "credentialId")) == Some(credential_id) {
+        if mirrored
+            .as_ref()
+            .and_then(|f| firestore::field_str(f, "credentialId"))
+            == Some(credential_id)
+        {
             point_mirror(fs, email, rest.first()).await?;
         }
         fs.delete_doc("credentials", credential_id).await
@@ -642,7 +801,10 @@ pub async fn discard_credential(fs: &dyn DocumentStore, email: &str, credential_
 
 /// passkey を全部消し、アカウントは残す（同じ accountId のまま登録し直せる）。消した本数を返す。
 /// アカウントが無ければ None。
-pub async fn remove_all_credentials(fs: &dyn DocumentStore, email: &str) -> Result<Option<usize>, String> {
+pub async fn remove_all_credentials(
+    fs: &dyn DocumentStore,
+    email: &str,
+) -> Result<Option<usize>, String> {
     let lock = lock_account(fs, email).await?;
     let r = remove_all_locked(fs, email).await;
     lock.release().await;
@@ -681,16 +843,23 @@ impl AccountLock<'_> {
     }
 }
 
-async fn lock_account<'a>(fs: &'a dyn DocumentStore, email: &str) -> Result<AccountLock<'a>, String> {
+async fn lock_account<'a>(
+    fs: &'a dyn DocumentStore,
+    email: &str,
+) -> Result<AccountLock<'a>, String> {
     for _ in 0..30 {
         let f = json!({ "expiresAt": firestore::ts(&firestore::rfc3339(now() + LOCK_TTL_SECS)) });
         if fs.create_if_absent(LOCKS, email, f).await? {
-            return Ok(AccountLock { fs, email: email.to_string() });
+            return Ok(AccountLock {
+                fs,
+                email: email.to_string(),
+            });
         }
         if let Some((f, update_time)) = fs.get_doc_with_update_time(LOCKS, email).await?
             && firestore::field_ts_secs(&f, "expiresAt").is_none_or(|t| t <= now())
         {
-            fs.delete_doc_if_unchanged(LOCKS, email, &update_time).await?;
+            fs.delete_doc_if_unchanged(LOCKS, email, &update_time)
+                .await?;
             continue;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -700,9 +869,21 @@ async fn lock_account<'a>(fs: &'a dyn DocumentStore, email: &str) -> Result<Acco
 
 /// ログインで使った passkey の signCount と lastUsedAt を書く。文書が在るときだけ書く
 /// （並行して消された passkey を作り直さない）。
-pub async fn record_use(fs: &dyn DocumentStore, account: &Account, c: &Credential, sign_count: u32) -> Result<(), String> {
+pub async fn record_use(
+    fs: &dyn DocumentStore,
+    account: &Account,
+    c: &Credential,
+    sign_count: u32,
+) -> Result<(), String> {
     if !account.migrated {
-        return fs.update_field("accounts", &account.email, "signCount", firestore::int(sign_count as u64)).await;
+        return fs
+            .update_field(
+                "accounts",
+                &account.email,
+                "signCount",
+                firestore::int(sign_count as u64),
+            )
+            .await;
     }
     fs.update_fields(
         "credentials",
@@ -726,7 +907,10 @@ pub struct AccountSummary {
 /// accounts/ 全件を列挙する（管理UIの一覧表示用）。accountId が欠落/空の壊れたドキュメントは
 /// tracing::error! で痕跡を残しつつスキップする（1件の壊れたドキュメントで一覧全体が失敗しないようにする）。
 pub async fn list_accounts(fs: &dyn DocumentStore) -> Result<Vec<AccountSummary>, String> {
-    let (rows, creds) = tokio::try_join!(fs.list_collection("accounts"), fs.list_collection("credentials"))?;
+    let (rows, creds) = tokio::try_join!(
+        fs.list_collection("accounts"),
+        fs.list_collection("credentials")
+    )?;
     let mut counts: std::collections::HashMap<String, usize> = Default::default();
     for (_, f, _) in &creds {
         if let Some(a) = firestore::field_str(f, "accountId") {
@@ -740,8 +924,18 @@ pub async fn list_accounts(fs: &dyn DocumentStore) -> Result<Vec<AccountSummary>
             tracing::error!("list_accounts: {email}: accountId missing/empty, skipping");
             continue;
         }
-        let passkeys = if a.migrated { counts.get(&a.account_id).copied().unwrap_or(0) } else { a.legacy.iter().count() };
-        out.push(AccountSummary { email, account_id: a.account_id, disabled: a.disabled, passkeys, created_at: a.created_at });
+        let passkeys = if a.migrated {
+            counts.get(&a.account_id).copied().unwrap_or(0)
+        } else {
+            a.legacy.iter().count()
+        };
+        out.push(AccountSummary {
+            email,
+            account_id: a.account_id,
+            disabled: a.disabled,
+            passkeys,
+            created_at: a.created_at,
+        });
     }
     Ok(out)
 }
@@ -757,11 +951,16 @@ pub async fn sole_credential(fs: &dyn DocumentStore, email: &str) -> Option<Cred
 
 /// アカウントの passkey を全部消す（アカウントを消すとき）。
 /// 印の有無に関わらず accountId で引く（写し終えて印を付ける前に止まったアカウントの分も消す）。
-pub async fn delete_all_credentials(fs: &dyn DocumentStore, account: &Account) -> Result<usize, String> {
+pub async fn delete_all_credentials(
+    fs: &dyn DocumentStore,
+    account: &Account,
+) -> Result<usize, String> {
     if account.account_id.is_empty() {
         return Ok(0);
     }
-    let rows = fs.query_eq("credentials", "accountId", &account.account_id).await?;
+    let rows = fs
+        .query_eq("credentials", "accountId", &account.account_id)
+        .await?;
     for (id, _) in &rows {
         fs.delete_doc("credentials", id).await?;
     }
@@ -773,13 +972,22 @@ pub async fn delete_all_credentials(fs: &dyn DocumentStore, account: &Account) -
 /// 呼び出し側が事前に get_account でアカウントの存在を確認している前提（重複読み取りを避けるため、
 /// ここでは再確認しない。存在しなければ update_field が currentDocument.exists 制約で
 /// エラーを返す）。
-pub async fn set_disabled(fs: &dyn DocumentStore, email: &str, disabled: bool) -> Result<(), String> {
-    fs.update_field("accounts", email, "disabled", firestore::b(disabled)).await
+pub async fn set_disabled(
+    fs: &dyn DocumentStore,
+    email: &str,
+    disabled: bool,
+) -> Result<(), String> {
+    fs.update_field("accounts", email, "disabled", firestore::b(disabled))
+        .await
 }
 
 /// メールで passkey を足す直前に、その時刻と足す passkey を残す。この時刻までに作られたほかの passkey は、
 /// しばらく本人の画面から消せない（メールを奪った人が、本人の passkey を消して締め出せないように）。
-pub async fn mark_recovered(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<(), String> {
+pub async fn mark_recovered(
+    fs: &dyn DocumentStore,
+    email: &str,
+    credential_id: &str,
+) -> Result<(), String> {
     fs.update_fields(
         "accounts",
         email,
@@ -837,7 +1045,9 @@ pub fn normalize_profile_value(raw: &str) -> Result<Option<String>, ()> {
     if v.is_empty() {
         return Ok(None);
     }
-    if v.chars().count() > PROFILE_VALUE_MAX_CHARS || v.chars().any(|c| c.is_control() || is_bidi_control(c)) {
+    if v.chars().count() > PROFILE_VALUE_MAX_CHARS
+        || v.chars().any(|c| c.is_control() || is_bidi_control(c))
+    {
         return Err(());
     }
     Ok(Some(v.to_string()))
@@ -879,9 +1089,14 @@ pub async fn save_profile(
             }
         }
     }
-    fs.merge_fields("profiles", email, serde_json::Value::Object(fields), &remove)
-        .await
-        .map_err(ProfileError::Store)
+    fs.merge_fields(
+        "profiles",
+        email,
+        serde_json::Value::Object(fields),
+        &remove,
+    )
+    .await
+    .map_err(ProfileError::Store)
 }
 
 fn challenge_expired(fields: &serde_json::Value) -> bool {
@@ -896,9 +1111,9 @@ fn challenge_expired(fields: &serde_json::Value) -> bool {
 
 #[cfg(all(test, feature = "gcp"))]
 mod tests {
-    use std::assert_matches;
     use super::*;
     use crate::firestore::fake_firestore;
+    use std::assert_matches;
 
     fn outcome(account_id: &str) -> RegOutcome {
         RegOutcome {
@@ -923,8 +1138,13 @@ mod tests {
     async fn invite_token_is_consumed_once() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        let t = create_invite_challenge(&fs, "a@example.com", "https://rp.example/").await.unwrap();
-        assert_eq!(consume_email_challenge(&fs, &t).await.unwrap().as_deref(), Some("a@example.com"));
+        let t = create_invite_challenge(&fs, "a@example.com", "https://rp.example/")
+            .await
+            .unwrap();
+        assert_eq!(
+            consume_email_challenge(&fs, &t).await.unwrap().as_deref(),
+            Some("a@example.com")
+        );
         assert_eq!(consume_email_challenge(&fs, &t).await.unwrap(), None);
     }
 
@@ -932,8 +1152,13 @@ mod tests {
     async fn two_concurrent_consumes_of_one_invite_let_only_one_through() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        let t = create_invite_challenge(&fs, "a@example.com", "https://rp.example/").await.unwrap();
-        let (a, b) = tokio::join!(consume_email_challenge(&fs, &t), consume_email_challenge(&fs, &t));
+        let t = create_invite_challenge(&fs, "a@example.com", "https://rp.example/")
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(
+            consume_email_challenge(&fs, &t),
+            consume_email_challenge(&fs, &t)
+        );
         let through = [a.unwrap(), b.unwrap()].into_iter().flatten().count();
         assert_eq!(through, 1);
     }
@@ -942,9 +1167,14 @@ mod tests {
     async fn webauthn_challenge_is_consumed_once() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "").await.unwrap();
+        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "")
+            .await
+            .unwrap();
         let first = consume_webauthn_challenge(&fs, &c).await.unwrap();
-        assert_eq!(first.map(|(e, k, _, _)| (e, k)), Some(("a@example.com".to_string(), ChallengeKind::Auth)));
+        assert_eq!(
+            first.map(|(e, k, _, _)| (e, k)),
+            Some(("a@example.com".to_string(), ChallengeKind::Auth))
+        );
         assert_eq!(consume_webauthn_challenge(&fs, &c).await.unwrap(), None);
     }
 
@@ -952,8 +1182,13 @@ mod tests {
     async fn two_concurrent_consumes_of_one_webauthn_challenge_let_only_one_through() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "").await.unwrap();
-        let (a, b) = tokio::join!(consume_webauthn_challenge(&fs, &c), consume_webauthn_challenge(&fs, &c));
+        let c = create_webauthn_challenge(&fs, "a@example.com", ChallengeKind::Auth, "", "")
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(
+            consume_webauthn_challenge(&fs, &c),
+            consume_webauthn_challenge(&fs, &c)
+        );
         let through = [a.unwrap(), b.unwrap()].into_iter().flatten().count();
         assert_eq!(through, 1);
     }
@@ -962,7 +1197,8 @@ mod tests {
     async fn save_profile_refuses_what_the_registration_page_refuses_and_writes_nothing() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        let ok = std::collections::HashMap::from([("name".to_string(), "  山田 太郎 ".to_string())]);
+        let ok =
+            std::collections::HashMap::from([("name".to_string(), "  山田 太郎 ".to_string())]);
         save_profile(&fs, "acc", &ok).await.unwrap();
         for bad in ["\u{202E}evil", "a\u{0007}b", &"x".repeat(81)] {
             let upd = std::collections::HashMap::from([
@@ -980,8 +1216,12 @@ mod tests {
     async fn list_accounts_returns_all_and_reflects_disabled() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        save_credential(&fs, "a@example.com", "acc-a", &outcome("acc-a")).await.unwrap();
-        save_credential(&fs, "b@example.com", "acc-b", &outcome("acc-b")).await.unwrap();
+        save_credential(&fs, "a@example.com", "acc-a", &outcome("acc-a"))
+            .await
+            .unwrap();
+        save_credential(&fs, "b@example.com", "acc-b", &outcome("acc-b"))
+            .await
+            .unwrap();
         set_disabled(&fs, "b@example.com", true).await.unwrap();
 
         let mut list = list_accounts(&fs).await.unwrap();
@@ -998,14 +1238,24 @@ mod tests {
     async fn list_accounts_skips_docs_missing_account_id() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        save_credential(&fs, "good@example.com", "acc-good", &outcome("acc-good")).await.unwrap();
-        // accountId を持たない壊れたドキュメントを直接差し込む。
-        fs.set_doc("accounts", "broken@example.com", json!({ "email": firestore::s("broken@example.com") }))
+        save_credential(&fs, "good@example.com", "acc-good", &outcome("acc-good"))
             .await
             .unwrap();
+        // accountId を持たない壊れたドキュメントを直接差し込む。
+        fs.set_doc(
+            "accounts",
+            "broken@example.com",
+            json!({ "email": firestore::s("broken@example.com") }),
+        )
+        .await
+        .unwrap();
 
         let list = list_accounts(&fs).await.unwrap();
-        assert_eq!(list.len(), 1, "壊れたドキュメントはスキップされ、正常な1件だけ返る");
+        assert_eq!(
+            list.len(),
+            1,
+            "壊れたドキュメントはスキップされ、正常な1件だけ返る"
+        );
         assert_eq!(list[0].email, "good@example.com");
     }
 
@@ -1017,7 +1267,11 @@ mod tests {
     }
 
     fn reg(id: &str, x: &str) -> RegOutcome {
-        RegOutcome { credential_id: id.into(), pub_x: x.into(), ..outcome("") }
+        RegOutcome {
+            credential_id: id.into(),
+            pub_x: x.into(),
+            ..outcome("")
+        }
     }
 
     async fn fs() -> Firestore {
@@ -1047,7 +1301,12 @@ mod tests {
 
     async fn ids(fs: &dyn DocumentStore, email: &str) -> Vec<String> {
         let a = get_account(fs, email).await.unwrap().unwrap();
-        list_credentials(fs, &a).await.unwrap().into_iter().map(|c| c.credential_id).collect()
+        list_credentials(fs, &a)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.credential_id)
+            .collect()
     }
 
     #[tokio::test]
@@ -1060,11 +1319,22 @@ mod tests {
         assert!(find_credential(&fs, &a, "C-OTHER").await.unwrap().is_none());
 
         assert!(migrate_account(&fs, "old@example.com").await.unwrap());
-        assert!(!migrate_account(&fs, "old@example.com").await.unwrap(), "2 回目は何もしない");
+        assert!(
+            !migrate_account(&fs, "old@example.com").await.unwrap(),
+            "2 回目は何もしない"
+        );
         assert_eq!(ids(&fs, "old@example.com").await, ["C-OLD"]);
         let doc = fs.get_doc("credentials", "C-OLD").await.unwrap().unwrap();
         assert_eq!(firestore::field_str(&doc, "accountId"), Some("acc-old"));
-        assert!(fs.get_doc("accounts", "old@example.com").await.unwrap().unwrap().get("credentialId").is_some(), "古いフィールドは残す");
+        assert!(
+            fs.get_doc("accounts", "old@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .get("credentialId")
+                .is_some(),
+            "古いフィールドは残す"
+        );
     }
 
     /// 移した後に消した passkey が、accounts に残る古いフィールドから生き返らない。
@@ -1082,22 +1352,54 @@ mod tests {
     async fn a_second_passkey_is_added_next_to_the_first() {
         let fs = fs().await;
         legacy_account(&fs, "old@example.com", "acc-old", "C-OLD").await;
-        save_credential(&fs, "old@example.com", "acc-old", &reg("C-NEW", "nx")).await.unwrap();
-        assert_eq!(ids(&fs, "old@example.com").await, ["C-OLD", "C-NEW"], "足す前に古い 1 本を移す");
+        save_credential(&fs, "old@example.com", "acc-old", &reg("C-NEW", "nx"))
+            .await
+            .unwrap();
+        assert_eq!(
+            ids(&fs, "old@example.com").await,
+            ["C-OLD", "C-NEW"],
+            "足す前に古い 1 本を移す"
+        );
         let a = get_account(&fs, "old@example.com").await.unwrap().unwrap();
-        assert_eq!(find_credential(&fs, &a, "C-NEW").await.unwrap().unwrap().pub_x, "nx");
-        assert_eq!(find_credential(&fs, &a, "C-OLD").await.unwrap().unwrap().pub_x, "lx");
+        assert_eq!(
+            find_credential(&fs, &a, "C-NEW")
+                .await
+                .unwrap()
+                .unwrap()
+                .pub_x,
+            "nx"
+        );
+        assert_eq!(
+            find_credential(&fs, &a, "C-OLD")
+                .await
+                .unwrap()
+                .unwrap()
+                .pub_x,
+            "lx"
+        );
     }
 
     #[tokio::test]
     async fn a_new_account_also_writes_the_old_fields_for_a_rollback() {
         let fs = fs().await;
-        save_credential(&fs, "n@example.com", "acc-n", &reg("C1", "x1")).await.unwrap();
-        let f = fs.get_doc("accounts", "n@example.com").await.unwrap().unwrap();
+        save_credential(&fs, "n@example.com", "acc-n", &reg("C1", "x1"))
+            .await
+            .unwrap();
+        let f = fs
+            .get_doc("accounts", "n@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(firestore::field_str(&f, "credentialId"), Some("C1"));
         assert_eq!(firestore::field_str(&f, "pubX"), Some("x1"));
         assert_eq!(ids(&fs, "n@example.com").await, ["C1"]);
-        assert_eq!(find_email_by_account_id(&fs, "acc-n").await.unwrap().as_deref(), Some("n@example.com"));
+        assert_eq!(
+            find_email_by_account_id(&fs, "acc-n")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("n@example.com")
+        );
     }
 
     /// 同じ credential id を名乗る登録で、別のアカウントの passkey を上書きさせない（C1）。
@@ -1105,13 +1407,24 @@ mod tests {
     #[tokio::test]
     async fn a_credential_id_belongs_to_one_account() {
         let fs = fs().await;
-        save_credential(&fs, "a@example.com", "acc-a", &reg("SAME", "ax")).await.unwrap();
-        assert!(save_credential(&fs, "b@example.com", "acc-b", &reg("SAME", "bx")).await.is_err());
+        save_credential(&fs, "a@example.com", "acc-a", &reg("SAME", "ax"))
+            .await
+            .unwrap();
+        assert!(
+            save_credential(&fs, "b@example.com", "acc-b", &reg("SAME", "bx"))
+                .await
+                .is_err()
+        );
         let doc = fs.get_doc("credentials", "SAME").await.unwrap().unwrap();
         assert_eq!(firestore::field_str(&doc, "pubX"), Some("ax"));
-        assert!(get_account(&fs, "b@example.com").await.unwrap().is_none(), "断った登録はアカウントも作らない");
+        assert!(
+            get_account(&fs, "b@example.com").await.unwrap().is_none(),
+            "断った登録はアカウントも作らない"
+        );
 
-        save_credential(&fs, "b@example.com", "acc-b", &reg("B1", "bx")).await.unwrap();
+        save_credential(&fs, "b@example.com", "acc-b", &reg("B1", "bx"))
+            .await
+            .unwrap();
         let b = get_account(&fs, "b@example.com").await.unwrap().unwrap();
         assert!(find_credential(&fs, &b, "SAME").await.unwrap().is_none());
     }
@@ -1120,12 +1433,20 @@ mod tests {
     #[tokio::test]
     async fn an_account_without_passkeys_keeps_its_id_and_flags() {
         let fs = fs().await;
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x")).await.unwrap();
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x"))
+            .await
+            .unwrap();
         set_disabled(&fs, "a@example.com", true).await.unwrap();
         fs.delete_doc("credentials", "A1").await.unwrap();
         assert!(!has_passkey(&fs, "a@example.com").await.unwrap());
-        assert!(save_credential(&fs, "a@example.com", "acc-other", &reg("A2", "x")).await.is_err());
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A2", "x")).await.unwrap();
+        assert!(
+            save_credential(&fs, "a@example.com", "acc-other", &reg("A2", "x"))
+                .await
+                .is_err()
+        );
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A2", "x"))
+            .await
+            .unwrap();
         let a = get_account(&fs, "a@example.com").await.unwrap().unwrap();
         assert_eq!(a.account_id, "acc-a");
         assert!(a.disabled, "登録し直しても凍結は解けない");
@@ -1136,7 +1457,9 @@ mod tests {
     #[tokio::test]
     async fn recording_a_use_does_not_recreate_a_removed_passkey() {
         let fs = fs().await;
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x")).await.unwrap();
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x"))
+            .await
+            .unwrap();
         let a = get_account(&fs, "a@example.com").await.unwrap().unwrap();
         let c = find_credential(&fs, &a, "A1").await.unwrap().unwrap();
         record_use(&fs, &a, &c, 3).await.unwrap();
@@ -1152,22 +1475,46 @@ mod tests {
     async fn list_accounts_counts_passkeys_in_both_shapes() {
         let fs = fs().await;
         legacy_account(&fs, "old@example.com", "acc-old", "C-OLD").await;
-        save_credential(&fs, "n@example.com", "acc-n", &reg("N1", "x")).await.unwrap();
-        save_credential(&fs, "n@example.com", "acc-n", &reg("N2", "x")).await.unwrap();
-        let mut v: Vec<_> = list_accounts(&fs).await.unwrap().into_iter().map(|a| (a.email, a.passkeys)).collect();
+        save_credential(&fs, "n@example.com", "acc-n", &reg("N1", "x"))
+            .await
+            .unwrap();
+        save_credential(&fs, "n@example.com", "acc-n", &reg("N2", "x"))
+            .await
+            .unwrap();
+        let mut v: Vec<_> = list_accounts(&fs)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.email, a.passkeys))
+            .collect();
         v.sort();
-        assert_eq!(v, [("n@example.com".to_string(), 2), ("old@example.com".to_string(), 1)]);
+        assert_eq!(
+            v,
+            [
+                ("n@example.com".to_string(), 2),
+                ("old@example.com".to_string(), 1)
+            ]
+        );
     }
-
 
     /// 移す前の passkey の id を、別のアカウントが先に名乗っても取れない（持ち主が移れなくならない）。
     #[tokio::test]
     async fn an_unmigrated_passkey_id_cannot_be_taken_first() {
         let fs = fs().await;
         legacy_account(&fs, "old@example.com", "acc-old", "C-OLD").await;
-        assert!(save_credential(&fs, "evil@example.com", "acc-evil", &reg("C-OLD", "ex")).await.is_err());
+        assert!(
+            save_credential(&fs, "evil@example.com", "acc-evil", &reg("C-OLD", "ex"))
+                .await
+                .is_err()
+        );
         assert!(fs.get_doc("credentials", "C-OLD").await.unwrap().is_none());
-        assert!(get_account(&fs, "evil@example.com").await.unwrap().is_none(), "断った登録はアカウントも残さない");
+        assert!(
+            get_account(&fs, "evil@example.com")
+                .await
+                .unwrap()
+                .is_none(),
+            "断った登録はアカウントも残さない"
+        );
         assert!(migrate_account(&fs, "old@example.com").await.unwrap());
         assert_eq!(ids(&fs, "old@example.com").await, ["C-OLD"]);
     }
@@ -1177,11 +1524,24 @@ mod tests {
     #[tokio::test]
     async fn re_registering_points_the_old_fields_at_the_new_passkey() {
         let fs = fs().await;
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x1")).await.unwrap();
-        let created = fs.get_doc("accounts", "a@example.com").await.unwrap().unwrap()["createdAt"].clone();
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x1"))
+            .await
+            .unwrap();
+        let created = fs
+            .get_doc("accounts", "a@example.com")
+            .await
+            .unwrap()
+            .unwrap()["createdAt"]
+            .clone();
         fs.delete_doc("credentials", "A1").await.unwrap();
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A2", "x2")).await.unwrap();
-        let f = fs.get_doc("accounts", "a@example.com").await.unwrap().unwrap();
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A2", "x2"))
+            .await
+            .unwrap();
+        let f = fs
+            .get_doc("accounts", "a@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(firestore::field_str(&f, "credentialId"), Some("A2"));
         assert_eq!(firestore::field_str(&f, "pubX"), Some("x2"));
         assert_eq!(f["createdAt"], created, "アカウントの登録日時は変えない");
@@ -1191,9 +1551,17 @@ mod tests {
     #[tokio::test]
     async fn a_second_passkey_leaves_the_old_fields_alone() {
         let fs = fs().await;
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x1")).await.unwrap();
-        save_credential(&fs, "a@example.com", "acc-a", &reg("A2", "x2")).await.unwrap();
-        let f = fs.get_doc("accounts", "a@example.com").await.unwrap().unwrap();
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A1", "x1"))
+            .await
+            .unwrap();
+        save_credential(&fs, "a@example.com", "acc-a", &reg("A2", "x2"))
+            .await
+            .unwrap();
+        let f = fs
+            .get_doc("accounts", "a@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(firestore::field_str(&f, "credentialId"), Some("A1"));
     }
 
@@ -1203,13 +1571,27 @@ mod tests {
         let fs = fs().await;
         legacy_account(&fs, "old@example.com", "acc-old", "C-OLD").await;
         let a = get_account(&fs, "old@example.com").await.unwrap().unwrap();
-        create_credential(&fs, "old@example.com", "acc-old", a.legacy.as_ref().unwrap()).await.unwrap();
+        create_credential(
+            &fs,
+            "old@example.com",
+            "acc-old",
+            a.legacy.as_ref().unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(migrate_account(&fs, "old@example.com").await.unwrap());
         assert_eq!(ids(&fs, "old@example.com").await, ["C-OLD"]);
 
         legacy_account(&fs, "half@example.com", "acc-half", "C-HALF").await;
         let h = get_account(&fs, "half@example.com").await.unwrap().unwrap();
-        create_credential(&fs, "half@example.com", "acc-half", h.legacy.as_ref().unwrap()).await.unwrap();
+        create_credential(
+            &fs,
+            "half@example.com",
+            "acc-half",
+            h.legacy.as_ref().unwrap(),
+        )
+        .await
+        .unwrap();
         delete_all_credentials(&fs, &h).await.unwrap();
         assert!(fs.get_doc("credentials", "C-HALF").await.unwrap().is_none());
     }
@@ -1217,7 +1599,13 @@ mod tests {
     #[tokio::test]
     async fn a_document_without_an_account_id_counts_as_registered() {
         let fs = fs().await;
-        fs.set_doc("accounts", "broken@example.com", json!({ "email": firestore::s("broken@example.com") })).await.unwrap();
+        fs.set_doc(
+            "accounts",
+            "broken@example.com",
+            json!({ "email": firestore::s("broken@example.com") }),
+        )
+        .await
+        .unwrap();
         assert!(has_passkey(&fs, "broken@example.com").await.unwrap());
     }
 
@@ -1227,14 +1615,34 @@ mod tests {
     async fn removing_passkeys_of_an_old_shape_account() {
         let fs = fs().await;
         legacy_account(&fs, "old@example.com", "acc-old", "C-OLD").await;
-        assert_eq!(remove_credential(&fs, "old@example.com", "C-OLD").await.unwrap(), RemoveOutcome::LastOne);
-        assert_eq!(remove_credential(&fs, "old@example.com", "C-NONE").await.unwrap(), RemoveOutcome::NotFound);
+        assert_eq!(
+            remove_credential(&fs, "old@example.com", "C-OLD")
+                .await
+                .unwrap(),
+            RemoveOutcome::LastOne
+        );
+        assert_eq!(
+            remove_credential(&fs, "old@example.com", "C-NONE")
+                .await
+                .unwrap(),
+            RemoveOutcome::NotFound
+        );
         assert_eq!(ids(&fs, "old@example.com").await, ["C-OLD"]);
 
         legacy_account(&fs, "old2@example.com", "acc-old2", "C-OLD2").await;
-        assert_eq!(remove_all_credentials(&fs, "old2@example.com").await.unwrap(), Some(1));
+        assert_eq!(
+            remove_all_credentials(&fs, "old2@example.com")
+                .await
+                .unwrap(),
+            Some(1)
+        );
         assert!(ids(&fs, "old2@example.com").await.is_empty());
         assert!(!has_passkey(&fs, "old2@example.com").await.unwrap());
-        assert_eq!(remove_all_credentials(&fs, "none@example.com").await.unwrap(), None);
+        assert_eq!(
+            remove_all_credentials(&fs, "none@example.com")
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

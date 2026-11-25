@@ -6,15 +6,15 @@
 
 use crate::es256::{self, b64url_decode as b64d};
 use ciborium::value::Value as Cbor;
-use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::Signature;
+use p256::ecdsa::signature::Verifier;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::time::{SystemTime, UNIX_EPOCH};
+use x509_cert::Certificate;
 use x509_cert::der::asn1::{ObjectIdentifier, OctetString};
 use x509_cert::der::{Decode, Encode};
 use x509_cert::ext::pkix::BasicConstraints;
-use x509_cert::Certificate;
 
 /// ecdsa-with-SHA256
 const OID_ECDSA_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
@@ -71,7 +71,10 @@ pub fn att_x5c_ders(att_stmt: &Cbor) -> Vec<Vec<u8>> {
     if let Cbor::Map(m) = att_stmt
         && let Some(Cbor::Array(a)) = cbor_text_get(m, "x5c")
     {
-        return a.iter().filter_map(|c| cbor_bytes(c).map(|b| b.to_vec())).collect();
+        return a
+            .iter()
+            .filter_map(|c| cbor_bytes(c).map(|b| b.to_vec()))
+            .collect();
     }
     Vec::new()
 }
@@ -196,8 +199,7 @@ impl CredKey {
 /// 消費数は authData の余剰バイト検出（F-12）に使う。
 pub fn parse_cose_key(cose_bytes: &[u8]) -> Result<(CredKey, usize), String> {
     let mut cur = Cursor::new(cose_bytes);
-    let cose: Cbor =
-        ciborium::from_reader(&mut cur).map_err(|e| format!("COSE cbor: {e}"))?;
+    let cose: Cbor = ciborium::from_reader(&mut cur).map_err(|e| format!("COSE cbor: {e}"))?;
     let consumed = cur.position() as usize;
     let m = match &cose {
         Cbor::Map(m) => m,
@@ -275,7 +277,8 @@ pub fn verify_es256_raw(
 ) -> Result<(), String> {
     let vk = es256::verifying_key_from_xy(pub_x, pub_y)?;
     let sig = Signature::from_der(signature_der).map_err(|e| format!("sig der: {e}"))?;
-    vk.verify(message, &sig).map_err(|_| "invalid signature".to_string())
+    vk.verify(message, &sig)
+        .map_err(|_| "invalid signature".to_string())
 }
 
 /// authData || SHA256(clientDataJSON) に対する ES256 署名検証（assertion / packed 共通）。
@@ -319,7 +322,9 @@ pub fn parse_attestation_object(att: &[u8]) -> Result<AttestationObject, String>
         .and_then(cbor_bytes)
         .ok_or("attestationObject missing authData")?
         .to_vec();
-    let att_stmt = cbor_text_get(m, "attStmt").cloned().unwrap_or(Cbor::Map(vec![]));
+    let att_stmt = cbor_text_get(m, "attStmt")
+        .cloned()
+        .unwrap_or(Cbor::Map(vec![]));
     Ok(AttestationObject {
         fmt,
         auth_data,
@@ -341,7 +346,10 @@ fn ec_p256_xy_from_parsed(cert: &Certificate) -> Result<(Vec<u8>, Vec<u8>), Stri
     if pk.len() == 65 && pk[0] == 0x04 {
         Ok((pk[1..33].to_vec(), pk[33..65].to_vec()))
     } else {
-        Err(format!("cert key not uncompressed P-256 (len {})", pk.len()))
+        Err(format!(
+            "cert key not uncompressed P-256 (len {})",
+            pk.len()
+        ))
     }
 }
 
@@ -352,7 +360,10 @@ fn ec_p256_xy_from_cert(der: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// x5c 全証明書の有効期限チェック（F-6 期限切れ / F-7 未開始 / F-12 中間期限切れ）と
@@ -375,8 +386,16 @@ fn check_cert_chain(ders: &[&[u8]]) -> Result<(), String> {
         }
         // 自己署名証明書（= 信頼アンカー）を x5c に含めてはならない。
         // 信頼ストアを持たない以上、自己署名 root は信頼できず拒否する（F-2 / F-10）。
-        let iss = c.tbs_certificate().issuer().to_der().map_err(|e| format!("issuer der: {e}"))?;
-        let sub = c.tbs_certificate().subject().to_der().map_err(|e| format!("subject der: {e}"))?;
+        let iss = c
+            .tbs_certificate()
+            .issuer()
+            .to_der()
+            .map_err(|e| format!("issuer der: {e}"))?;
+        let sub = c
+            .tbs_certificate()
+            .subject()
+            .to_der()
+            .map_err(|e| format!("subject der: {e}"))?;
         if iss == sub {
             return Err("attestation x5c must not contain a self-signed certificate".into());
         }
@@ -397,7 +416,8 @@ fn check_cert_chain(ders: &[&[u8]]) -> Result<(), String> {
             .as_bytes()
             .ok_or("cert signature not byte-aligned")?;
         let (px, py) = ec_p256_xy_from_parsed(parent)?;
-        verify_es256_raw(&px, &py, &tbs, sig).map_err(|_| "certificate chain signature invalid".to_string())?;
+        verify_es256_raw(&px, &py, &tbs, sig)
+            .map_err(|_| "certificate chain signature invalid".to_string())?;
     }
     Ok(())
 }
@@ -561,16 +581,30 @@ pub(crate) mod test_support {
     /// ES256 の COSE_Key（kty=2, alg=-7, x=-2, y=-3）。
     pub fn cose_es256(x: &[u8], y: &[u8]) -> Cbor {
         Cbor::Map(vec![
-            (Cbor::Integer(Integer::from(1)), Cbor::Integer(Integer::from(2))),
-            (Cbor::Integer(Integer::from(3)), Cbor::Integer(Integer::from(-7))),
-            (Cbor::Integer(Integer::from(-1)), Cbor::Integer(Integer::from(1))),
+            (
+                Cbor::Integer(Integer::from(1)),
+                Cbor::Integer(Integer::from(2)),
+            ),
+            (
+                Cbor::Integer(Integer::from(3)),
+                Cbor::Integer(Integer::from(-7)),
+            ),
+            (
+                Cbor::Integer(Integer::from(-1)),
+                Cbor::Integer(Integer::from(1)),
+            ),
             (Cbor::Integer(Integer::from(-2)), Cbor::Bytes(x.to_vec())),
             (Cbor::Integer(Integer::from(-3)), Cbor::Bytes(y.to_vec())),
         ])
     }
 
     /// authData を組み立てる。attested は登録時の attestedCredentialData(なければ None)。
-    pub fn build_auth_data(rp_id: &str, flags: u8, sign_count: u32, attested: Option<&[u8]>) -> Vec<u8> {
+    pub fn build_auth_data(
+        rp_id: &str,
+        flags: u8,
+        sign_count: u32,
+        attested: Option<&[u8]>,
+    ) -> Vec<u8> {
         let mut ad = Vec::new();
         ad.extend_from_slice(&Sha256::digest(rp_id.as_bytes()));
         ad.push(flags);
@@ -599,11 +633,11 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::test_support::*;
     use super::*;
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
+    use p256::elliptic_curve::Generate;
 
     const RP: &str = "example.com";
     const ORIGIN: &str = "https://example.com";
@@ -699,8 +733,14 @@ mod tests {
     fn parse_cose_key_rejects_unsupported_kty() {
         use ciborium::value::Integer;
         let m = Cbor::Map(vec![
-            (Cbor::Integer(Integer::from(1)), Cbor::Integer(Integer::from(99))),
-            (Cbor::Integer(Integer::from(3)), Cbor::Integer(Integer::from(-7))),
+            (
+                Cbor::Integer(Integer::from(1)),
+                Cbor::Integer(Integer::from(99)),
+            ),
+            (
+                Cbor::Integer(Integer::from(3)),
+                Cbor::Integer(Integer::from(-7)),
+            ),
         ]);
         assert!(parse_cose_key(&cbor_to_vec(&m)).is_err());
     }
@@ -710,10 +750,22 @@ mod tests {
         use ciborium::value::Integer;
         // kty=2, alg=-7 だが x,y が曲線上に乗らない → verifying_key_from_xy が拒否。
         let m = Cbor::Map(vec![
-            (Cbor::Integer(Integer::from(1)), Cbor::Integer(Integer::from(2))),
-            (Cbor::Integer(Integer::from(3)), Cbor::Integer(Integer::from(-7))),
-            (Cbor::Integer(Integer::from(-2)), Cbor::Bytes(vec![0xff; 32])),
-            (Cbor::Integer(Integer::from(-3)), Cbor::Bytes(vec![0xff; 32])),
+            (
+                Cbor::Integer(Integer::from(1)),
+                Cbor::Integer(Integer::from(2)),
+            ),
+            (
+                Cbor::Integer(Integer::from(3)),
+                Cbor::Integer(Integer::from(-7)),
+            ),
+            (
+                Cbor::Integer(Integer::from(-2)),
+                Cbor::Bytes(vec![0xff; 32]),
+            ),
+            (
+                Cbor::Integer(Integer::from(-3)),
+                Cbor::Bytes(vec![0xff; 32]),
+            ),
         ]);
         assert!(parse_cose_key(&cbor_to_vec(&m)).is_err());
     }
@@ -734,7 +786,10 @@ mod tests {
 
     #[test]
     fn require_empty_att_stmt_rejects_nonempty() {
-        let non_empty = Cbor::Map(vec![(Cbor::Text("alg".into()), Cbor::Integer(ciborium::value::Integer::from(-7)))]);
+        let non_empty = Cbor::Map(vec![(
+            Cbor::Text("alg".into()),
+            Cbor::Integer(ciborium::value::Integer::from(-7)),
+        )]);
         assert!(require_empty_att_stmt(&non_empty).is_err());
     }
 
@@ -742,7 +797,10 @@ mod tests {
     fn verify_assertion_accepts_valid_es256_and_rejects_tampered() {
         let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
-        let cred = CredKey::Es256 { x: x.clone(), y: y.clone() };
+        let cred = CredKey::Es256 {
+            x: x.clone(),
+            y: y.clone(),
+        };
         let auth_data = build_auth_data(RP, FLAG_UP, 1, None);
         let cdj = client_data_json("webauthn.get", CH, ORIGIN);
         let mut signed = auth_data.clone();
@@ -769,7 +827,10 @@ mod tests {
         // self attestation: x5c なし、alg=-7、credential 鍵で署名。
         let att = Cbor::Map(vec![
             (Cbor::Text("alg".into()), Cbor::Integer(Integer::from(-7))),
-            (Cbor::Text("sig".into()), Cbor::Bytes(sig.to_der().as_bytes().to_vec())),
+            (
+                Cbor::Text("sig".into()),
+                Cbor::Bytes(sig.to_der().as_bytes().to_vec()),
+            ),
         ]);
         assert!(verify_packed(&att, &auth_data, &cdj, &cred, &[0u8; 16]).is_ok());
     }
@@ -788,7 +849,10 @@ mod tests {
         // alg を -257 と偽る → credential alg(-7) と不一致で拒否。
         let att = Cbor::Map(vec![
             (Cbor::Text("alg".into()), Cbor::Integer(Integer::from(-257))),
-            (Cbor::Text("sig".into()), Cbor::Bytes(sig.to_der().as_bytes().to_vec())),
+            (
+                Cbor::Text("sig".into()),
+                Cbor::Bytes(sig.to_der().as_bytes().to_vec()),
+            ),
         ]);
         assert!(verify_packed(&att, &auth_data, &cdj, &cred, &[0u8; 16]).is_err());
     }

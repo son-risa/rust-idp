@@ -11,12 +11,12 @@
 //! - 失敗は HTTP 400 + {status:"failed", errorMessage}、成功は 200 + {status:"ok", ...}。
 
 use axum::extract::Request;
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
-use axum::middleware::{from_fn, Next};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{Next, from_fn};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,7 +33,10 @@ use store::{ChallengeState, FidoStore, MemFidoStore, StoredCredential};
 const SUPPORTED_ALGS: &[i32] = &[-7, -257, -8, -65535];
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn random_b64url(len: usize) -> String {
@@ -67,12 +70,13 @@ impl FidoState {
     /// K_SERVICE(Cloud Run) では Firestore（gcp の feature があるときだけ）、それ以外は in-memory。
     pub fn from_env() -> Self {
         let rp_id = std::env::var("FIDO_RP_ID").unwrap_or_else(|_| "localhost".into());
-        let origin = std::env::var("FIDO_ORIGIN")
-            .unwrap_or_else(|_| format!("http://{rp_id}"));
+        let origin = std::env::var("FIDO_ORIGIN").unwrap_or_else(|_| format!("http://{rp_id}"));
         let rp_name = std::env::var("FIDO_RP_NAME").unwrap_or_else(|_| "rust-idp FIDO2".into());
         #[cfg(feature = "gcp")]
         let store: Arc<dyn FidoStore> = if std::env::var("K_SERVICE").is_ok() {
-            let fs = Arc::new(crate::firestore::Firestore::new(crate::gcp::resolve_project()));
+            let fs = Arc::new(crate::firestore::Firestore::new(
+                crate::gcp::resolve_project(),
+            ));
             Arc::new(store::FirestoreFidoStore::new(fs))
         } else {
             Arc::new(MemFidoStore::default())
@@ -111,7 +115,14 @@ fn aaguid_to_string(aaguid: &[u8]) -> String {
     if h.len() != 32 {
         return h;
     }
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 /// clientDataJSON(b64url) から challenge 文字列を取り出す（state 引き当て用）。
@@ -151,8 +162,8 @@ pub fn router(state: Arc<FidoState>) -> Router {
 
 /// dev 用: {blob, roots:[b64std DER], aaguid?} を受けて MDS 検証結果を返す。
 async fn mds_test_verify(State(_st): State<Arc<FidoState>>, body: String) -> Response {
-    use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
     let m = match parse_object(&body) {
         Ok(m) => m,
         Err(r) => return r,
@@ -192,8 +203,8 @@ async fn mds_test_verify(State(_st): State<Arc<FidoState>>, body: String) -> Res
 /// MDS を設定する。{roots:[b64std DER], blobs?:[JWT], blobUrls?:[url]}。
 /// roots は信頼アンカー（conformance では tool の test root）。BLOB は直接 or URL 取得。
 async fn mds_config(State(st): State<Arc<FidoState>>, body: String) -> Response {
-    use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
     let m = match parse_object(&body) {
         Ok(m) => m,
         Err(r) => return r,
@@ -201,7 +212,11 @@ async fn mds_config(State(st): State<Arc<FidoState>>, body: String) -> Response 
     let str_array = |key: &str| -> Vec<String> {
         m.get(key)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let roots: Vec<Vec<u8>> = str_array("roots")
@@ -250,7 +265,9 @@ async fn mds_config(State(st): State<Arc<FidoState>>, body: String) -> Response 
     guard.roots = roots;
     guard.cache = cache;
     guard.enabled = true;
-    ok_with(json!({ "enabled": true, "entries": loaded, "statements": statements_loaded, "skipped": skipped }))
+    ok_with(
+        json!({ "enabled": true, "entries": loaded, "statements": statements_loaded, "skipped": skipped }),
+    )
 }
 
 fn add_cors_headers(h: &mut HeaderMap, origin: &str) {
@@ -258,7 +275,10 @@ fn add_cors_headers(h: &mut HeaderMap, origin: &str) {
     let allow = HeaderValue::from_str(if origin == "-" { "*" } else { origin })
         .unwrap_or_else(|_| HeaderValue::from_static("*"));
     h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, allow);
-    h.insert(header::ACCESS_CONTROL_ALLOW_CREDENTIALS, HeaderValue::from_static("true"));
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+        HeaderValue::from_static("true"),
+    );
     h.insert(header::VARY, HeaderValue::from_static("Origin"));
     h.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
@@ -268,7 +288,10 @@ fn add_cors_headers(h: &mut HeaderMap, origin: &str) {
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static("content-type"),
     );
-    h.insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
+    h.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("600"),
+    );
 }
 
 /// 全 /fido レスポンスに CORS ヘッダを付与し、OPTIONS プリフライトに 204 で答える。
@@ -279,7 +302,11 @@ async fn cors(req: Request, next: Next) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("-")
         .to_string();
-    tracing::info!("fido {} {} (origin={origin})", req.method(), req.uri().path());
+    tracing::info!(
+        "fido {} {} (origin={origin})",
+        req.method(),
+        req.uri().path()
+    );
     if req.method() == Method::OPTIONS {
         let mut res = (StatusCode::NO_CONTENT, ()).into_response();
         add_cors_headers(res.headers_mut(), &origin);
@@ -512,9 +539,10 @@ async fn attestation_result(State(st): State<Arc<FidoState>>, body: String) -> R
                 if !x5c.is_empty() && !is_u2f_zero_aaguid {
                     let aaguid_str = aaguid_to_string(aaguid);
                     match guard.cache.get_statement(&aaguid_str)? {
-                        Some(stmt) => {
-                            mds::validate_attestation_chain(&x5c, &stmt.attestation_root_certificates)?
-                        }
+                        Some(stmt) => mds::validate_attestation_chain(
+                            &x5c,
+                            &stmt.attestation_root_certificates,
+                        )?,
                         None => return Err(format!("AAGUID {aaguid_str} not registered in MDS")),
                     }
                 }
@@ -610,8 +638,12 @@ async fn assertion_result(State(st): State<Arc<FidoState>>, body: String) -> Res
         return failed("type must be 'public-key'");
     }
     // userHandle は任意。存在するなら null か文字列のみ（F-21）。
-    if let Some(uh) = m.get("response").and_then(|r| r.as_object()).and_then(|r| r.get("userHandle"))
-        && !uh.is_null() && !uh.is_string()
+    if let Some(uh) = m
+        .get("response")
+        .and_then(|r| r.as_object())
+        .and_then(|r| r.get("userHandle"))
+        && !uh.is_null()
+        && !uh.is_string()
     {
         return failed("userHandle must be a string or null");
     }
@@ -676,7 +708,8 @@ async fn assertion_result(State(st): State<Arc<FidoState>>, body: String) -> Res
 
     match result {
         Ok(new_count) => {
-            st.update_sign_count(&state.username, &cred_id, new_count).await;
+            st.update_sign_count(&state.username, &cred_id, new_count)
+                .await;
             ok_with(json!({}))
         }
         Err(e) => failed(e),

@@ -4,8 +4,8 @@
 use crate::es256;
 use crate::nonce::NonceStore;
 use async_trait::async_trait;
-use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::Signature;
+use p256::ecdsa::signature::Verifier;
 use sha2::{Digest, Sha256};
 #[cfg(feature = "gcp")]
 use std::sync::Arc;
@@ -57,7 +57,9 @@ pub struct Es256Dpop {
 impl Es256Dpop {
     /// 本番: Firestore 連携で jti をインスタンス跨ぎで単回化する。
     pub fn with_store(fs: Arc<crate::firestore::Firestore>) -> Self {
-        Self { jti: NonceStore::firestore(fs) }
+        Self {
+            jti: NonceStore::firestore(fs),
+        }
     }
 }
 
@@ -95,7 +97,8 @@ impl DpopVerifier for Es256Dpop {
         let y = jwk.get("y").and_then(|v| v.as_str()).ok_or("jwk.y")?;
 
         // 署名検証（埋め込み公開鍵で）。JWS の ES256 署名は raw r||s。
-        let vk = es256::verifying_key_from_xy(&es256::b64url_decode(x)?, &es256::b64url_decode(y)?)?;
+        let vk =
+            es256::verifying_key_from_xy(&es256::b64url_decode(x)?, &es256::b64url_decode(y)?)?;
         let signing_input = format!("{}.{}", parts[0], parts[1]);
         let sig = Signature::from_slice(&es256::b64url_decode(parts[2])?)
             .map_err(|e| format!("sig: {e}"))?;
@@ -113,7 +116,10 @@ impl DpopVerifier for Es256Dpop {
         if strip_query_fragment(proof_htu) != strip_query_fragment(htu) {
             return Err(format!("htu mismatch (got {proof_htu:?}, want {htu})"));
         }
-        let iat = payload.get("iat").and_then(|v| v.as_i64()).ok_or("iat missing")?;
+        let iat = payload
+            .get("iat")
+            .and_then(|v| v.as_i64())
+            .ok_or("iat missing")?;
         if now_secs().abs_diff(iat) > IAT_SKEW_SECS as u64 {
             return Err("iat out of window".into());
         }
@@ -122,7 +128,10 @@ impl DpopVerifier for Es256Dpop {
         {
             return Err("ath mismatch".into());
         }
-        let jti = payload.get("jti").and_then(|v| v.as_str()).ok_or("jti missing")?;
+        let jti = payload
+            .get("jti")
+            .and_then(|v| v.as_str())
+            .ok_or("jti missing")?;
         // DPoP と client_assertion で名前空間を分け、jti 文字列の偶発衝突を避ける。
         if !self.jti.claim(&format!("dpop:{jti}"), JTI_TTL).await {
             return Err("jti replay".into());
@@ -134,10 +143,10 @@ impl DpopVerifier for Es256Dpop {
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
-    use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
-    use serde_json::{json, Value};
+    use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+    use p256::elliptic_curve::Generate;
+    use serde_json::{Value, json};
 
     /// header と payload(JSON)から ES256(raw r‖s)で署名した compact JWS を作る。
     fn make_proof(key: &SigningKey, header: &Value, payload: &Value) -> String {
@@ -178,7 +187,10 @@ mod tests {
         let jkt = v.verify(&proof, HTM, HTU, None).await.unwrap();
         // 返る jkt は埋め込み鍵の thumbprint。
         let pj = pub_jwk(&key);
-        assert_eq!(jkt, es256::jwk_thumbprint_p256(pj["x"].as_str().unwrap(), pj["y"].as_str().unwrap()));
+        assert_eq!(
+            jkt,
+            es256::jwk_thumbprint_p256(pj["x"].as_str().unwrap(), pj["y"].as_str().unwrap())
+        );
     }
 
     /// iat は proof の作り手が自分の鍵で署名して決める値。端の値でもあふれずに拒否する。
@@ -187,9 +199,18 @@ mod tests {
         let key = SigningKey::generate();
         let v = Es256Dpop::default();
         // 窓のすぐ外だと、作ってから検証するまでに時計が進んで窓に入ることがある。十分に離す。
-        for iat in [i64::MIN, i64::MAX, now_secs() - 2 * IAT_SKEW_SECS, now_secs() + 2 * IAT_SKEW_SECS] {
+        for iat in [
+            i64::MIN,
+            i64::MAX,
+            now_secs() - 2 * IAT_SKEW_SECS,
+            now_secs() + 2 * IAT_SKEW_SECS,
+        ] {
             let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, iat));
-            assert_eq!(v.verify(&proof, HTM, HTU, None).await.err().as_deref(), Some("iat out of window"), "{iat}");
+            assert_eq!(
+                v.verify(&proof, HTM, HTU, None).await.err().as_deref(),
+                Some("iat out of window"),
+                "{iat}"
+            );
         }
     }
 
@@ -236,7 +257,11 @@ mod tests {
         let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
         assert!(v.verify(&proof, "GET", HTU, None).await.is_err()); // htm 不一致
         let proof2 = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
-        assert!(v.verify(&proof2, HTM, "https://evil.example/token", None).await.is_err()); // htu 不一致
+        assert!(
+            v.verify(&proof2, HTM, "https://evil.example/token", None)
+                .await
+                .is_err()
+        ); // htu 不一致
     }
 
     #[tokio::test]
@@ -258,7 +283,11 @@ mod tests {
         let key = SigningKey::generate();
         let v = Es256Dpop::default();
         let htu_with_extra = format!("{HTU}?foo=bar#frag");
-        let proof = make_proof(&key, &header(&key), &payload(HTM, &htu_with_extra, now_secs()));
+        let proof = make_proof(
+            &key,
+            &header(&key),
+            &payload(HTM, &htu_with_extra, now_secs()),
+        );
         assert!(v.verify(&proof, HTM, HTU, None).await.is_ok());
     }
 
@@ -273,7 +302,11 @@ mod tests {
         assert!(v.verify(&proof, HTM, HTU, Some(&ath(token))).await.is_ok());
         // ath を要求するのに proof に無い → 失敗。
         let proof2 = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
-        assert!(v.verify(&proof2, HTM, HTU, Some(&ath(token))).await.is_err());
+        assert!(
+            v.verify(&proof2, HTM, HTU, Some(&ath(token)))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -294,9 +327,14 @@ mod tests {
         let proof = make_proof(&key, &header(&key), &payload(HTM, HTU, now_secs()));
         // payload を別 htu に差し替え、署名はそのまま → 署名検証で落ちる。
         let parts: Vec<&str> = proof.split('.').collect();
-        let forged_payload = es256::b64url_encode(payload(HTM, "https://evil.example/x", now_secs()).to_string());
+        let forged_payload =
+            es256::b64url_encode(payload(HTM, "https://evil.example/x", now_secs()).to_string());
         let forged = format!("{}.{}.{}", parts[0], forged_payload, parts[2]);
-        assert!(v.verify(&forged, HTM, "https://evil.example/x", None).await.is_err());
+        assert!(
+            v.verify(&forged, HTM, "https://evil.example/x", None)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -14,7 +14,7 @@
 use crate::document_store::DocumentStore;
 #[cfg(feature = "gcp")]
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 #[cfg(feature = "gcp")]
 use std::sync::Mutex;
 #[cfg(feature = "gcp")]
@@ -45,7 +45,12 @@ pub fn int(v: u64) -> Value {
 
 /// fields から整数値（integerValue は文字列で来る）。
 pub fn field_u64(fields: &Value, name: &str) -> Option<u64> {
-    fields.get(name)?.get("integerValue")?.as_str()?.parse().ok()
+    fields
+        .get(name)?
+        .get("integerValue")?
+        .as_str()?
+        .parse()
+        .ok()
 }
 
 /// fields から bool。未存在は None（呼び出し側が unwrap_or(false) する）。
@@ -146,7 +151,9 @@ fn enc(id: &str) -> String {
 /// 競合する）を使わずに済ませるため。
 #[cfg(feature = "gcp")]
 fn resolve_database(raw: Result<String, std::env::VarError>) -> String {
-    raw.ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "(default)".into())
+    raw.ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "(default)".into())
 }
 
 /// Firestore への 1 回の要求の時間の上限。応答が返らない要求で、呼び出し（失効の走査・ローテーション）が止まり続けない。
@@ -155,7 +162,10 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(feature = "gcp")]
 fn http_client() -> reqwest::Client {
-    crate::http::builder().timeout(HTTP_TIMEOUT).build().expect("reqwest client")
+    crate::http::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .expect("reqwest client")
 }
 
 /// Firestore の [`DocumentStore`]。各操作は同じ名前の method（REST の 1 往復）をそのまま呼ぶ。
@@ -165,37 +175,74 @@ impl DocumentStore for Firestore {
     async fn set_doc(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
         Firestore::set_doc(self, col, id, fields).await
     }
-    async fn update_field(&self, col: &str, id: &str, field: &str, value: Value) -> Result<(), String> {
+    async fn update_field(
+        &self,
+        col: &str,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<(), String> {
         Firestore::update_field(self, col, id, field, value).await
     }
     async fn update_fields(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
         Firestore::update_fields(self, col, id, fields).await
     }
-    async fn merge_fields(&self, col: &str, id: &str, fields: Value, remove: &[String]) -> Result<(), String> {
+    async fn merge_fields(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        remove: &[String],
+    ) -> Result<(), String> {
         Firestore::merge_fields(self, col, id, fields, remove).await
     }
     async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
         Firestore::get_doc(self, col, id).await
     }
-    async fn get_doc_with_update_time(&self, col: &str, id: &str) -> Result<Option<(Value, String)>, String> {
+    async fn get_doc_with_update_time(
+        &self,
+        col: &str,
+        id: &str,
+    ) -> Result<Option<(Value, String)>, String> {
         Firestore::get_doc_with_update_time(self, col, id).await
     }
-    async fn set_doc_if_unchanged(&self, col: &str, id: &str, fields: Value, update_time: &str) -> Result<bool, String> {
+    async fn set_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        update_time: &str,
+    ) -> Result<bool, String> {
         Firestore::set_doc_if_unchanged(self, col, id, fields, update_time).await
     }
     async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String> {
         Firestore::create_if_absent(self, col, id, fields).await
     }
-    async fn delete_doc_if_unchanged(&self, col: &str, id: &str, update_time: &str) -> Result<bool, String> {
+    async fn delete_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        update_time: &str,
+    ) -> Result<bool, String> {
         Firestore::delete_doc_if_unchanged(self, col, id, update_time).await
     }
     async fn take_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
         Firestore::take_doc(self, col, id).await
     }
-    async fn query_eq(&self, col: &str, field: &str, value: &str) -> Result<Vec<(String, Value)>, String> {
+    async fn query_eq(
+        &self,
+        col: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<(String, Value)>, String> {
         Firestore::query_eq(self, col, field, value).await
     }
-    async fn list_recent_ordered(&self, col: &str, order_field: &str, limit: u32) -> Result<Vec<(String, Value)>, String> {
+    async fn list_recent_ordered(
+        &self,
+        col: &str,
+        order_field: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, Value)>, String> {
         Firestore::list_recent_ordered(self, col, order_field, limit).await
     }
     async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String> {
@@ -214,7 +261,11 @@ impl Firestore {
         // grant-admin 等の管理系CLIは起動が一瞬で終わり tracing 初期化前に走るため、
         // どの project/database へ書き込んだかが分かる唯一の手段として常に出す。
         eprintln!("firestore: project={project} database={database}");
-        Self::build(project, database, std::env::var("FIRESTORE_EMULATOR_HOST").ok())
+        Self::build(
+            project,
+            database,
+            std::env::var("FIRESTORE_EMULATOR_HOST").ok(),
+        )
     }
 
     fn build(project: String, database: String, emulator_host: Option<String>) -> Self {
@@ -230,8 +281,15 @@ impl Firestore {
     /// テスト専用: プロセス全体のグローバル状態である環境変数を触らずに、任意のホストへ向ける。
     /// 並行実行されるテストが FIRESTORE_EMULATOR_HOST の set/unset で競合するのを避けるため。
     #[cfg(test)]
-    pub(crate) fn new_for_test(project: impl Into<String>, emulator_host: impl Into<String>) -> Self {
-        Self::build(project.into(), "(default)".into(), Some(emulator_host.into()))
+    pub(crate) fn new_for_test(
+        project: impl Into<String>,
+        emulator_host: impl Into<String>,
+    ) -> Self {
+        Self::build(
+            project.into(),
+            "(default)".into(),
+            Some(emulator_host.into()),
+        )
     }
 
     pub(crate) fn project(&self) -> &str {
@@ -259,11 +317,19 @@ impl Firestore {
             .send()
             .await
             .map_err(|e| format!("metadata: {e}"))?;
-        let j: Value = resp.json().await.map_err(|e| format!("metadata json: {e}"))?;
-        let tok = j["access_token"].as_str().ok_or("no access_token")?.to_string();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("metadata json: {e}"))?;
+        let tok = j["access_token"]
+            .as_str()
+            .ok_or("no access_token")?
+            .to_string();
         let ttl = j["expires_in"].as_u64().unwrap_or(3000);
-        *self.token.lock().unwrap() =
-            Some((tok.clone(), Instant::now() + Duration::from_secs(ttl.saturating_sub(60))));
+        *self.token.lock().unwrap() = Some((
+            tok.clone(),
+            Instant::now() + Duration::from_secs(ttl.saturating_sub(60)),
+        ));
         Ok(tok)
     }
 
@@ -310,7 +376,11 @@ impl Firestore {
         if r.status().is_success() {
             Ok(())
         } else {
-            Err(format!("set {} {}", r.status(), r.text().await.unwrap_or_default()))
+            Err(format!(
+                "set {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ))
         }
     }
 
@@ -322,12 +392,21 @@ impl Firestore {
     /// 常に precondition failed になる（curl で確認済み。exists 判定は正常）ため、ここでは
     /// フィールド単位の部分更新そのもので競合を起こさない設計にする。ドキュメントが存在しない
     /// 場合はエラーにする（新規作成はしない。呼び出し側は既存ドキュメントの更新用に使うこと）。
-    pub async fn update_field(&self, col: &str, id: &str, field: &str, value: Value) -> Result<(), String> {
+    pub async fn update_field(
+        &self,
+        col: &str,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<(), String> {
         let tok = self.token().await?;
         let r = self
             .http
             .patch(self.doc_url(col, id))
-            .query(&[("updateMask.fieldPaths", field), ("currentDocument.exists", "true")])
+            .query(&[
+                ("updateMask.fieldPaths", field),
+                ("currentDocument.exists", "true"),
+            ])
             .bearer_auth(tok)
             .json(&json!({ "fields": { field: value } }))
             .send()
@@ -336,7 +415,11 @@ impl Firestore {
         if r.status().is_success() {
             Ok(())
         } else {
-            Err(format!("update_field {} {}", r.status(), r.text().await.unwrap_or_default()))
+            Err(format!(
+                "update_field {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ))
         }
     }
 
@@ -359,7 +442,11 @@ impl Firestore {
         if r.status().is_success() {
             Ok(())
         } else {
-            Err(format!("update_fields {} {}", r.status(), r.text().await.unwrap_or_default()))
+            Err(format!(
+                "update_fields {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ))
         }
     }
 
@@ -379,7 +466,10 @@ impl Firestore {
         if !r.status().is_success() {
             return Err(format!("get {}", r.status()));
         }
-        let j: Value = r.json().await.map_err(|e| format!("get json: {}", e.without_url()))?;
+        let j: Value = r
+            .json()
+            .await
+            .map_err(|e| format!("get json: {}", e.without_url()))?;
         Ok(j.get("fields").cloned())
     }
 
@@ -403,10 +493,17 @@ impl Firestore {
         if !r.status().is_success() {
             return Err(format!("get {}", r.status()));
         }
-        let j: Value = r.json().await.map_err(|e| format!("get json: {}", e.without_url()))?;
+        let j: Value = r
+            .json()
+            .await
+            .map_err(|e| format!("get json: {}", e.without_url()))?;
         let fields = j.get("fields").cloned().unwrap_or(Value::Null);
         // 空の updateTime で CAS すると、Firestore は不正な要求として断る。読みの段階で誤りにする。
-        let update_time = j.get("updateTime").and_then(|v| v.as_str()).ok_or("get: no updateTime")?.to_string();
+        let update_time = j
+            .get("updateTime")
+            .and_then(|v| v.as_str())
+            .ok_or("get: no updateTime")?
+            .to_string();
         Ok(Some((fields, update_time)))
     }
 
@@ -440,7 +537,12 @@ impl Firestore {
     /// ドキュメントが存在しないときだけ作成する（atomic な単回作成）。
     /// 作成できたら Ok(true)、既に存在（ALREADY_EXISTS / FAILED_PRECONDITION）なら Ok(false)。
     /// jti / nonce の分散リプレイ防止に使う（インスタンス跨ぎで単回を保証）。
-    pub async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String> {
+    pub async fn create_if_absent(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+    ) -> Result<bool, String> {
         let tok = self.token().await?;
         let r = self
             .http
@@ -487,7 +589,10 @@ impl Firestore {
         let Some((fields, update_time)) = self.get_doc_with_update_time(col, id).await? else {
             return Ok(None);
         };
-        Ok(self.delete_doc_if_unchanged(col, id, &update_time).await?.then_some(fields))
+        Ok(self
+            .delete_doc_if_unchanged(col, id, &update_time)
+            .await?
+            .then_some(fields))
     }
 
     /// 単一フィールド完全一致のクエリ。各ドキュメントの (id, fields) を返す。
@@ -609,8 +714,16 @@ impl Firestore {
             if !r.status().is_success() {
                 return Err(format!("list {}", r.status()));
             }
-            let j: Value = r.json().await.map_err(|e| format!("list json: {}", e.without_url()))?;
-            for doc in j.get("documents").and_then(|v| v.as_array()).into_iter().flatten() {
+            let j: Value = r
+                .json()
+                .await
+                .map_err(|e| format!("list json: {}", e.without_url()))?;
+            for doc in j
+                .get("documents")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
                 let name = match doc.get("name").and_then(|v| v.as_str()) {
                     Some(n) => n,
                     None => continue,
@@ -620,7 +733,11 @@ impl Firestore {
                     None => continue,
                 };
                 let fields = doc.get("fields").cloned().unwrap_or(json!({}));
-                let update_time = doc.get("updateTime").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let update_time = doc
+                    .get("updateTime")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 out.push((id, fields, update_time));
             }
             page_token = j
@@ -692,14 +809,23 @@ impl Firestore {
 
     /// merge_doc に加え、`remove` のフィールドを消す（updateMask に在って fields に無いフィールドは消える）。
     /// 文書が無ければ作る。
-    pub async fn merge_fields(&self, col: &str, id: &str, fields: Value, remove: &[String]) -> Result<(), String> {
+    pub async fn merge_fields(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        remove: &[String],
+    ) -> Result<(), String> {
         let tok = self.token().await?;
         let keys: Vec<String> = fields
             .as_object()
             .map(|o| o.keys().cloned().collect())
             .unwrap_or_default();
-        let query: Vec<(&str, &str)> =
-            keys.iter().chain(remove).map(|k| ("updateMask.fieldPaths", k.as_str())).collect();
+        let query: Vec<(&str, &str)> = keys
+            .iter()
+            .chain(remove)
+            .map(|k| ("updateMask.fieldPaths", k.as_str()))
+            .collect();
         let r = self
             .http
             .patch(self.doc_url(col, id))
@@ -712,7 +838,11 @@ impl Firestore {
         if r.status().is_success() {
             Ok(())
         } else {
-            Err(format!("merge {} {}", r.status(), r.text().await.unwrap_or_default()))
+            Err(format!(
+                "merge {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ))
         }
     }
 }
@@ -760,7 +890,7 @@ pub(crate) mod fake_firestore {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::{Json, Router};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -796,7 +926,13 @@ pub(crate) mod fake_firestore {
         }
 
         pub fn doc_ids(&self, col: &str) -> Vec<String> {
-            self.docs.lock().unwrap().keys().filter(|(c, _)| c == col).map(|(_, id)| id.clone()).collect()
+            self.docs
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|(c, _)| c == col)
+                .map(|(_, id)| id.clone())
+                .collect()
         }
 
         pub fn fcm_sent_messages(&self) -> Vec<Value> {
@@ -809,13 +945,26 @@ pub(crate) mod fake_firestore {
         }
 
         /// fail_once と同じだが、返す状態の番号を選べる（例えば、並行する削除に先を越された 404）。
-        pub fn fail_once_with(&self, method: &'static str, col: &str, id: Option<&str>, status: StatusCode) {
-            self.failures.lock().unwrap().push((method, col.to_string(), id.map(str::to_string), status));
+        pub fn fail_once_with(
+            &self,
+            method: &'static str,
+            col: &str,
+            id: Option<&str>,
+            status: StatusCode,
+        ) {
+            self.failures.lock().unwrap().push((
+                method,
+                col.to_string(),
+                id.map(str::to_string),
+                status,
+            ));
         }
 
         fn take_failure(&self, method: &str, col: &str, id: &str) -> Option<StatusCode> {
             let mut f = self.failures.lock().unwrap();
-            let k = f.iter().position(|(m, c, i, _)| *m == method && c == col && i.as_deref().is_none_or(|i| i == id))?;
+            let k = f.iter().position(|(m, c, i, _)| {
+                *m == method && c == col && i.as_deref().is_none_or(|i| i == id)
+            })?;
             Some(f.remove(k).3)
         }
     }
@@ -823,14 +972,29 @@ pub(crate) mod fake_firestore {
     impl FakeState {
         /// (method, col, id) の次の要求を止める門を置く。返す (reached, release) の reached は要求が届いたら鳴り、
         /// release を鳴らすと要求が進む（その後に fail_once の注入があれば、それが効く）。
-        pub fn gate(&self, method: &'static str, col: &str, id: &str) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
-            let gate = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
-            self.gates.lock().unwrap().insert((method, col.to_string(), id.to_string()), gate.clone());
+        pub fn gate(
+            &self,
+            method: &'static str,
+            col: &str,
+            id: &str,
+        ) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+            let gate = (
+                Arc::new(tokio::sync::Notify::new()),
+                Arc::new(tokio::sync::Notify::new()),
+            );
+            self.gates
+                .lock()
+                .unwrap()
+                .insert((method, col.to_string(), id.to_string()), gate.clone());
             gate
         }
 
         async fn pass_gate(&self, method: &'static str, col: &str, id: &str) {
-            let gate = self.gates.lock().unwrap().remove(&(method, col.to_string(), id.to_string()));
+            let gate =
+                self.gates
+                    .lock()
+                    .unwrap()
+                    .remove(&(method, col.to_string(), id.to_string()));
             if let Some((reached, release)) = gate {
                 reached.notify_one();
                 release.notified().await;
@@ -856,7 +1020,8 @@ pub(crate) mod fake_firestore {
     impl Precondition {
         fn parse(raw: Option<&str>) -> Self {
             let mut pre = Precondition::default();
-            let pairs: Vec<(String, String)> = serde_urlencoded::from_str(raw.unwrap_or("")).unwrap_or_default();
+            let pairs: Vec<(String, String)> =
+                serde_urlencoded::from_str(raw.unwrap_or("")).unwrap_or_default();
             for (k, v) in pairs {
                 match k.as_str() {
                     "currentDocument.updateTime" => pre.update_time = Some(v),
@@ -913,9 +1078,7 @@ pub(crate) mod fake_firestore {
         if let Some(want_ut) = &pre.update_time {
             match docs.get(&key) {
                 Some(d) if version_str(d.update_time) == *want_ut => {}
-                _ => {
-                    return fs_error(StatusCode::BAD_REQUEST, "FAILED_PRECONDITION")
-                }
+                _ => return fs_error(StatusCode::BAD_REQUEST, "FAILED_PRECONDITION"),
             }
         }
         let fields = body.get("fields").cloned().unwrap_or_else(|| json!({}));
@@ -923,7 +1086,10 @@ pub(crate) mod fake_firestore {
         // updateMask 指定時は、既存ドキュメントの他フィールドを残したまま該当フィールドだけ
         // 差し替える(部分更新)。指定が無ければ従来通り全体置換。
         let merged = if !pre.update_mask.is_empty() {
-            let mut base = docs.get(&key).map(|d| d.fields.clone()).unwrap_or_else(|| json!({}));
+            let mut base = docs
+                .get(&key)
+                .map(|d| d.fields.clone())
+                .unwrap_or_else(|| json!({}));
             if let Some(obj) = base.as_object_mut() {
                 for field in &pre.update_mask {
                     match fields.get(field) {
@@ -936,13 +1102,23 @@ pub(crate) mod fake_firestore {
         } else {
             fields
         };
-        docs.insert(key, Doc { fields: merged.clone(), update_time: v });
+        docs.insert(
+            key,
+            Doc {
+                fields: merged.clone(),
+                update_time: v,
+            },
+        );
         Json(json!({ "fields": merged, "updateTime": version_str(v) })).into_response()
     }
 
     /// 実 Firestore と同じ形の誤りの本文。
     fn fs_error(code: StatusCode, status: &str) -> Response {
-        (code, Json(json!({ "error": { "code": code.as_u16(), "status": status } }))).into_response()
+        (
+            code,
+            Json(json!({ "error": { "code": code.as_u16(), "status": status } })),
+        )
+            .into_response()
     }
 
     async fn delete_doc(
@@ -959,9 +1135,7 @@ pub(crate) mod fake_firestore {
         if let Some(want_ut) = &pre.update_time {
             match docs.get(&key) {
                 Some(d) if version_str(d.update_time) == *want_ut => {}
-                _ => {
-                    return fs_error(StatusCode::BAD_REQUEST, "FAILED_PRECONDITION")
-                }
+                _ => return fs_error(StatusCode::BAD_REQUEST, "FAILED_PRECONDITION"),
             }
         }
         docs.remove(&key);
@@ -970,10 +1144,7 @@ pub(crate) mod fake_firestore {
 
     /// fcm.rs::send() が叩く `POST /v1/projects/{project}/messages:send` を模す。
     /// 実際に外部へは送らず、message body を記録して 200 を返すだけ。
-    async fn fcm_send(
-        State(st): State<Arc<FakeState>>,
-        Json(body): Json<Value>,
-    ) -> Response {
+    async fn fcm_send(State(st): State<Arc<FakeState>>, Json(body): Json<Value>) -> Response {
         st.fcm_sent.lock().unwrap().push(body);
         Json(json!({ "name": "projects/fake/messages/1" })).into_response()
     }
@@ -987,17 +1158,29 @@ pub(crate) mod fake_firestore {
         Json(body): Json<Value>,
     ) -> Response {
         let sq = &body["structuredQuery"];
-        let col = sq["from"][0]["collectionId"].as_str().unwrap_or("").to_string();
+        let col = sq["from"][0]["collectionId"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let docs = st.docs.lock().unwrap();
 
         let mut matching: Vec<(&(String, String), &Doc)> =
             docs.iter().filter(|((c, _id), _)| *c == col).collect();
 
         if let Some(filter) = sq.get("where") {
-            let field = filter["fieldFilter"]["field"]["fieldPath"].as_str().unwrap_or("").to_string();
-            let want = filter["fieldFilter"]["value"]["stringValue"].as_str().unwrap_or("").to_string();
+            let field = filter["fieldFilter"]["field"]["fieldPath"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let want = filter["fieldFilter"]["value"]["stringValue"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             matching.retain(|(_, d)| {
-                d.fields.get(&field).and_then(|v| v.get("stringValue")).and_then(|v| v.as_str())
+                d.fields
+                    .get(&field)
+                    .and_then(|v| v.get("stringValue"))
+                    .and_then(|v| v.as_str())
                     == Some(want.as_str())
             });
         }
@@ -1017,7 +1200,7 @@ pub(crate) mod fake_firestore {
             matching.sort_by(|a, b| {
                 for (field, desc) in &orders {
                     let ord = if field == "__name__" {
-                        (a.0 .1).cmp(&b.0 .1)
+                        (a.0.1).cmp(&b.0.1)
                     } else {
                         field_sort_key(&a.1.fields, field).cmp(&field_sort_key(&b.1.fields, field))
                     };
@@ -1081,10 +1264,14 @@ pub(crate) mod fake_firestore {
             docs.iter().filter(|((c, _id), _)| *c == col).collect();
         // ページングが安定するよう、id で決定的な順序にする(実Firestoreの順序保証はないが、
         // fakeでは「複数ページに渡って全件・重複無く返ってくるか」の検証を再現可能にするため)。
-        matching.sort_by(|a, b| a.0 .1.cmp(&b.0 .1));
+        matching.sort_by(|a, b| a.0.1.cmp(&b.0.1));
 
         let page_size = q.page_size.unwrap_or(300).max(1);
-        let offset: usize = q.page_token.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let offset: usize = q
+            .page_token
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let page: Vec<_> = matching.into_iter().skip(offset).take(page_size).collect();
         let consumed = offset + page.len();
 
@@ -1139,12 +1326,15 @@ pub(crate) mod fake_firestore {
 #[cfg(test)]
 mod tests {
     #![cfg(feature = "gcp")]
-    use std::assert_matches;
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn resolve_database_falls_back_on_missing_or_empty() {
-        assert_eq!(resolve_database(Err(std::env::VarError::NotPresent)), "(default)");
+        assert_eq!(
+            resolve_database(Err(std::env::VarError::NotPresent)),
+            "(default)"
+        );
         assert_eq!(resolve_database(Ok(String::new())), "(default)");
         assert_eq!(resolve_database(Ok("staging".into())), "staging");
     }
@@ -1183,7 +1373,9 @@ mod tests {
             .expect("set FIRESTORE_EMULATOR_HOST to run this test, e.g. 127.0.0.1:8180");
         let _ = host;
         let fs = Firestore::new("test-emu-probe");
-        fs.set_doc("probeCol", "doc1", json!({ "hello": s("world") })).await.unwrap();
+        fs.set_doc("probeCol", "doc1", json!({ "hello": s("world") }))
+            .await
+            .unwrap();
         let got = fs.get_doc("probeCol", "doc1").await.unwrap().unwrap();
         assert_eq!(field_str(&got, "hello"), Some("world"));
         fs.delete_doc("probeCol", "doc1").await.unwrap();
@@ -1201,11 +1393,20 @@ mod tests {
             .await
             .unwrap_err();
         // 前提の確認: 素の Display は URL（= percent-encode した email）を含む。
-        assert!(format!("{err}").contains("a%40b.com"), "precondition: raw error leaks the id");
+        assert!(
+            format!("{err}").contains("a%40b.com"),
+            "precondition: raw error leaks the id"
+        );
         // without_url 後は email を一切含まない（%40 も生 @ も）。
         let scrubbed = format!("get: {}", err.without_url());
-        assert!(!scrubbed.contains("a%40b.com"), "scrubbed leaked %40 form: {scrubbed}");
-        assert!(!scrubbed.contains("a@b.com"), "scrubbed leaked raw form: {scrubbed}");
+        assert!(
+            !scrubbed.contains("a%40b.com"),
+            "scrubbed leaked %40 form: {scrubbed}"
+        );
+        assert!(
+            !scrubbed.contains("a@b.com"),
+            "scrubbed leaked raw form: {scrubbed}"
+        );
     }
 
     async fn fake() -> Firestore {
@@ -1221,13 +1422,36 @@ mod tests {
     async fn a_rejected_request_is_an_error_not_a_lost_race() {
         let (host, state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        state.fail_once_with("PATCH", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
+        state.fail_once_with(
+            "PATCH",
+            "col",
+            Some("id9"),
+            axum::http::StatusCode::BAD_REQUEST,
+        );
         assert!(fs.create_if_absent("col", "id9", json!({})).await.is_err());
         fs.set_doc("col", "id9", json!({})).await.unwrap();
-        state.fail_once_with("PATCH", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
-        let (_, ut) = fs.get_doc_with_update_time("col", "id9").await.unwrap().unwrap();
-        assert!(fs.set_doc_if_unchanged("col", "id9", json!({}), &ut).await.is_err());
-        state.fail_once_with("DELETE", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
+        state.fail_once_with(
+            "PATCH",
+            "col",
+            Some("id9"),
+            axum::http::StatusCode::BAD_REQUEST,
+        );
+        let (_, ut) = fs
+            .get_doc_with_update_time("col", "id9")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            fs.set_doc_if_unchanged("col", "id9", json!({}), &ut)
+                .await
+                .is_err()
+        );
+        state.fail_once_with(
+            "DELETE",
+            "col",
+            Some("id9"),
+            axum::http::StatusCode::BAD_REQUEST,
+        );
         assert!(fs.delete_doc_if_unchanged("col", "id9", &ut).await.is_err());
     }
 
@@ -1239,7 +1463,13 @@ mod tests {
         // 発生した上で、過不足も重複もなく全件返ることを検証する。
         const N: usize = 130;
         for i in 0..N {
-            fs.set_doc("things", &format!("id-{i:03}"), json!({ "n": int(i as u64) })).await.unwrap();
+            fs.set_doc(
+                "things",
+                &format!("id-{i:03}"),
+                json!({ "n": int(i as u64) }),
+            )
+            .await
+            .unwrap();
         }
         // 無関係のコレクションは含まれないことも確認する。
         fs.set_doc("other", "x", json!({})).await.unwrap();
@@ -1252,7 +1482,9 @@ mod tests {
         assert_eq!(ids.len(), N, "重複が無いこと");
         let want: Vec<String> = (0..N).map(|i| format!("id-{i:03}")).collect();
         assert_eq!(
-            rows.iter().map(|(id, _, _)| id.clone()).collect::<std::collections::BTreeSet<_>>(),
+            rows.iter()
+                .map(|(id, _, _)| id.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
             want.into_iter().collect::<std::collections::BTreeSet<_>>(),
         );
         for (_, fields, update_time) in &rows {

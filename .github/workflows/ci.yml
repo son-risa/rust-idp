@@ -23,8 +23,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.100.0 # rust-toolchain.toml と同じ版
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: 書式（cargo fmt と違えば止める）
+        run: cargo fmt --all -- --check
       # gcp 無し（crates.io の既定）と gcp 付き（Cloud Run の本番）の両方を見る。
       - name: Clippy（警告が 1 つでもあれば止める）
         env:

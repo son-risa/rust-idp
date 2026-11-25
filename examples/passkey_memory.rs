@@ -8,14 +8,14 @@
 //! 登録のメールは送らず、[`Mailer`] の実装でリンクを受け取って、その token で登録を進める。
 
 use async_trait::async_trait;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ciborium::value::{Integer, Value as Cbor};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use p256::elliptic_curve::Generate;
 use rust_idp::{Client, Lang, Mailer, MemoryDocumentStore, MemoryStore, Provider};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,14 +30,24 @@ struct Outbox(Mutex<Vec<String>>);
 
 #[async_trait]
 impl Mailer for Outbox {
-    async fn send_verification(&self, _to: &str, verify_url: &str, _lang: Option<Lang>) -> Result<(), String> {
+    async fn send_verification(
+        &self,
+        _to: &str,
+        verify_url: &str,
+        _lang: Option<Lang>,
+    ) -> Result<(), String> {
         self.0.lock().unwrap().push(verify_url.to_string());
         Ok(())
     }
     async fn send_already_registered(&self, _to: &str, _lang: Option<Lang>) -> Result<(), String> {
         Ok(())
     }
-    async fn send_recovery(&self, _to: &str, _url: &str, _lang: Option<Lang>) -> Result<(), String> {
+    async fn send_recovery(
+        &self,
+        _to: &str,
+        _url: &str,
+        _lang: Option<Lang>,
+    ) -> Result<(), String> {
         Ok(())
     }
     async fn send_passkey_added(&self, _to: &str, _lang: Option<Lang>) -> Result<(), String> {
@@ -85,18 +95,34 @@ async fn run() {
             require_pkce: true,
             id_token_signed_response_alg: None,
         });
-    tokio::spawn(async move { axum::serve(listener, rust_idp::router(provider)).await.unwrap() });
+    tokio::spawn(async move {
+        axum::serve(listener, rust_idp::router(provider))
+            .await
+            .unwrap()
+    });
     println!("OP: {issuer}");
 
-    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
     let key = SigningKey::generate();
     let cred_id = b"example-credential".to_vec();
 
     // 1. 登録: メールアドレスを送り、届いたリンクの token で passkey を作る。
-    let resp = http.post(format!("{issuer}/signup/email-challenge")).json(&json!({ "email": EMAIL })).send().await.unwrap();
+    let resp = http
+        .post(format!("{issuer}/signup/email-challenge"))
+        .json(&json!({ "email": EMAIL }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 204, "{}", resp.text().await.unwrap());
     let link = outbox.0.lock().unwrap().pop().expect("verification link");
-    let token = query_of(&link).into_iter().find(|(k, _)| k == "token" || k == "t").expect("token in the link").1;
+    let token = query_of(&link)
+        .into_iter()
+        .find(|(k, _)| k == "token" || k == "t")
+        .expect("token in the link")
+        .1;
     println!("1. signup: リンク {link}");
 
     let opts: Value = http
@@ -109,7 +135,12 @@ async fn run() {
         .await
         .unwrap();
     let challenge = opts["challenge"].as_str().expect("challenge");
-    let account_id = String::from_utf8(URL_SAFE_NO_PAD.decode(opts["user"]["id"].as_str().unwrap()).unwrap()).unwrap();
+    let account_id = String::from_utf8(
+        URL_SAFE_NO_PAD
+            .decode(opts["user"]["id"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
     let (attestation, cdj) = registration(&key, &cred_id, challenge, &issuer, rp_id);
     let resp = http
         .post(format!("{issuer}/signup/passkey/verify"))
@@ -135,10 +166,21 @@ async fn run() {
     ])
     .unwrap();
     let mut cookies = HashMap::new();
-    let resp = http.get(format!("{issuer}/authorize?{query}")).send().await.unwrap();
+    let resp = http
+        .get(format!("{issuer}/authorize?{query}"))
+        .send()
+        .await
+        .unwrap();
     keep_cookies(&resp, &mut cookies);
     let login = location(&resp);
-    let uid = login.split('?').next().unwrap().rsplit('/').next().unwrap().to_string();
+    let uid = login
+        .split('?')
+        .next()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string();
     println!("3. authorize: {} → {login}", resp.status());
 
     let opts: Value = http
@@ -150,7 +192,8 @@ async fn run() {
         .json()
         .await
         .unwrap();
-    let (auth_data, signature, cdj) = assertion(&key, 1, opts["challenge"].as_str().unwrap(), &issuer, rp_id);
+    let (auth_data, signature, cdj) =
+        assertion(&key, 1, opts["challenge"].as_str().unwrap(), &issuer, rp_id);
     let resp = http
         .post(format!("{issuer}/login/{uid}/passkey/verify"))
         .header(reqwest::header::COOKIE, cookie_header(&cookies))
@@ -163,7 +206,10 @@ async fn run() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     keep_cookies(&resp, &mut cookies);
-    let resume = resp.json::<Value>().await.unwrap()["redirect"].as_str().unwrap().to_string();
+    let resume = resp.json::<Value>().await.unwrap()["redirect"]
+        .as_str()
+        .unwrap()
+        .to_string();
     println!("4. passkey ログイン: → {resume}");
 
     let resp = http
@@ -174,7 +220,11 @@ async fn run() {
         .unwrap();
     let callback = location(&resp);
     assert!(callback.starts_with(REDIRECT_URI), "{callback}");
-    let code = query_of(&callback).into_iter().find(|(k, _)| k == "code").expect("code").1;
+    let code = query_of(&callback)
+        .into_iter()
+        .find(|(k, _)| k == "code")
+        .expect("code")
+        .1;
     println!("5. resume: {} → code={code}", resp.status());
 
     // 3. 認可コードを id_token に替える。
@@ -188,7 +238,10 @@ async fn run() {
     .unwrap();
     let resp = http
         .post(format!("{issuer}/token"))
-        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
         .body(body)
         .send()
         .await
@@ -197,7 +250,16 @@ async fn run() {
     let tokens: Value = resp.json().await.unwrap();
     assert!(status.is_success(), "{tokens}");
     let claims: Value = serde_json::from_slice(
-        &URL_SAFE_NO_PAD.decode(tokens["id_token"].as_str().unwrap().split('.').nth(1).unwrap()).unwrap(),
+        &URL_SAFE_NO_PAD
+            .decode(
+                tokens["id_token"]
+                    .as_str()
+                    .unwrap()
+                    .split('.')
+                    .nth(1)
+                    .unwrap(),
+            )
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(claims["sub"], account_id.as_str());
@@ -220,7 +282,13 @@ async fn run() {
 }
 
 /// 登録の ceremony（attestation は "none"）。(attestationObject, clientDataJSON) を base64url で返す。
-fn registration(key: &SigningKey, cred_id: &[u8], challenge: &str, origin: &str, rp_id: &str) -> (String, String) {
+fn registration(
+    key: &SigningKey,
+    cred_id: &[u8],
+    challenge: &str,
+    origin: &str,
+    rp_id: &str,
+) -> (String, String) {
     let pt = key.verifying_key().to_sec1_point(false);
     let int = |i: i64| Cbor::Integer(Integer::from(i));
     let cose = Cbor::Map(vec![
@@ -242,11 +310,20 @@ fn registration(key: &SigningKey, cred_id: &[u8], challenge: &str, origin: &str,
         (Cbor::Text("authData".into()), Cbor::Bytes(auth_data)),
     ]);
     let cdj = client_data("webauthn.create", challenge, origin);
-    (URL_SAFE_NO_PAD.encode(cbor(&att)), URL_SAFE_NO_PAD.encode(cdj))
+    (
+        URL_SAFE_NO_PAD.encode(cbor(&att)),
+        URL_SAFE_NO_PAD.encode(cdj),
+    )
 }
 
 /// ログインの ceremony。(authenticatorData, signature, clientDataJSON) を base64url で返す。
-fn assertion(key: &SigningKey, sign_count: u32, challenge: &str, origin: &str, rp_id: &str) -> (String, String, String) {
+fn assertion(
+    key: &SigningKey,
+    sign_count: u32,
+    challenge: &str,
+    origin: &str,
+    rp_id: &str,
+) -> (String, String, String) {
     let auth_data = auth_data(rp_id, 0x01 | 0x04, sign_count, &[]);
     let cdj = client_data("webauthn.get", challenge, origin);
     let mut signed = auth_data.clone();
@@ -269,7 +346,9 @@ fn auth_data(rp_id: &str, flags: u8, sign_count: u32, attested: &[u8]) -> Vec<u8
 }
 
 fn client_data(typ: &str, challenge: &str, origin: &str) -> Vec<u8> {
-    json!({ "type": typ, "challenge": challenge, "origin": origin }).to_string().into_bytes()
+    json!({ "type": typ, "challenge": challenge, "origin": origin })
+        .to_string()
+        .into_bytes()
 }
 
 fn cbor(v: &Cbor) -> Vec<u8> {
@@ -283,17 +362,29 @@ fn query_of(url: &str) -> Vec<(String, String)> {
 }
 
 fn location(resp: &reqwest::Response) -> String {
-    resp.headers()[reqwest::header::LOCATION].to_str().unwrap().to_string()
+    resp.headers()[reqwest::header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string()
 }
 
 fn keep_cookies(resp: &reqwest::Response, jar: &mut HashMap<String, String>) {
     for v in resp.headers().get_all(reqwest::header::SET_COOKIE) {
-        if let Some((name, value)) = v.to_str().unwrap().split(';').next().and_then(|kv| kv.split_once('=')) {
+        if let Some((name, value)) = v
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .and_then(|kv| kv.split_once('='))
+        {
             jar.insert(name.to_string(), value.to_string());
         }
     }
 }
 
 fn cookie_header(jar: &HashMap<String, String>) -> String {
-    jar.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ")
+    jar.iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }

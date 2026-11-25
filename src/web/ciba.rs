@@ -1,14 +1,21 @@
 use super::*;
 
 /// プロフィール画面のポーリング用: 自分宛の pending CIBA 依頼一覧（access token 認証）。
-pub(super) async fn ciba_pending_list(State(p): State<Arc<Provider>>, headers: HeaderMap) -> Response {
+pub(super) async fn ciba_pending_list(
+    State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
+) -> Response {
     let at = match authenticate_token(&p, &headers, "GET", "/ciba/pending", None).await {
         Ok(at) => at,
         Err(r) => return r,
     };
     // 読み取り時スイープ: 期限切れ pending を履歴(expired)へ移して掃除する（掃除漏れ対策）。
     let _ = p.ciba.sweep_expired(&at.account_id).await;
-    let pending = p.ciba.list_pending(&at.account_id).await.unwrap_or_default();
+    let pending = p
+        .ciba
+        .list_pending(&at.account_id)
+        .await
+        .unwrap_or_default();
     let items: Vec<serde_json::Value> = pending
         .iter()
         .map(|r| {
@@ -38,7 +45,11 @@ pub(super) async fn ciba_history(State(p): State<Arc<Provider>>, headers: Header
     };
     // 履歴取得のついでに期限切れ pending を expired として履歴へ確定させる。
     let _ = p.ciba.sweep_expired(&at.account_id).await;
-    let entries = p.ciba.list_history(&at.account_id, 50).await.unwrap_or_default();
+    let entries = p
+        .ciba
+        .list_history(&at.account_id, 50)
+        .await
+        .unwrap_or_default();
     let items: Vec<serde_json::Value> = entries
         .iter()
         .map(|e| {
@@ -80,7 +91,14 @@ pub(super) async fn fcm_token_register(
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    match crate::fcm::save_token(fs, &at.account_id, &req.token, req.platform.as_deref().unwrap_or("ios")).await {
+    match crate::fcm::save_token(
+        fs,
+        &at.account_id,
+        &req.token,
+        req.platform.as_deref().unwrap_or("ios"),
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::error!("fcm save_token: {e}");
@@ -111,10 +129,12 @@ pub(super) async fn backchannel_auth(
     // JAR (FAPI-CIBA): signed request object を検証し以後のパラメータをその claims から取る。
     // private_key_jwt クライアントは signed request 必須（FAPI-CIBA）。
     let form = match form.get("request").cloned() {
-        Some(req) => match crate::request_object::verify(&client, &req, &p.issuer, &p.jar_jti).await {
-            Ok(m) => m,
-            Err(e) => return e.into_response(),
-        },
+        Some(req) => {
+            match crate::request_object::verify(&client, &req, &p.issuer, &p.jar_jti).await {
+                Ok(m) => m,
+                Err(e) => return e.into_response(),
+            }
+        }
         None => {
             if client.token_endpoint_auth_method == "private_key_jwt" {
                 return OAuthError::InvalidRequest(
@@ -140,7 +160,10 @@ pub(super) async fn backchannel_auth(
         Some(s) => s.trim().to_lowercase(),
         None => return OAuthError::InvalidRequest("login_hint required".into()).into_response(),
     };
-    let scope = form.get("scope").cloned().unwrap_or_else(|| "openid".into());
+    let scope = form
+        .get("scope")
+        .cloned()
+        .unwrap_or_else(|| "openid".into());
     if !scope.split_whitespace().any(|s| s == "openid") {
         return OAuthError::InvalidScope("openid scope required".into()).into_response();
     }
@@ -157,10 +180,8 @@ pub(super) async fn backchannel_auth(
             let v: serde_json::Value = match serde_json::from_str(raw) {
                 Ok(v) => v,
                 Err(_) => {
-                    return OAuthError::InvalidRequest(
-                        "authorization_details must be JSON".into(),
-                    )
-                    .into_response();
+                    return OAuthError::InvalidRequest("authorization_details must be JSON".into())
+                        .into_response();
                 }
             };
             let arr = match v.as_array() {
@@ -214,7 +235,11 @@ pub(super) async fn backchannel_auth(
     };
     // dedup: 同 (client_id, account) に未解決の pending があれば、新規発行も push もせず
     // 既存の auth_req_id を返す（冪等）。連発時の端末スパム抑止。要求は account_id で保存しているので、探すのも account_id。
-    match p.ciba.find_pending_for(&client.client_id, &account_id).await {
+    match p
+        .ciba
+        .find_pending_for(&client.client_id, &account_id)
+        .await
+    {
         Ok(Some(existing)) => {
             let remaining = existing.expires_at.saturating_sub(now_secs());
             return (
@@ -237,7 +262,10 @@ pub(super) async fn backchannel_auth(
     if !p.ciba_rate.check_and_record(&client.client_id, &login_hint) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            [(header::CACHE_CONTROL, "no-store"), (header::RETRY_AFTER, "60")],
+            [
+                (header::CACHE_CONTROL, "no-store"),
+                (header::RETRY_AFTER, "60"),
+            ],
             Json(serde_json::json!({
                 "error": "slow_down",
                 "error_description": "rate limit exceeded for this client/user",
@@ -245,14 +273,33 @@ pub(super) async fn backchannel_auth(
         )
             .into_response();
     }
-    match p.ciba.create(&client.client_id, &account_id, &scope, &binding, authorization_details.as_deref()).await {
+    match p
+        .ciba
+        .create(
+            &client.client_id,
+            &account_id,
+            &scope,
+            &binding,
+            authorization_details.as_deref(),
+        )
+        .await
+    {
         Ok(id) => {
             // FCM で iPhone に承認要求を通知（Cloud Run suspend を避けるため await）。
             // token 未登録/送信失敗でも Web 承認は可能なのでベストエフォート。
             // fcm::save_token は at.account_id（UUID）で保存するため、宛先解決も account_id で行う。
             #[cfg(feature = "gcp")]
             if let Some(fcm) = &p.fcm {
-                let _ = crate::fcm::send_ciba_request(fcm, &account_id, &client.client_id, &scope, &binding, id.as_str(), authorization_details.as_deref()).await;
+                let _ = crate::fcm::send_ciba_request(
+                    fcm,
+                    &account_id,
+                    &client.client_id,
+                    &scope,
+                    &binding,
+                    id.as_str(),
+                    authorization_details.as_deref(),
+                )
+                .await;
             }
             (
                 [(header::CACHE_CONTROL, "no-store")],
@@ -296,7 +343,11 @@ pub(super) async fn ciba_pending(
         }
     };
     let pending = p.ciba.list_pending(&account).await.unwrap_or_default();
-    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    };
     let rows: String = pending
         .iter()
         .map(|r| {
@@ -304,7 +355,11 @@ pub(super) async fn ciba_pending(
                 "<div class=row><div><b>{}</b><br><small>scope: {}</small></div>\
 <button onclick=\"approve('{}')\">[[Approve (passkey)]]</button> \
 <button class=rej onclick=\"reject('{}')\">[[Reject]]</button></div>",
-                esc(if r.binding_message.is_empty() { "[[(no message)]]" } else { &r.binding_message }),
+                esc(if r.binding_message.is_empty() {
+                    "[[(no message)]]"
+                } else {
+                    &r.binding_message
+                }),
                 esc(&r.scope),
                 esc(r.auth_req_id.as_str()),
                 esc(r.auth_req_id.as_str()),
@@ -373,7 +428,15 @@ async fn own_request(
     action: &str,
 ) -> Result<crate::ciba::BackchannelAuthRequest, Response> {
     let account = if headers.contains_key(header::AUTHORIZATION) {
-        authenticate_token(p, headers, "POST", &format!("/ciba/{auth_req_id}/{action}"), None).await?.account_id
+        authenticate_token(
+            p,
+            headers,
+            "POST",
+            &format!("/ciba/{auth_req_id}/{action}"),
+            None,
+        )
+        .await?
+        .account_id
     } else {
         match session_account(p, jar).await {
             Some(a) if from_own_origin(headers, &p.origin()) => a,
@@ -422,7 +485,9 @@ pub(super) async fn ciba_approve_options(
         _ => return (StatusCode::BAD_REQUEST, "no passkey").into_response(),
     };
     let creds = match crate::registration::get_account(fs, &email).await {
-        Ok(Some(a)) => crate::registration::list_credentials(fs, &a).await.unwrap_or_default(),
+        Ok(Some(a)) => crate::registration::list_credentials(fs, &a)
+            .await
+            .unwrap_or_default(),
         _ => vec![],
     };
     if creds.is_empty() {
@@ -472,10 +537,11 @@ pub(super) async fn ciba_approve(
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
     };
-    let (email, kind, uid, _) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
-        Ok(Some(t)) => t,
-        _ => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
-    };
+    let (email, kind, uid, _) =
+        match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
+            Ok(Some(t)) => t,
+            _ => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
+        };
     if kind != crate::registration::ChallengeKind::CibaApprove || uid != auth_req_id {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
@@ -514,7 +580,13 @@ pub(super) async fn ciba_approve(
                 tracing::warn!(event = "passkey_use_not_recorded", "{e}");
             }
         }
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("passkey verify failed: {e}")).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                format!("passkey verify failed: {e}"),
+            )
+                .into_response();
+        }
     }
     // disabled チェックは署名検証の後: login.rs と同じ理由で、実 passkey を持たない
     // 第三者に凍結状態を判別させるオラクルにしないため、正規の所有者だと確認できてから
@@ -525,10 +597,15 @@ pub(super) async fn ciba_approve(
     }
     let _ = ciba_req; // 検証済み。承認に進む。
     // 先勝ち: Pending のときだけ Approved へ原子的に遷移。既に承認/拒否済みなら 409。
-    match p.ciba.transition_if_pending(&auth_req_id, crate::ciba::CibaStatus::Approved).await {
+    match p
+        .ciba
+        .transition_if_pending(&auth_req_id, crate::ciba::CibaStatus::Approved)
+        .await
+    {
         Ok(true) => {
             // 監査履歴に「承認」を追記（ベストエフォート。失敗しても承認は成立させる）。
-            let entry = crate::ciba::CibaHistoryEntry::from_request(&ciba_req, "approved", now_secs());
+            let entry =
+                crate::ciba::CibaHistoryEntry::from_request(&ciba_req, "approved", now_secs());
             let _ = p.ciba.record_history(&entry).await;
         }
         Ok(false) => return (StatusCode::CONFLICT, "already handled").into_response(),
@@ -558,7 +635,11 @@ pub(super) async fn ciba_reject(
     if req.expired() {
         return (StatusCode::CONFLICT, "expired").into_response();
     }
-    match p.ciba.transition_if_pending(&auth_req_id, crate::ciba::CibaStatus::Denied).await {
+    match p
+        .ciba
+        .transition_if_pending(&auth_req_id, crate::ciba::CibaStatus::Denied)
+        .await
+    {
         // 拒否成立。
         Ok(true) => {
             let entry = crate::ciba::CibaHistoryEntry::from_request(&req, "denied", now_secs());
@@ -576,7 +657,6 @@ pub(super) async fn ciba_reject(
 
 #[cfg(all(test, feature = "gcp"))]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::ciba::{CibaStatus, CibaStore, MemoryCibaStore};
     use crate::fido::verify::test_support::*;
@@ -584,6 +664,7 @@ mod tests {
     use crate::registration::ChallengeKind;
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
+    use p256::elliptic_curve::Generate;
 
     const EMAIL: &str = "user@example.com";
     const ACCOUNT: &str = "acct-1";
@@ -600,10 +681,17 @@ mod tests {
             sign_count: 0,
             aaguid: String::new(),
         };
-        crate::registration::save_credential(&*fs, EMAIL, ACCOUNT, &reg).await.unwrap();
+        crate::registration::save_credential(&*fs, EMAIL, ACCOUNT, &reg)
+            .await
+            .unwrap();
         let ciba = Arc::new(MemoryCibaStore::default());
-        let id = ciba.create("rp", ACCOUNT, "openid", "pay 100", None).await.unwrap();
-        let p = Provider::new("https://idp.example").with_firestore(fs).with_ciba(ciba.clone());
+        let id = ciba
+            .create("rp", ACCOUNT, "openid", "pay 100", None)
+            .await
+            .unwrap();
+        let p = Provider::new("https://idp.example")
+            .with_firestore(fs)
+            .with_ciba(ciba.clone());
         (Arc::new(p), ciba, id.0)
     }
 
@@ -618,10 +706,15 @@ mod tests {
         signer: &SigningKey,
     ) -> StatusCode {
         let fs = p.docs.as_deref().unwrap();
-        let challenge =
-            crate::registration::create_webauthn_challenge(fs, EMAIL, ChallengeKind::CibaApprove, challenge_for, "")
-                .await
-                .unwrap();
+        let challenge = crate::registration::create_webauthn_challenge(
+            fs,
+            EMAIL,
+            ChallengeKind::CibaApprove,
+            challenge_for,
+            "",
+        )
+        .await
+        .unwrap();
         let auth_data = build_auth_data(&p.rp_id(), 0x01 | 0x04, 1, None);
         let cdj = client_data_json("webauthn.get", &challenge, &p.origin());
         let mut signed = auth_data.clone();
@@ -636,7 +729,9 @@ mod tests {
             },
         }))
         .unwrap();
-        ciba_approve(State(p.clone()), Path(auth_req_id.to_string()), Json(req)).await.status()
+        ciba_approve(State(p.clone()), Path(auth_req_id.to_string()), Json(req))
+            .await
+            .status()
     }
 
     #[tokio::test]
@@ -645,29 +740,60 @@ mod tests {
         let (p, ciba, id) = seeded(&owner).await;
 
         let attacker = SigningKey::generate();
-        assert_eq!(approve_with(&p, &id, &attacker).await, StatusCode::UNAUTHORIZED);
-        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Pending);
+        assert_eq!(
+            approve_with(&p, &id, &attacker).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            ciba.get(&id).await.unwrap().unwrap().status,
+            CibaStatus::Pending
+        );
 
         assert_eq!(approve_with(&p, &id, &owner).await, StatusCode::OK);
-        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Approved);
+        assert_eq!(
+            ciba.get(&id).await.unwrap().unwrap().status,
+            CibaStatus::Approved
+        );
     }
 
     #[tokio::test]
     async fn a_challenge_issued_for_another_request_cannot_approve_this_one() {
         let owner = SigningKey::generate();
         let (p, ciba, id) = seeded(&owner).await;
-        let other = ciba.create("rp", ACCOUNT, "openid", "pay 9999", None).await.unwrap();
+        let other = ciba
+            .create("rp", ACCOUNT, "openid", "pay 9999", None)
+            .await
+            .unwrap();
 
-        assert_eq!(approve_with_challenge_for(&p, &id, other.as_str(), &owner).await, StatusCode::BAD_REQUEST);
-        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Pending);
+        assert_eq!(
+            approve_with_challenge_for(&p, &id, other.as_str(), &owner).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ciba.get(&id).await.unwrap().unwrap().status,
+            CibaStatus::Pending
+        );
     }
 
     /// ブラウザの名乗り: sid の cookie と、自分の origin の Origin。
-    async fn browser_of(p: &Provider, account: &str, origin: Option<&str>) -> (HeaderMap, CookieJar) {
+    async fn browser_of(
+        p: &Provider,
+        account: &str,
+        origin: Option<&str>,
+    ) -> (HeaderMap, CookieJar) {
         let sid = format!("sid-{account}");
-        p.store.save_session(Session { sid: sid.clone(), account_id: account.into(), auth_time: 0 }).await;
+        p.store
+            .save_session(Session {
+                sid: sid.clone(),
+                account_id: account.into(),
+                auth_time: 0,
+            })
+            .await;
         let mut c = HeaderMap::new();
-        c.insert(header::COOKIE, format!("{SID_COOKIE}={sid}").parse().unwrap());
+        c.insert(
+            header::COOKIE,
+            format!("{SID_COOKIE}={sid}").parse().unwrap(),
+        );
         let mut h = HeaderMap::new();
         if let Some(o) = origin {
             h.insert(header::ORIGIN, o.parse().unwrap());
@@ -694,12 +820,17 @@ mod tests {
             .await
             .unwrap();
         let mut h = HeaderMap::new();
-        h.insert(header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        h.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
         (h, CookieJar::default())
     }
 
     async fn reject_as(p: &Arc<Provider>, id: &str, who: (HeaderMap, CookieJar)) -> StatusCode {
-        ciba_reject(State(p.clone()), Path(id.to_string()), who.0, who.1).await.status()
+        ciba_reject(State(p.clone()), Path(id.to_string()), who.0, who.1)
+            .await
+            .status()
     }
 
     async fn options_as(p: &Arc<Provider>, id: &str, who: (HeaderMap, CookieJar)) -> Response {
@@ -711,30 +842,73 @@ mod tests {
     async fn only_the_addressed_user_can_reject() {
         let owner = SigningKey::generate();
         let (p, ciba, id) = seeded(&owner).await;
-        let pending = || async { ciba.get(&id).await.unwrap().unwrap().status == CibaStatus::Pending };
+        let pending =
+            || async { ciba.get(&id).await.unwrap().unwrap().status == CibaStatus::Pending };
 
-        assert_eq!(reject_as(&p, &id, (HeaderMap::new(), CookieJar::default())).await, StatusCode::UNAUTHORIZED);
-        assert_eq!(reject_as(&p, &id, browser_of(&p, "acct-2", Some("https://idp.example")).await).await, StatusCode::NOT_FOUND);
-        assert_eq!(reject_as(&p, &id, app_of(&p, "acct-2").await).await, StatusCode::NOT_FOUND);
+        assert_eq!(
+            reject_as(&p, &id, (HeaderMap::new(), CookieJar::default())).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            reject_as(
+                &p,
+                &id,
+                browser_of(&p, "acct-2", Some("https://idp.example")).await
+            )
+            .await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            reject_as(&p, &id, app_of(&p, "acct-2").await).await,
+            StatusCode::NOT_FOUND
+        );
         for origin in [Some("https://evil.idp.example"), Some("null"), None] {
-            assert_eq!(reject_as(&p, &id, browser_of(&p, ACCOUNT, origin).await).await, StatusCode::FORBIDDEN, "{origin:?}");
+            assert_eq!(
+                reject_as(&p, &id, browser_of(&p, ACCOUNT, origin).await).await,
+                StatusCode::FORBIDDEN,
+                "{origin:?}"
+            );
         }
         let mut bad = app_of(&p, ACCOUNT).await;
-        bad.0.insert(header::AUTHORIZATION, "Bearer nope".parse().unwrap());
+        bad.0
+            .insert(header::AUTHORIZATION, "Bearer nope".parse().unwrap());
         assert_eq!(reject_as(&p, &id, bad).await, StatusCode::UNAUTHORIZED);
         assert!(pending().await);
-        assert_eq!(reject_as(&p, "no-such-id", app_of(&p, ACCOUNT).await).await, StatusCode::NOT_FOUND);
-
-        assert_eq!(reject_as(&p, &id, app_of(&p, ACCOUNT).await).await, StatusCode::NO_CONTENT);
-        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Denied);
-        assert_eq!(reject_as(&p, &id, app_of(&p, ACCOUNT).await).await, StatusCode::CONFLICT);
-
-        let other = ciba.create("rp", ACCOUNT, "openid", "pay 1", None).await.unwrap();
         assert_eq!(
-            reject_as(&p, other.as_str(), browser_of(&p, ACCOUNT, Some("https://idp.example")).await).await,
+            reject_as(&p, "no-such-id", app_of(&p, ACCOUNT).await).await,
+            StatusCode::NOT_FOUND
+        );
+
+        assert_eq!(
+            reject_as(&p, &id, app_of(&p, ACCOUNT).await).await,
             StatusCode::NO_CONTENT
         );
-        assert_eq!(ciba.get(other.as_str()).await.unwrap().unwrap().status, CibaStatus::Denied);
+        assert_eq!(
+            ciba.get(&id).await.unwrap().unwrap().status,
+            CibaStatus::Denied
+        );
+        assert_eq!(
+            reject_as(&p, &id, app_of(&p, ACCOUNT).await).await,
+            StatusCode::CONFLICT
+        );
+
+        let other = ciba
+            .create("rp", ACCOUNT, "openid", "pay 1", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            reject_as(
+                &p,
+                other.as_str(),
+                browser_of(&p, ACCOUNT, Some("https://idp.example")).await
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            ciba.get(other.as_str()).await.unwrap().unwrap().status,
+            CibaStatus::Denied
+        );
     }
 
     /// Firestore が文書 ID として断る形の auth_req_id は、引かずに 404 にする（引けば 400 が 500 になる）。
@@ -743,18 +917,33 @@ mod tests {
         let (host, state) = fake_firestore::spawn().await;
         let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let ciba = Arc::new(crate::ciba::FirestoreCibaStore::new(fs.clone()));
-        let p = Arc::new(Provider::new("https://idp.example").with_firestore(fs).with_ciba(ciba));
+        let p = Arc::new(
+            Provider::new("https://idp.example")
+                .with_firestore(fs)
+                .with_ciba(ciba),
+        );
         let too_long = "a".repeat(200);
         for id in ["__x__", too_long.as_str()] {
             // 引きに行けば、この 400 が返る（実の Firestore が断るときと同じ）。
             state.fail_once_with("GET", "cibaRequests", None, StatusCode::BAD_REQUEST);
-            assert_eq!(reject_as(&p, id, app_of(&p, ACCOUNT).await).await, StatusCode::NOT_FOUND, "{id}");
-            assert_eq!(options_as(&p, id, app_of(&p, ACCOUNT).await).await.status(), StatusCode::NOT_FOUND, "{id}");
+            assert_eq!(
+                reject_as(&p, id, app_of(&p, ACCOUNT).await).await,
+                StatusCode::NOT_FOUND,
+                "{id}"
+            );
+            assert_eq!(
+                options_as(&p, id, app_of(&p, ACCOUNT).await).await.status(),
+                StatusCode::NOT_FOUND,
+                "{id}"
+            );
             state.clear_failures();
         }
         // 形の正しい ID なら引きに行き、Firestore の誤りは 500 のまま。上の 404 が引かずに返したものだと示す。
         state.fail_once_with("GET", "cibaRequests", None, StatusCode::BAD_REQUEST);
-        assert_eq!(reject_as(&p, "no-such-id", app_of(&p, ACCOUNT).await).await, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            reject_as(&p, "no-such-id", app_of(&p, ACCOUNT).await).await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     /// credential ID の一覧と challenge は、宛先の利用者にだけ渡す。approve は今までどおり passkey だけで通る。
@@ -763,17 +952,38 @@ mod tests {
         let owner = SigningKey::generate();
         let (p, _ciba, id) = seeded(&owner).await;
 
-        assert_eq!(options_as(&p, &id, (HeaderMap::new(), CookieJar::default())).await.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(options_as(&p, &id, app_of(&p, "acct-2").await).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(
-            options_as(&p, &id, browser_of(&p, ACCOUNT, Some("https://evil.idp.example")).await).await.status(),
+            options_as(&p, &id, (HeaderMap::new(), CookieJar::default()))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            options_as(&p, &id, app_of(&p, "acct-2").await)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            options_as(
+                &p,
+                &id,
+                browser_of(&p, ACCOUNT, Some("https://evil.idp.example")).await
+            )
+            .await
+            .status(),
             StatusCode::FORBIDDEN
         );
 
-        for who in [app_of(&p, ACCOUNT).await, browser_of(&p, ACCOUNT, Some("https://idp.example")).await] {
+        for who in [
+            app_of(&p, ACCOUNT).await,
+            browser_of(&p, ACCOUNT, Some("https://idp.example")).await,
+        ] {
             let r = options_as(&p, &id, who).await;
             assert_eq!(r.status(), StatusCode::OK);
-            let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+            let body = axum::body::to_bytes(r.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let o: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(o["allowCredentials"][0]["id"], CRED);
         }

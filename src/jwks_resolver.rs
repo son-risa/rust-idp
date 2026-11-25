@@ -8,7 +8,10 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// キャッシュ TTL。鍵ローテーションの反映遅延の上限であり、jwks_uri への取得頻度の下限。
@@ -52,7 +55,10 @@ impl JwksResolver {
         let found = keys.iter().find(|k| k.kid == kid).cloned();
         self.cache.lock().unwrap().insert(
             jwks_uri.to_string(),
-            Cached { keys, expires_at: now + TTL_SECS },
+            Cached {
+                keys,
+                expires_at: now + TTL_SECS,
+            },
         );
         found
     }
@@ -70,11 +76,7 @@ impl JwksResolver {
         }
         let v: serde_json::Value = resp.json().await.ok()?;
         let keys = crate::dcr::jwks_from_jwk_set(Some(&v));
-        if keys.is_empty() {
-            None
-        } else {
-            Some(keys)
-        }
+        if keys.is_empty() { None } else { Some(keys) }
     }
 }
 
@@ -108,7 +110,11 @@ fn is_internal(ip: IpAddr) -> bool {
         }
         IpAddr::V6(a) => {
             let s = a.segments();
-            let embedded = |hi: u16, lo: u16| is_internal(IpAddr::V4(std::net::Ipv4Addr::from(((hi as u32) << 16) | lo as u32)));
+            let embedded = |hi: u16, lo: u16| {
+                is_internal(IpAddr::V4(std::net::Ipv4Addr::from(
+                    ((hi as u32) << 16) | lo as u32,
+                )))
+            };
             a.is_loopback()
                 || a.is_unspecified()
                 || a.is_multicast()
@@ -130,7 +136,11 @@ fn is_internal(ip: IpAddr) -> bool {
 async fn public_addrs(url: &reqwest::Url) -> Option<Vec<SocketAddr>> {
     let port = url.port_or_known_default()?;
     let host = url.host_str()?;
-    let addrs: Vec<SocketAddr> = match host.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>() {
+    let addrs: Vec<SocketAddr> = match host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    {
         Ok(ip) => vec![SocketAddr::new(ip, port)],
         Err(_) => tokio::net::lookup_host((host, port)).await.ok()?.collect(),
     };
@@ -216,7 +226,10 @@ mod tests {
         }
         assert!(allowed("https://93.184.215.14/jwks").await);
         assert!(allowed("https://[2606:2800:21f:cb07:6820:80da:af6b:8b2c]/jwks").await);
-        assert!(allowed("https://[2002:5db8:d70e::1]/jwks").await, "6to4 は埋め込みの IPv4 が公開なら通す");
+        assert!(
+            allowed("https://[2002:5db8:d70e::1]/jwks").await,
+            "6to4 は埋め込みの IPv4 が公開なら通す"
+        );
     }
 
     #[tokio::test]
@@ -231,8 +244,15 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
         let client = pinned_client(&[addr]).unwrap();
-        let resp = client.get(format!("http://jwks.example:{}/jwks", addr.port())).send().await.unwrap();
-        assert!(resp.status().is_redirection(), "redirect の先へ行ってはならない");
+        let resp = client
+            .get(format!("http://jwks.example:{}/jwks", addr.port()))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_redirection(),
+            "redirect の先へ行ってはならない"
+        );
     }
 
     #[tokio::test]
@@ -245,8 +265,15 @@ mod tests {
         let client = pinned_client(&[addr]).unwrap();
         // .invalid は DNS で決して解けない（RFC 6761）。大文字・末尾の点でも、留めた先にだけ届く。
         for host in ["jwks.invalid", "JWKS.INVALID", "jwks.invalid."] {
-            let resp = client.get(format!("http://{host}:{}/jwks", addr.port())).send().await;
-            let body = resp.unwrap_or_else(|e| panic!("{host}: {e}")).text().await.unwrap();
+            let resp = client
+                .get(format!("http://{host}:{}/jwks", addr.port()))
+                .send()
+                .await;
+            let body = resp
+                .unwrap_or_else(|e| panic!("{host}: {e}"))
+                .text()
+                .await
+                .unwrap();
             assert_eq!(body, "pinned", "{host}");
         }
     }
