@@ -258,6 +258,8 @@ pub fn router(provider: Provider) -> Router {
         .route("/ciba/{auth_req_id}/passkey-options", post(ciba::ciba_approve_options))
         .route("/ciba/{auth_req_id}/approve", post(ciba::ciba_approve))
         .route("/ciba/{auth_req_id}/reject", post(ciba::ciba_reject))
+        // メール確認つきユーザー登録（Web HTML フロー + ネイティブ JSON API）。
+        // OAuth の「クライアント登録(DCR)」と区別するため /signup/* に置く。
         .route("/signup", get(register::register_form).post(register::register_submit))
         .route("/signup/verify", get(register::verify_form))
         .route("/signup/email-challenge", post(register::register_email_challenge))
@@ -310,8 +312,6 @@ pub fn router(provider: Provider) -> Router {
         .route("/admin/iats/new", get(admin::iat_mint_form).post(admin::iat_mint_submit))
         .route("/admin/iats/{hash}/revoke", post(admin::iat_revoke))
         .route("/admin/iats/flash/{flash_id}", get(admin::iat_show_once))
-        // メール確認つきユーザー登録（Web HTML フロー + ネイティブ JSON API）。
-        // OAuth の「クライアント登録(DCR)」と区別するため /signup/* に置く。
         .route_layer(axum::middleware::from_fn_with_state(shared.clone(), admin_same_origin));
 
     let inner = inner.merge(admin).with_state(shared.clone());
