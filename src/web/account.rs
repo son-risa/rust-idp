@@ -86,6 +86,11 @@ pub(super) struct AccountQuery {
     client_id: Option<String>,
 }
 
+/// 利用者の名前を、localize と後ろの `__X__` の置き換えに拾われない形で HTML に入れる。
+fn esc_name(s: &str) -> String {
+    esc(s).replace('[', "&#91;").replace('_', "&#95;")
+}
+
 pub(super) async fn account_page(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
@@ -153,6 +158,10 @@ pub(super) async fn account_page(
             } else {
                 ""
             };
+            let name = match registration::get_profile(fs, &m.account.account_id).await {
+                Ok(mut pr) => pr.remove("name").unwrap_or_default(),
+                Err(e) => return internal("account_page: get_profile", &e),
+            };
             let back = match super::client_entry(&p, q.client_id.as_deref().unwrap_or("")).await {
                 Some(entry) => {
                     let host = entry.split("://").nth(1).and_then(|r| r.split(['/', '?', ':']).next()).unwrap_or("");
@@ -167,12 +176,14 @@ pub(super) async fn account_page(
             (
                 format!(
                     r#"{recovered}{back}{phone}<p class="sub">{email}</p>
+<form class="name" onsubmit="saveName();return false;"><label for="name">[[Name]]</label><div><input id="name" name="name" maxlength="80" autocomplete="name" value="{name}"><button type="submit">[[Save]]</button></div></form><p class="small" id="namemsg"></p>
 <ul class="pk">{rows}</ul>
 {gpm_hint}
 <button class="primary" onclick="add()">[[Add a passkey on this device]]</button>
 <p class="small">[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.]]</p>
 <form class="small" method="post" action="__LOGOUT__"><input type="hidden" name="confirm" value="1"><button type="submit" class="signout">[[Sign out]]</button></form>"#,
                     email = esc(&m.account.email),
+                    name = esc_name(&name),
                     // メールのリンクで作り終えて来た（別の端末で始めたかもしれない）ときだけ、元のパソコンでの続け方を添える。
                     phone = if q.recovered.is_some() || q.client_id.is_some() {
                         r#"<p class="small" id="phonehint" hidden>[[To continue on your computer, press sign in there and scan the QR code that appears with this phone.]]</p>"#
@@ -193,6 +204,7 @@ pub(super) async fn account_page(
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Passkeys]]</title>
 <style>body{font-family:-apple-system,sans-serif;max-width:420px;margin:40px auto;padding:0 16px;color:#222}
 h1{font-size:20px;margin:0 0 8px}p{font-size:14px;line-height:1.6}.sub{color:#5f6368;font-size:13px}
+form.name label{display:block;font-size:14px;margin-top:12px}form.name div{display:flex;gap:8px;margin-top:4px}form.name input{flex:1;min-width:0;padding:10px;font-size:16px}form.name button{padding:0 16px;font-size:15px;border:1px solid #3367d6;border-radius:8px;background:#fff;color:#3367d6;cursor:pointer}
 .small{font-size:12px;color:#5f6368;margin-top:8px}
 button.primary,a.primary{display:block;box-sizing:border-box;width:100%;padding:13px;margin-top:16px;font-size:16px;border:0;border-radius:8px;cursor:pointer;background:#3367d6;color:#fff;text-align:center;text-decoration:none}
 button.link{background:none;border:0;color:#c5221f;padding:4px 0;font-size:13px;cursor:pointer}
@@ -205,7 +217,7 @@ __MAIN__
 <script>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
-const SIGNIN_OPT="__SIGNIN_OPT__",SIGNIN_VER="__SIGNIN_VER__",ADD_OPT="__ADD_OPT__",ADD_VER="__ADD_VER__",DEL="__DEL__";
+const SIGNIN_OPT="__SIGNIN_OPT__",SIGNIN_VER="__SIGNIN_VER__",ADD_OPT="__ADD_OPT__",ADD_VER="__ADD_VER__",DEL="__DEL__",PROFILE="__PROFILE__";
 let confirmed=__CONFIRMED__;
 const isIOS=/iPad|iPhone|iPod/i.test(navigator.userAgent)||(/(Macintosh).*Mobile/i.test(navigator.userAgent));
 const hint=document.getElementById('gpmhint');if(hint)hint.hidden=!isIOS;
@@ -240,6 +252,16 @@ async function add(){
   location.reload();
  }catch(e){msg.textContent=(e&&e.name==='InvalidStateError')?(isIOS?'[[A passkey for this account is already saved in the place you chose. Try again and choose “Passwords” (iCloud) as where to save it.]]':'[[A passkey for this account is already saved here.]]'):passkeyErrorText(e);}
 }
+async function saveName(){
+ const f=document.getElementById('name'),m=document.getElementById('namemsg');
+ m.textContent='';
+ if(!confirmed&&!await signIn())return;
+ let v=await post(PROFILE,{name:f.value});
+ if(v.status===401){confirmed=false;if(!await signIn())return;v=await post(PROFILE,{name:f.value});}
+ if(!v.ok){m.textContent=await errorText(v);return;}
+ f.value=(await v.json()).name;
+ m.textContent='[[The name was saved.]]';
+}
 async function del(id){
  if(!confirm('[[Remove this passkey? You can no longer sign in with it, and you are signed out on your other devices.]]'))return;
  if(!confirmed&&!await signIn())return;
@@ -260,6 +282,7 @@ async function del(id){
     .replace("__ADD_OPT__", &p.path("/account/passkeys/options"))
     .replace("__ADD_VER__", &p.path("/account/passkeys/verify"))
     .replace("__DEL__", &p.path("/account/passkeys/delete"))
+    .replace("__PROFILE__", &p.path("/account/profile"))
     .replace("__RECOVER__", &p.path("/recover"))
     .replace("__LOGOUT__", &p.path("/end-session"))
     .replace("__CONFIRMED__", if confirmed { "true" } else { "false" });
@@ -456,5 +479,220 @@ pub(super) async fn delete_passkey(
         Ok(RemoveOutcome::NotFound) => (StatusCode::NOT_FOUND, "passkey not found").into_response(),
         Ok(RemoveOutcome::LastOne) => (StatusCode::CONFLICT, "last passkey").into_response(),
         Err(e) => internal("delete_passkey", &e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProfileReq {
+    #[serde(default)]
+    name: String,
+}
+
+/// 名前（profiles の name）を変える。検査は save_profile のもの（RP の `PUT /me/profile` と同じ）。
+/// 空にすれば name を消す。保存した値（前後の空白を除いたもの）を返す。
+/// 画面の saveName() は、確かめが切れて 401 なら確かめ直して 1 度だけ送り直す。打った値は残す。
+pub(super) async fn save_name(State(p): State<Arc<Provider>>, jar: CookieJar, Json(f): Json<ProfileReq>) -> Response {
+    let me = match me_confirmed(&p, &jar).await {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    let fs = p.firestore.as_ref().expect("me_confirmed checked firestore");
+    let saved = f.name.trim().to_string();
+    let updates = HashMap::from([("name".to_string(), f.name)]);
+    match registration::save_profile(fs, &me.account.account_id, &updates).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true, "name": saved })).into_response(),
+        Err(registration::ProfileError::Invalid(_)) => (StatusCode::BAD_REQUEST, "invalid name").into_response(),
+        Err(e) => internal("save_name", &e.to_string()),
+    }
+}
+
+#[cfg(all(test, feature = "gcp"))]
+mod tests {
+    use super::*;
+    use crate::firestore::{fake_firestore, Firestore};
+    use tower::ServiceExt;
+
+    const ORIGIN: &str = "https://idp.example";
+
+    struct World {
+        app: Router,
+        fs: Arc<Firestore>,
+        store: Arc<crate::firestore_store::FirestoreStore>,
+    }
+
+    /// u@example.com（acc-u）が passkey を 1 本持つ。
+    async fn world() -> World {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Arc::new(Firestore::new_for_test("proj", host));
+        let store = Arc::new(crate::firestore_store::FirestoreStore::new(fs.clone()));
+        let outcome = crate::webauthn::RegOutcome {
+            credential_id: "cred-u".into(),
+            pub_x: "x".into(),
+            pub_y: "y".into(),
+            sign_count: 0,
+            aaguid: String::new(),
+        };
+        registration::save_credential(&fs, "u@example.com", "acc-u", &outcome).await.unwrap();
+        let p = Provider::new(format!("{ORIGIN}/oidc"))
+            .with_base_path("/oidc")
+            .with_firestore(fs.clone())
+            .with_store(store.clone());
+        World { app: router(p), fs, store }
+    }
+
+    impl World {
+        async fn session(&self, auth_time: u64) -> String {
+            use crate::store::Store;
+            let sid = Uuid::new_v4().to_string();
+            self.store.save_session(Session { sid: sid.clone(), account_id: "acc-u".into(), auth_time }).await;
+            sid
+        }
+
+        async fn post(&self, sid: Option<&str>, origin: Option<&str>, name: &str) -> Response {
+            let mut req = axum::http::Request::post("/oidc/account/profile").header(header::CONTENT_TYPE, "application/json");
+            if let Some(s) = sid {
+                req = req.header(header::COOKIE, format!("{SID_COOKIE}={s}"));
+            }
+            if let Some(o) = origin {
+                req = req.header(header::ORIGIN, o);
+            }
+            let body = serde_json::json!({ "name": name }).to_string();
+            self.app.clone().oneshot(req.body(axum::body::Body::from(body)).unwrap()).await.unwrap()
+        }
+
+        async fn page(&self, sid: &str) -> String {
+            let req = axum::http::Request::get("/oidc/account")
+                .header(header::COOKIE, format!("{SID_COOKIE}={sid}"))
+                .header(header::ACCEPT_LANGUAGE, "ja");
+            let resp = self.app.clone().oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            body(resp).await
+        }
+
+        async fn name(&self) -> Option<String> {
+            registration::get_profile(&self.fs, "acc-u").await.unwrap().remove("name")
+        }
+
+        async fn claims(&self) -> HashMap<String, serde_json::Value> {
+            crate::store::Store::find_account(&*self.store, "acc-u").await.claims
+        }
+    }
+
+    async fn body(r: Response) -> String {
+        let b = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(b.to_vec()).unwrap()
+    }
+
+    async fn json(r: Response) -> serde_json::Value {
+        serde_json::from_str(&body(r).await).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_name_is_saved_and_the_page_shows_it() {
+        let w = world().await;
+        let sid = w.session(now()).await;
+        let r = w.post(Some(&sid), Some(ORIGIN), " 山田　太郎 ").await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(json(r).await, serde_json::json!({ "ok": true, "name": "山田　太郎" }));
+        assert_eq!(w.name().await.as_deref(), Some("山田　太郎"));
+        let html = w.page(&sid).await;
+        assert!(html.contains(r#"value="山田　太郎""#), "{html}");
+        assert!(html.contains(r#"PROFILE="/oidc/account/profile""#), "{html}");
+        assert!(html.contains("m.textContent='氏名を保存しました。'"), "{html}");
+    }
+
+    /// 空にすると name の field を消し、RP に空の name を渡さない。他の field には触れない。
+    #[tokio::test]
+    async fn an_empty_name_removes_the_name_and_keeps_the_other_fields() {
+        let w = world().await;
+        let sid = w.session(now()).await;
+        let nick = HashMap::from([("nickname".to_string(), "taro".to_string())]);
+        registration::save_profile(&w.fs, "acc-u", &nick).await.unwrap();
+        assert_eq!(w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(), StatusCode::OK);
+        let r = w.post(Some(&sid), Some(ORIGIN), "   ").await;
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(json(r).await, serde_json::json!({ "ok": true, "name": "" }));
+        let doc = w.fs.get_doc("profiles", "acc-u").await.unwrap().unwrap();
+        assert_eq!(crate::firestore::field_str(&doc, "name"), None, "{doc}");
+        assert_eq!(crate::firestore::field_str(&doc, "nickname"), Some("taro"), "{doc}");
+        let claims = w.claims().await;
+        assert!(!claims.contains_key("name"), "{claims:?}");
+        assert_eq!(claims["nickname"], "taro");
+    }
+
+    /// 前に空のまま保存された name も、RP には渡さない。
+    #[tokio::test]
+    async fn a_name_saved_empty_before_is_not_a_claim() {
+        let w = world().await;
+        let doc = serde_json::json!({ "email": crate::firestore::s("acc-u"), "name": crate::firestore::s("") });
+        w.fs.set_doc("profiles", "acc-u", doc).await.unwrap();
+        let claims = w.claims().await;
+        assert!(!claims.contains_key("name"), "{claims:?}");
+    }
+
+    #[tokio::test]
+    async fn a_post_from_another_origin_or_from_nowhere_is_refused() {
+        let w = world().await;
+        let sid = w.session(now()).await;
+        for origin in [None, Some("https://evil.example"), Some("null")] {
+            let r = w.post(Some(&sid), origin, "evil").await;
+            assert_eq!(r.status(), StatusCode::FORBIDDEN, "{origin:?}");
+        }
+        assert_eq!(w.name().await, None);
+    }
+
+    /// 確かめが切れていれば 401 の "confirmation required"。画面はこれを見て確かめ直し、打った値のまま送り直す。
+    #[tokio::test]
+    async fn without_a_session_or_a_recent_confirmation_the_name_is_not_saved() {
+        let w = world().await;
+        let r = w.post(None, Some(ORIGIN), "x").await;
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body(r).await, "sign-in required");
+        assert_eq!(w.post(Some("no-such-sid"), Some(ORIGIN), "x").await.status(), StatusCode::UNAUTHORIZED);
+        let old = w.session(now() - RECENT_AUTH_SECS - 1).await;
+        let r = w.post(Some(&old), Some(ORIGIN), "x").await;
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body(r).await, "confirmation required");
+        assert_eq!(w.name().await, None);
+        let html = w.page(&old).await;
+        assert!(html.contains(
+            "if(v.status===401){confirmed=false;if(!await signIn())return;v=await post(PROFILE,{name:f.value});}"
+        ));
+    }
+
+    /// 誤りは errorText が訳せる本文（"invalid name"）で返す。
+    #[tokio::test]
+    async fn a_name_that_is_too_long_or_has_control_characters_is_not_saved() {
+        let w = world().await;
+        let sid = w.session(now()).await;
+        assert_eq!(w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(), StatusCode::OK);
+        let long = "あ".repeat(81);
+        for bad in [long.as_str(), "a\u{0007}b", "a\nb", "a\u{202E}b"] {
+            let r = w.post(Some(&sid), Some(ORIGIN), bad).await;
+            assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{bad:?}");
+            assert_eq!(body(r).await, "invalid name", "{bad:?}");
+            assert_eq!(w.name().await.as_deref(), Some("Taro"), "{bad:?}");
+        }
+        assert!(w.page(&sid).await.contains("'invalid name':'氏名が長すぎるか、使えない文字が入っています。'"));
+        assert_eq!(w.post(Some(&sid), Some(ORIGIN), &"あ".repeat(80)).await.status(), StatusCode::OK);
+        assert_eq!(w.name().await.map(|n| n.chars().count()), Some(80));
+    }
+
+    /// 名前は HTML として逃がし、画面の文言の印（角括弧 2 つ）や差し込み口（`__…__`）としても読まない。
+    #[tokio::test]
+    async fn the_name_on_the_page_is_escaped() {
+        let w = world().await;
+        let sid = w.session(now()).await;
+        let evil = r#""><script>alert(1)</script>'[[Passkeys]]__DEL____WEBAUTHN_JS__"#;
+        let updates = HashMap::from([("name".to_string(), evil.to_string())]);
+        registration::save_profile(&w.fs, "acc-u", &updates).await.unwrap();
+        let html = w.page(&sid).await;
+        assert!(!html.contains("<script>alert"), "{html}");
+        assert!(
+            html.contains(
+                r#"value="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&#39;&#91;&#91;Passkeys]]&#95;&#95;DEL&#95;&#95;&#95;&#95;WEBAUTHN&#95;JS&#95;&#95;""#
+            ),
+            "{html}"
+        );
     }
 }

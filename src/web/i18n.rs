@@ -289,6 +289,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Remove", "削除"),
     ("Continue", "続ける"),
     ("Add a passkey on this device", "この端末のパスキーを追加"),
+    ("The name was saved.", "氏名を保存しました。"),
     ("Add a passkey in Passwords", "「パスワード」にパスキーを追加する"),
     ("Sign in with your passkey to see and add passkeys.", "パスキーを見たり追加したりするには、パスキーでログインしてください。"),
     ("Please sign in again.", "もう一度ログインしてください。"),
