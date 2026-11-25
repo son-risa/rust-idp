@@ -102,6 +102,17 @@ fn bound_jar(uid: &str) -> CookieJar {
     CookieJar::from_headers(&h)
 }
 
+/// `/ciba` の画面から、account_id の利用者のブラウザが自分の origin で呼ぶときの (ヘッダ, cookie)。
+async fn ciba_page_of(p: &Provider, account_id: &str) -> (HeaderMap, CookieJar) {
+    let sid = format!("sid-{account_id}");
+    p.store.save_session(Session { sid: sid.clone(), account_id: account_id.into(), auth_time: 0 }).await;
+    let mut c = HeaderMap::new();
+    c.insert(header::COOKIE, format!("{SID_COOKIE}={sid}").parse().unwrap());
+    let mut h = HeaderMap::new();
+    h.insert(header::ORIGIN, p.origin().parse().unwrap());
+    (h, CookieJar::from_headers(&c))
+}
+
 async fn body_json(resp: Response) -> serde_json::Value {
     let status = resp.status();
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -536,7 +547,8 @@ async fn ciba_flow_uses_account_id_consistently() {
     assert_eq!(body["auth_req_id"].as_str(), Some(auth_req_id.as_str()), "重複よけが効いていない: {body:?}");
 
     // 承認オプション → 承認（UV 必須）。
-    let opts = ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone())).await;
+    let (h, jar) = ciba_page_of(&p, &account_id).await;
+    let opts = ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone()), h, jar).await;
     assert_eq!(opts.status(), StatusCode::OK);
     let opts_json = body_json(opts).await;
     let challenge = opts_json["challenge"].as_str().unwrap().to_string();
@@ -562,7 +574,7 @@ async fn ciba_flow_uses_account_id_consistently() {
 async fn disabled_account_cannot_approve_ciba() {
     let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
-    let (key, cred_id, _account_id) = register_test_account(&p, &email).await;
+    let (key, cred_id, account_id) = register_test_account(&p, &email).await;
 
     let mut form = HashMap::new();
     form.insert("client_id".to_string(), "test-ciba-rp".to_string());
@@ -574,7 +586,8 @@ async fn disabled_account_cannot_approve_ciba() {
     let fs = p.firestore.as_ref().unwrap();
     crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
 
-    let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone())).await).await;
+    let (h, jar) = ciba_page_of(&p, &account_id).await;
+    let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone()), h, jar).await).await;
     let challenge = opts["challenge"].as_str().unwrap().to_string();
     let (ad, sig, cdj) = make_auth_ceremony(&key, 1, &challenge, &p.origin(), &p.rp_id(), true);
     let approve_req: AuthVerifyReq = serde_json::from_value(json!({
@@ -751,6 +764,7 @@ async fn ciba_is_approved_with_either_passkey_but_not_anothers() {
     let approve = |cred: &'static [u8], key: SigningKey| {
         let p = p.clone();
         let email = email.clone();
+        let account_id = account_id.clone();
         async move {
             let mut form = HashMap::new();
             form.insert("client_id".to_string(), "test-ciba-rp".to_string());
@@ -758,7 +772,8 @@ async fn ciba_is_approved_with_either_passkey_but_not_anothers() {
             form.insert("scope".to_string(), "openid".to_string());
             let body = body_json(ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(form)).await).await;
             let auth_req_id = body["auth_req_id"].as_str().unwrap().to_string();
-            let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone())).await).await;
+            let (h, jar) = ciba_page_of(&p, &account_id).await;
+            let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone()), h, jar).await).await;
             assert_eq!(opts["allowCredentials"].as_array().unwrap().len(), 2);
             let challenge = opts["challenge"].as_str().unwrap().to_string();
             let (ad, sig, cdj) = make_auth_ceremony(&key, 1, &challenge, &p.origin(), &p.rp_id(), true);

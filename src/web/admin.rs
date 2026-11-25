@@ -1134,13 +1134,20 @@ pub(super) async fn iat_mint_submit(
     redirect(&p, &format!("/admin/iats/flash/{flash_id}"))
 }
 
+/// 生の IAT を載せる画面なので、ブラウザにも途中の cache にも残させない。
 pub(super) async fn iat_show_once(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     jar: CookieJar,
     Path(flash_id): Path<String>,
 ) -> Response {
-    let (_viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
+    let mut resp = show_iat_once(p, headers, jar, flash_id).await;
+    resp.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
+    resp
+}
+
+async fn show_iat_once(p: Arc<Provider>, headers: HeaderMap, jar: CookieJar, flash_id: String) -> Response {
+    let (_viewer, fs) =match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -1416,6 +1423,7 @@ mod tests {
         let (a, b) = tokio::join!(view(), view());
         let mut shown = 0;
         for r in [a, b] {
+            assert_eq!(r.headers()[header::CACHE_CONTROL], "no-store");
             let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
             if String::from_utf8_lossy(&body).contains("RAW-IAT") {
                 shown += 1;
