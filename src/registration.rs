@@ -376,9 +376,11 @@ pub async fn has_passkey(fs: &Firestore, email: &str) -> Result<bool, String> {
 }
 
 /// Firestore の文書 ID にできる credential id か（b64url の 1〜1023 バイト）。
+/// Firestore が断るのは `__.*__` に当たる ID だけ。`__` で始まるだけの id は、乱数の id の
+/// 4096 本に 1 本が当たるので、断ると正しい passkey の登録が失敗する。
 fn credential_id_ok(id: &str) -> bool {
     (1..=1400).contains(&id.len())
-        && !id.starts_with("__")
+        && !(id.len() >= 4 && id.starts_with("__") && id.ends_with("__"))
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
@@ -873,6 +875,15 @@ mod tests {
             sign_count: 0,
             aaguid: String::new(),
         }
+    }
+
+    #[test]
+    fn an_id_that_only_starts_with_two_underscores_is_storable() {
+        assert!(credential_id_ok("__Xq3v9mPf0aB1cD2eF3gH4"));
+        assert!(credential_id_ok("___"), "`__.*__` は 4 文字から");
+        assert!(!credential_id_ok("____"));
+        assert!(!credential_id_ok("__abc__"));
+        assert!(!credential_id_ok("a/b"));
     }
 
     #[tokio::test]
