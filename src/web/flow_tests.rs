@@ -1126,6 +1126,50 @@ async fn an_add_that_lands_after_the_admin_removed_all_passkeys_is_discarded() {
     assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(""));
 }
 
+/// account に access token と refresh token を 1 本ずつ発行したことにし、その 2 つを返す。
+async fn issue_tokens(p: &Arc<Provider>, account_id: &str) -> (String, String) {
+    let (at, rt) = (format!("at-{}", uuid::Uuid::new_v4()), format!("rt-{}", uuid::Uuid::new_v4()));
+    p.store
+        .save_access_token(crate::model::AccessToken {
+            token: at.clone(),
+            client_id: "rp-entry".into(),
+            account_id: account_id.into(),
+            scope: "openid".into(),
+            jkt: None,
+            aud: None,
+            acr: None,
+            auth_time: None,
+            authorization_details: None,
+            mandate_consumed: false,
+        })
+        .await
+        .unwrap();
+    p.store
+        .save_refresh_token(crate::model::RefreshToken {
+            token: rt.clone(),
+            client_id: "rp-entry".into(),
+            account_id: account_id.into(),
+            scope: "openid".into(),
+            resource: None,
+            jkt: None,
+            acr: None,
+            auth_time: None,
+            family_id: format!("fam-{}", uuid::Uuid::new_v4()),
+            used: false,
+            replaced_by: None,
+        })
+        .await
+        .unwrap();
+    (at, rt)
+}
+
+async fn tokens_alive(p: &Arc<Provider>, (at, rt): &(String, String)) -> (bool, bool) {
+    (
+        p.store.get_access_token(at).await.unwrap().is_some(),
+        p.store.get_refresh_token(rt).await.unwrap().is_some(),
+    )
+}
+
 /// 本人が passkey を消すと、ほかのセッションとトークンも失効する。いまのセッションは残る。
 #[tokio::test]
 async fn removing_a_passkey_signs_out_the_other_devices() {
@@ -1135,11 +1179,15 @@ async fn removing_a_passkey_signs_out_the_other_devices() {
     let here = session_jar(&p, &account_id, now()).await;
     let there = session_jar(&p, &account_id, now() - 3600).await;
     account_add(&p, &here, b"second").await.unwrap_or_else(|r| panic!("{}", r.status()));
+    let mine = issue_tokens(&p, &account_id).await;
+    let others = issue_tokens(&p, &uuid::Uuid::new_v4().to_string()).await;
 
     assert_eq!(delete_via_account(&p, &here, &cred1).await.status(), StatusCode::OK);
     let sid = |j: &CookieJar| j.get(SID_COOKIE).unwrap().value().to_string();
     assert!(p.store.get_session(&sid(&here)).await.is_some());
     assert!(p.store.get_session(&sid(&there)).await.is_none(), "ほかの端末のセッションが残った");
+    assert_eq!(tokens_alive(&p, &mine).await, (false, false), "access token か refresh token が残った");
+    assert_eq!(tokens_alive(&p, &others).await, (true, true), "ほかの account のトークンまで消えた");
 }
 
 /// passkey は 10 本まで。
@@ -1186,12 +1234,14 @@ async fn recovery_adds_a_passkey_keeps_the_others_and_signs_out_everywhere_else(
     let (old_key, _, account_id) = register_test_account(&p, &email).await;
     let elsewhere = session_jar(&p, &account_id, now()).await;
     let elsewhere_sid = elsewhere.get(SID_COOKIE).unwrap().value().to_string();
+    let issued = issue_tokens(&p, &account_id).await;
 
     let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
     let (new_key, resp) = recover_add(&p, &token, CookieJar::default(), b"recovered-credential").await.unwrap();
     let here = jar_after(&resp);
 
     assert!(p.store.get_session(&elsewhere_sid).await.is_none(), "ほかの端末のセッションが残った");
+    assert_eq!(tokens_alive(&p, &issued).await, (false, false), "access token か refresh token が残った");
     let account = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
     assert_eq!(account.account_id, account_id, "sub が変わった");
     assert_eq!(crate::registration::list_credentials(fs, &account).await.unwrap().len(), 2);

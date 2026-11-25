@@ -43,3 +43,4 @@ PROPTEST_CASES=30000 cargo test fuzz_tests  # 重いファジング
 - 再デプロイしても、Cloud Run の env と secret の割り当ては保たれる。
 - issuer の独自ドメインは Cloud Run のドメインの割り当てで直に結ぶ。保護するリソースサーバは別のサービスに分ける。
 - 署名鍵と Firestore は、実行用のサービスアカウント（`cloudkms.signerVerifier` と `datastore.user`）で使う。
+- 互換の既定（`MAIL_FROM` と `APP_*` が無いと、Cloud Run の上では今の会社の差出人とアプリに落とす。`src/gcp.rs`）は、crates.io に出す前に消す。

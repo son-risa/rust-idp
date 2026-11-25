@@ -24,6 +24,8 @@ pub struct Provider {
     /// 転送するので、内部リダイレクトの Location もこの接頭辞を付ける必要がある。
     pub(crate) base_path: String,
     pub(crate) store: Arc<dyn Store>,
+    /// store が new() の MemoryStore のまま（with_store を呼んでいない）か。with_document_store が見る。
+    store_is_default: bool,
     /// 既定の署名鍵（ES256）。client が alg を指定しない場合に使う。
     pub(crate) signer: Arc<dyn JwsSigner>,
     /// 追加の署名鍵（RS256 等）。jwks 公開と alg 選択に使う。
@@ -98,6 +100,7 @@ impl Provider {
             issuer: issuer.into(),
             base_path: String::new(),
             store: Arc::new(MemoryStore::default()),
+            store_is_default: true,
             signer: Arc::new(Es256Signer::generate()),
             extra_signers: Vec::new(),
             docs: None,
@@ -208,7 +211,17 @@ impl Provider {
     /// パスキーの登録とログイン・復旧・管理画面・PAR・DCR・CIBA の承認などの保存先を差し込む。
     /// 差し込まなければ、それらの経路は 503 などで断る。1 つの process で試すなら
     /// [`MemoryDocumentStore`](crate::MemoryDocumentStore)。
+    ///
+    /// userinfo などの claim は [`Store::find_account`] が返し、この保存先は見ない。
+    /// [`MemoryStore`] の find_account は、[`MemoryStore::with_documents`] で同じ保存先を渡さないと、
+    /// 登録とは無関係の試し用の claim（`<sub>@example.com`、`email_verified: true` など）を返す。
+    /// そこで with_store をまだ呼んでいなければ、ここで store を `MemoryStore::with_documents(docs)` に替える。
+    /// 後から with_store で別の Store を差し込むときは、その find_account が同じ保存先を引くようにすること
+    /// （例 `.with_store(Arc::new(MemoryStore::with_documents(docs.clone())))`）。
     pub fn with_document_store(mut self, docs: Arc<dyn DocumentStore>) -> Self {
+        if self.store_is_default {
+            self.store = Arc::new(MemoryStore::with_documents(docs.clone()));
+        }
         self.docs = Some(docs);
         self
     }
@@ -220,6 +233,7 @@ impl Provider {
 
     pub fn with_store(mut self, store: Arc<dyn Store>) -> Self {
         self.store = store;
+        self.store_is_default = false;
         self
     }
 
@@ -321,5 +335,19 @@ mod tests {
             p.signer_for(Some("PS256")),
             Err(crate::error::OAuthError::ServerError(_))
         ));
+    }
+
+    /// with_document_store だけでも、find_account は試し用の claim を返さない。with_store が先なら替えない。
+    #[tokio::test]
+    async fn document_store_alone_does_not_make_up_claims() {
+        let docs: Arc<dyn DocumentStore> = Arc::new(crate::document_store::MemoryDocumentStore::default());
+        let p = Provider::new("https://op").with_document_store(docs.clone());
+        let a = p.store.find_account("not-registered").await;
+        assert_eq!(a.claims.get("email"), None);
+        assert_eq!(a.claims.get("email_verified"), None);
+
+        let p = Provider::new("https://op").with_store(Arc::new(MemoryStore::default())).with_document_store(docs);
+        let a = p.store.find_account("not-registered").await;
+        assert_eq!(a.claims.get("email_verified"), Some(&serde_json::json!(true)));
     }
 }

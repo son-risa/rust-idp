@@ -133,12 +133,22 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
             .with_ciba(std::sync::Arc::new(ciba::FirestoreCibaStore::new(fs.clone())))
             .with_firestore(fs);
         if let Ok(key) = std::env::var("RESEND_API_KEY") {
-            // 互換: 本番の Cloud Run に MAIL_FROM が入るまでは、今までの差出人に落とす。
-            let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| {
-                tracing::warn!("MAIL_FROM is not set; using the legacy sender");
-                "rust-idp <noreply@sonrisa.co.jp>".into()
-            });
-            provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from)));
+            // 互換: 本番の Cloud Run に MAIL_FROM が入るまでは、今までの差出人に落とす。手元（エミュレータ）では
+            // 落とさず Resend を使わない。メールはログに出るので、リンクはそこから拾える。
+            let from = match std::env::var("MAIL_FROM") {
+                Ok(from) => Some(from),
+                Err(_) if std::env::var("K_SERVICE").is_ok() => {
+                    tracing::warn!("MAIL_FROM is not set; using the legacy sender");
+                    Some("rust-idp <noreply@sonrisa.co.jp>".into())
+                }
+                Err(_) => {
+                    tracing::warn!("RESEND_API_KEY is set but MAIL_FROM is not; mail goes to the log instead of Resend");
+                    None
+                }
+            };
+            if let Some(from) = from {
+                provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from)));
+            }
         }
         // 互換: 本番の Cloud Run に APP_* が入るまでは、今までのアプリ（fido2demo）を出す。
         if provider.mobile_app.is_none() && std::env::var("K_SERVICE").is_ok() {
