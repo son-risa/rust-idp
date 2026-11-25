@@ -5,9 +5,9 @@
 //! cargo run --example in_memory
 //! ```
 //!
-//! passkey のログイン画面は gcp の feature 無しでは使えない（利用者と passkey の保存先が Firestore に
-//! しか無い）。そこでこの例は、ログイン済みのセッションを保存先へ直接入れ、その cookie を付けて
-//! /authorize を呼ぶ。OP はセッションを見て、ログイン画面を出さずに認可コードを返す。
+//! この例は、ログイン済みのセッションを保存先へ直接入れ、その cookie を付けて /authorize を呼ぶ。
+//! OP はセッションを見て、ログイン画面を出さずに認可コードを返す。passkey の登録とログインから
+//! 通す例は `passkey_memory`。
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;

@@ -89,6 +89,12 @@ async fn main() {
     if std::env::var("FIRESTORE_EMULATOR_HOST").is_ok() {
         tracing::warn!("FIRESTORE_EMULATOR_HOST is ignored: built without the gcp feature");
     }
+    // gcp 無しでは、利用者・passkey・登録の token などもメモリに置く（process を止めると消える）。
+    #[cfg(not(feature = "gcp"))]
+    let provider = {
+        let docs = std::sync::Arc::new(rust_idp::MemoryDocumentStore::default());
+        provider.with_document_store(docs.clone()).with_store(std::sync::Arc::new(rust_idp::MemoryStore::with_documents(docs)))
+    };
     let app = rust_idp::router(provider);
 
     if std::env::var("K_SERVICE").is_ok() {
