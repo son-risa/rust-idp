@@ -8,7 +8,7 @@
 use axum::http::{header, HeaderMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Lang {
+pub enum Lang {
     En,
     Ja,
 }

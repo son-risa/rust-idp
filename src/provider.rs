@@ -17,38 +17,38 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct Provider {
-    pub issuer: String,
+    pub(crate) issuer: String,
     /// 外部 URL のパス接頭辞（例 "/rust-oidc"）。Hosting rewrite はパスを保持して
     /// 転送するので、内部リダイレクトの Location もこの接頭辞を付ける必要がある。
-    pub base_path: String,
-    pub store: Arc<dyn Store>,
+    pub(crate) base_path: String,
+    pub(crate) store: Arc<dyn Store>,
     /// 既定の署名鍵（ES256）。client が alg を指定しない場合に使う。
-    pub signer: Arc<dyn JwsSigner>,
+    pub(crate) signer: Arc<dyn JwsSigner>,
     /// 追加の署名鍵（RS256 等）。jwks 公開と alg 選択に使う。
-    pub extra_signers: Vec<Arc<dyn JwsSigner>>,
+    pub(crate) extra_signers: Vec<Arc<dyn JwsSigner>>,
     /// メール確認登録用（Cloud Run 上でのみ Some）。
-    pub firestore: Option<Arc<Firestore>>,
+    pub(crate) firestore: Option<Arc<Firestore>>,
     /// CIBA バックチャネル要求の永続化。既定は In-memory、本番は Firestore 実装を注入する。
-    pub ciba: Arc<dyn CibaStore>,
+    pub(crate) ciba: Arc<dyn CibaStore>,
     /// CIBA の (client_id, account) ごとレート制限。push スパム抑止のバックストップ。
-    pub ciba_rate: Arc<CibaRateLimiter>,
+    pub(crate) ciba_rate: Arc<CibaRateLimiter>,
     /// 登録メール送信のレート制限（email / IP ごと）。無認証メール乱用のバックストップ。
-    pub register_rate: Arc<CibaRateLimiter>,
-    pub mailer: Arc<dyn Mailer>,
-    pub dpop: Arc<dyn DpopVerifier>,
+    pub(crate) register_rate: Arc<CibaRateLimiter>,
+    pub(crate) mailer: Arc<dyn Mailer>,
+    pub(crate) dpop: Arc<dyn DpopVerifier>,
     /// JAR (request object) の jti 単回ストア。本番は Firestore（with_firestore で注入）。
-    pub jar_jti: crate::nonce::NonceStore,
-    pub clients: HashMap<String, Client>,
+    pub(crate) jar_jti: crate::nonce::NonceStore,
+    pub(crate) clients: HashMap<String, Client>,
     /// Phase 1（client 解決 + redirect 検証後）のポリシーチェック群。相互に可換なので
     /// 順序は自由。client 解決と redirect 検証は auth_checks::resolve_addressee に固定。
-    pub checks: Vec<Arc<dyn AuthorizationCheck>>,
-    pub grants: HashMap<String, Arc<dyn GrantHandler>>,
-    pub client_auth: HashMap<String, Arc<dyn ClientAuthMethod>>,
-    pub response_modes: HashMap<String, Arc<dyn ResponseMode>>,
+    pub(crate) checks: Vec<Arc<dyn AuthorizationCheck>>,
+    pub(crate) grants: HashMap<String, Arc<dyn GrantHandler>>,
+    pub(crate) client_auth: HashMap<String, Arc<dyn ClientAuthMethod>>,
+    pub(crate) response_modes: HashMap<String, Arc<dyn ResponseMode>>,
     /// private_key_jwt クライアントの jwks_uri から鍵を取得・キャッシュする（鍵ローテーション）。
-    pub jwks_resolver: crate::jwks_resolver::JwksResolver,
+    pub(crate) jwks_resolver: crate::jwks_resolver::JwksResolver,
     /// 招待の登録リンク（POST /invites）の発行を許す confidential client の client_id。空なら誰にも許さない。
-    pub invite_clients: Vec<String>,
+    pub(crate) invite_clients: Vec<String>,
 }
 
 impl Provider {
@@ -97,6 +97,38 @@ impl Provider {
         }
     }
 
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    pub fn store(&self) -> &Arc<dyn Store> {
+        &self.store
+    }
+
+    /// `/authorize` の検証ステップを足す（既定は response_type・scope・PKCE）。
+    pub fn with_check(mut self, check: Arc<dyn AuthorizationCheck>) -> Self {
+        self.checks.push(check);
+        self
+    }
+
+    /// grant_type の処理を足す。同じ grant_type の既存の処理は置き換わる。
+    pub fn with_grant(mut self, grant: Arc<dyn GrantHandler>) -> Self {
+        register_grant(&mut self.grants, grant);
+        self
+    }
+
+    /// token endpoint のクライアント認証方式を足す。同じ名前の既存の方式は置き換わる。
+    pub fn with_client_auth(mut self, auth: Arc<dyn ClientAuthMethod>) -> Self {
+        register_auth(&mut self.client_auth, auth);
+        self
+    }
+
+    /// 認可レスポンスの返し方を足す。同じ名前の既存の返し方は置き換わる。
+    pub fn with_response_mode(mut self, mode: Arc<dyn ResponseMode>) -> Self {
+        self.response_modes.insert(mode.name().to_string(), mode);
+        self
+    }
+
     pub fn with_client(mut self, c: Client) -> Self {
         self.clients.insert(c.client_id.clone(), c);
         self
@@ -107,7 +139,7 @@ impl Provider {
     /// 二段構えで、参照されないまま溜まるエントリもこのタスクが物理削除する。
     /// Firestore など TTL 自己管理のストアでは sweep_expired が no-op なので無害。
     /// 返した JoinHandle は破棄してよい(プロセス終了まで走り続ける)。
-    pub fn spawn_store_sweeper(self: &Arc<Self>, period: std::time::Duration) -> tokio::task::JoinHandle<()> {
+    pub(crate) fn spawn_store_sweeper(self: &Arc<Self>, period: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let p = Arc::clone(self);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(period);
@@ -140,7 +172,7 @@ impl Provider {
         self
     }
 
-    pub fn with_firestore(mut self, fs: Arc<Firestore>) -> Self {
+    pub(crate) fn with_firestore(mut self, fs: Arc<Firestore>) -> Self {
         // JAR jti もインスタンス跨ぎで単回化する（DPoP / client_assertion と同様）。
         self.jar_jti = crate::nonce::NonceStore::firestore(fs.clone());
         self.firestore = Some(fs);
@@ -208,12 +240,12 @@ impl Provider {
     }
 
     /// base_path を付けた内部リダイレクト用パス。
-    pub fn path(&self, suffix: &str) -> String {
+    pub(crate) fn path(&self, suffix: &str) -> String {
         format!("{}{}", self.base_path, suffix)
     }
 
     /// WebAuthn origin（scheme://host[:port]、パスなし）。
-    pub fn origin(&self) -> String {
+    pub(crate) fn origin(&self) -> String {
         let scheme = self.issuer.split("://").next().unwrap_or("https");
         let after = self.issuer.split("://").nth(1).unwrap_or(&self.issuer);
         let host_port = after.split('/').next().unwrap_or(after);
@@ -221,7 +253,7 @@ impl Provider {
     }
 
     /// WebAuthn rp_id（ホスト名のみ、ポートなし）。
-    pub fn rp_id(&self) -> String {
+    pub(crate) fn rp_id(&self) -> String {
         let after = self.issuer.split("://").nth(1).unwrap_or(&self.issuer);
         let host_port = after.split('/').next().unwrap_or(after);
         host_port.split(':').next().unwrap_or(host_port).to_string()

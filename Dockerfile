@@ -10,7 +10,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
 COPY src ./src
 # touch でソース更新を確実に検知させてから本ビルド。
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs src/lib.rs && cargo build --release
 
 # 実行イメージは Debian slim（distroless でも可だが glibc 依存の調整が要るため slim を既定に）。
 FROM debian:trixie-slim
