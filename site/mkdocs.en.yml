@@ -2,8 +2,8 @@
 site_name: rust-idp
 site_description: A passkey-first OpenID Provider in Rust.
 # Only canonical links and the sitemap use this. Every link between pages is relative, so the
-# built site works under any path (son-risa.github.io/rust-idp/ or docs.amate.ai/idp/).
-site_url: !ENV [SITE_URL, "https://son-risa.github.io/rust-idp/"]
+# built site works under any path (the GitHub Pages origin, or docs.amate.ai/idp/ in front of it).
+site_url: !ENV [SITE_URL, "https://docs.amate.ai/idp/"]
 repo_url: https://github.com/son-risa/rust-idp
 repo_name: son-risa/rust-idp
 edit_uri: ""

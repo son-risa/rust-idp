@@ -1,7 +1,7 @@
 # 日本語版。英語版の出力の下（site/public/ja/）へ出す。site/build.sh が英語版の後に build する。
 site_name: rust-idp
 site_description: パスキーでログインする OpenID Provider（Rust 製）。
-site_url: !ENV [SITE_URL_JA, "https://son-risa.github.io/rust-idp/ja/"]
+site_url: !ENV [SITE_URL_JA, "https://docs.amate.ai/idp/ja/"]
 repo_url: https://github.com/son-risa/rust-idp
 repo_name: son-risa/rust-idp
 edit_uri: ""

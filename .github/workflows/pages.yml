@@ -29,8 +29,8 @@ jobs:
     permissions:
       contents: read
     env:
-      # canonical と sitemap にだけ効く。docs.amate.ai/idp/ へ移すときは、リポジトリの変数 SITE_URL を替える。
-      SITE_URL: ${{ vars.SITE_URL || 'https://son-risa.github.io/rust-idp/' }}
+      # canonical と sitemap にだけ効く。正の住所は docs.amate.ai/idp/。替えるときは、リポジトリの変数 SITE_URL を置く。
+      SITE_URL: ${{ vars.SITE_URL || 'https://docs.amate.ai/idp/' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
