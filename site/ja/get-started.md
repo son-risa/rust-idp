@@ -19,11 +19,15 @@ rust-idp = { git = "https://github.com/son-risa/rust-idp" }
 cargo run --example in_memory
 ```
 
-この例は、ログイン済みのセッションを保存先へ直に入れる。パスキーのログインには、Firestore にある利用者の保存先が要るため。
+この例は、ログイン済みのセッションを保存先へ直に入れる。この例は `DocumentStore` を渡さないので、パスキーのログインは使えない。
 
 ### `gcp` の feature が要るもの
 
-Firestore・Cloud KMS・Secret Manager・FCM・Resend へ出る実装は `gcp` の feature の中にあり、既定では入らない。付けないと、次は 503 などで断る。
+Firestore・Cloud KMS・Secret Manager・FCM・Resend へ出る実装は `gcp` の feature の中にある。この feature は既定では入らない。
+
+付けない binary は、利用者とパスキーを `MemoryDocumentStore` に置く。パスキーの登録とログインは動く。process を止めると消える。
+
+ライブラリとして `Provider::new` だけで組むと、`DocumentStore` が無い。`with_document_store` で渡す。渡さないと、次は 503 で断る。
 
 - パスキーの登録とログイン
 - PAR と動的な client 登録

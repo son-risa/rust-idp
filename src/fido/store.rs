@@ -213,8 +213,10 @@ impl FidoStore for FirestoreFidoStore {
         }
     }
     async fn update_sign_count(&self, user: &str, cred_id: &str, new_count: u32) {
-        // credId(=doc id) で取り直し、signCount を更新して再保存。
+        // credId(=doc id) で取り直し、signCount を更新して再保存。文書は credId で引くので、
+        // 持ち主が user と違うものは書かない（書くと持ち主が user に変わる）。メモリの実装と同じく何もしない。
         if let Ok(Some(f)) = self.fs.get_doc(COL_CREDENTIALS, cred_id).await
+            && firestore::field_str(&f, "user") == Some(user)
             && let Some(mut cred) = cred_from_fields(&f)
         {
             cred.sign_count = new_count;

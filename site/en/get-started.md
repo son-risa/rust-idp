@@ -19,11 +19,15 @@ Run the example. It starts a provider on localhost and walks discovery, `/author
 cargo run --example in_memory
 ```
 
-The example puts a signed-in session straight into the store, because passkey sign-in needs the user store in Firestore.
+The example puts a signed-in session straight into the store. It does not pass a `DocumentStore`, so passkey sign-in is not available in it.
 
 ### What needs the `gcp` feature
 
-The implementations that talk to Firestore, Cloud KMS, Secret Manager, FCM and Resend are behind the `gcp` feature, which is off by default. Without it, these answer with an error such as 503:
+The implementations that talk to Firestore, Cloud KMS, Secret Manager, FCM and Resend are behind the `gcp` feature. The feature is off by default.
+
+Without it, the bundled binary keeps users and passkeys in a `MemoryDocumentStore`. Passkey registration and sign-in work. Everything is lost when the process stops.
+
+A provider built with `Provider::new` alone has no `DocumentStore`. Pass one with `with_document_store`. Without one, these answer 503:
 
 - passkey registration and sign-in
 - PAR and dynamic client registration
