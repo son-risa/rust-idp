@@ -233,5 +233,119 @@
     "guard": ["src/grants.rs: RefreshTokenGrant::handle", "src/store.rs: MemoryStore::revoke_refresh_family", "src/firestore_store.rs: FirestoreStore::revoke_refresh_family"],
     "tests": ["grants::tests::refresh_reuse_detected_revokes_family", "grants::tests::refresh_reuse_revokes_family_any_length", "store::tests::revoke_family_deletes_entire_chain"],
     "kani": ["refresh_family_walk_terminates"]
+  },
+  {
+    "id": "P-SINGLEUSE",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
+    "assurance": "store の code 消費（単回）",
+    "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
+    "tests": ["store::tests::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::code_is_taken_once"]
+  },
+  {
+    "id": "P-VERIFIER",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
+    "assurance": "`CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる）",
+    "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
+    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::auth_code_pkce_success_and_failure"],
+    "kani": ["pkce_method_no_downgrade"]
+  },
+  {
+    "id": "P-TLS",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "token endpoint と RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵）",
+    "assurance": "TLS（Cloud Run のドメインのマッピング）。HSTS",
+    "outside": "TLS は配備の基盤（Cloud Run）が担う"
+  },
+  {
+    "id": "P-ENVSEP",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない",
+    "assurance": "Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事",
+    "outside": "配備の構成（KMS の鍵の IAM と、サービスごとの実行 SA）で決まり、試験の形をしていない"
+  },
+  {
+    "id": "P-ATSTORE",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`）",
+    "assurance": "RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける",
+    "outside": "token の保管は RP の側の実装で、rust-idp の試験で示せない"
+  },
+  {
+    "id": "P-CSECRET",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "client の共有の秘密は client の保管庫から**漏れない**（漏れればなりすませる: `limit_secret_leak_impersonation`）",
+    "assurance": "RP の秘密の保管（Secret Manager など）。rust-idp は秘密のハッシュだけを持つ（`dcr::hash_token`）",
+    "outside": "秘密は RP が持つ。rust-idp はハッシュだけを持つ"
+  },
+  {
+    "id": "P-SECRETCMP",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "AS は提示された秘密の**ハッシュ**を、登録したハッシュと比べる（`h(cs) = hs`）",
+    "assurance": "`ClientSecretBasic::authenticate`（`hash_token` を定数時間で比べる。平文は保存しない）",
+    "guard": ["src/client_auth.rs: ClientSecretBasic::authenticate", "src/client_auth.rs: secret_eq"],
+    "tests": ["client_auth::tests::secret_basic_correct_secret_authenticates", "client_auth::tests::secret_basic_wrong_secret_rejected", "client_auth::tests::secret_basic_unknown_client_rejected", "client_auth::tests::secret_client_helper_never_stores_plaintext"]
+  },
+  {
+    "id": "P-NOCREDLOG",
+    "model": "composition_code_bearer_secret.spthy",
+    "premise": "token 要求の `Authorization` の見出し（秘密そのもの）が、処理の後も**記録に残らない**（残れば秘密が漏れたのと同じ: `limit_logged_secret_is_reusable`）",
+    "assurance": "rust-idp は見出しを記録しない。前段（Cloud Run のリクエストログ）と RP の側の記録の設定に依る",
+    "outside": "記録の設定は配備と RP の側にあり、rust-idp の試験で示せない"
+  },
+  {
+    "id": "P-SINGLEUSE",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
+    "assurance": "store の code 消費（単回）",
+    "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
+    "tests": ["store::tests::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::code_is_taken_once"]
+  },
+  {
+    "id": "P-VERIFIER",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
+    "assurance": "`CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる）",
+    "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
+    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::auth_code_pkce_success_and_failure"],
+    "kani": ["pkce_method_no_downgrade"]
+  },
+  {
+    "id": "P-TLS",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "token endpoint と RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵）",
+    "assurance": "TLS（Cloud Run のドメインのマッピング）。HSTS",
+    "outside": "TLS は配備の基盤（Cloud Run）が担う"
+  },
+  {
+    "id": "P-ENVSEP",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない",
+    "assurance": "Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事",
+    "outside": "配備の構成（KMS の鍵の IAM と、サービスごとの実行 SA）で決まり、試験の形をしていない"
+  },
+  {
+    "id": "P-ATSTORE",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`）",
+    "assurance": "RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける",
+    "outside": "token の保管は RP の側の実装で、rust-idp の試験で示せない"
+  },
+  {
+    "id": "P-CPRIVKEY",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "client の秘密鍵は client の保管庫から**漏れない**（漏れればなりすませる: `limit_key_leak_impersonation`）",
+    "assurance": "RP の鍵の保管。rust-idp は公開鍵（jwks / jwks_uri）だけを持つ",
+    "outside": "鍵は RP が持つ。rust-idp は公開鍵だけを持つ"
+  },
+  {
+    "id": "P-AJTI",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "client_assertion の jti は **1 回だけ**受ける（記録から漏れた assertion を使い回させない）",
+    "assurance": "`PrivateKeyJwt::authenticate` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ",
+    "guard": ["src/client_auth.rs: PrivateKeyJwt::authenticate", "src/nonce.rs: NonceStore::claim"],
+    "tests": ["client_auth::tests::pkjwt_rejects_jti_replay", "client_auth::tests::pkjwt_rejects_alg_aud_and_expiry", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch_and_bad_signature"],
+    "kani": ["jti_ttl_is_bounded", "exp_in_window_spec"]
   }
 ]
