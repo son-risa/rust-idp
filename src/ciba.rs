@@ -30,9 +30,22 @@ impl AuthReqId {
     /// CIBA Core 第 7.3 節は 128 bit 以上の乱数を MUST とする。UUID v4 は 122 bit しかないので、
     /// OS の乱数源から 256 bit を取り、base64url（43 文字）にする。
     pub fn generate() -> Self {
-        let mut buf = [0u8; 32];
-        getrandom::fill(&mut buf).expect("OS の乱数源");
-        Self(crate::es256::b64url_encode(buf))
+        loop {
+            let mut buf = [0u8; 32];
+            getrandom::fill(&mut buf).expect("OS の乱数源");
+            let id = crate::es256::b64url_encode(buf);
+            if Self::well_formed(&id) {
+                return Self(id);
+            }
+        }
+    }
+    /// Firestore の文書 ID に使える形か。Firestore は `__.*__` の ID を断る（400）。乱数の 43 文字は
+    /// 4096 本に 1 本が `__` で始まるので、作るときはそれを捨てて作り直し、外から来た値はこれで見てから引く。
+    /// 外から来た値の上限を 43 文字より緩くしているのは、作り方を変えた前の要求（UUID）を落とさないため。
+    pub fn well_formed(id: &str) -> bool {
+        (1..=128).contains(&id.len())
+            && !id.starts_with("__")
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     }
     pub fn as_str(&self) -> &str {
         &self.0
@@ -579,6 +592,16 @@ mod tests {
         assert_eq!(back.status, CibaStatus::Approved);
         assert_eq!(back.expires_at, 1_900_000_000);
         assert_eq!(back.authorization_details, req.authorization_details);
+    }
+
+    #[test]
+    fn well_formed_refuses_what_firestore_refuses_as_a_document_id() {
+        assert!(AuthReqId::well_formed(AuthReqId::generate().as_str()));
+        assert!(AuthReqId::well_formed("0b6f7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"));
+        assert!(AuthReqId::well_formed("a__"));
+        for bad in ["", "__x__", "__x", "a/b", "a.b", &"a".repeat(129)] {
+            assert!(!AuthReqId::well_formed(bad), "{bad}");
+        }
     }
 
     #[tokio::test]

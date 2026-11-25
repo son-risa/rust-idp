@@ -120,6 +120,9 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 - `/ciba/{auth_req_id}/passkey-options` と `/reject` は、`auth_req_id` を知っているだけでは呼べない（`auth_req_id` は path に載り、ログに残る）。
   `Authorization` があれば access token（`/ciba/pending` と同じ）、無ければ cookie（sid）で名乗り、要求の宛先の利用者でなければ 404。
   cookie で名乗るときは、管理画面の門と同じ `from_own_origin` で自分の origin からの要求に限る（違えば 403）。
+  名乗りが無い（`Authorization` も sid も無い）ときは 401。`auth_req_id` が Firestore の文書 ID にできない形
+  （129 文字以上、`__` で始まるなど）なら、引かずに 404。
+  期限の切れた要求には、`/passkey-options` は 404（無いのと同じ）、`/reject` は 409（`expired`。拒否として確定させない）を返す。
   `/approve` は今までどおりログインを要らず、passkey の assertion が本人の確かめになる。
 - `fido` の経路は CORS の層が OPTIONS（preflight）に答える。表の method には書かない。
 - どれにも当たらない要求は、`log_unmatched` が 404 を返す。

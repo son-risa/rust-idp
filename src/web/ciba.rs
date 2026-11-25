@@ -382,6 +382,10 @@ async fn own_request(
             None => return Err((StatusCode::UNAUTHORIZED, "sign-in required").into_response()),
         }
     };
+    // Firestore が文書 ID として断る形を引くと 400 が返り、ただの「無い」が 500 になる。
+    if !crate::ciba::AuthReqId::well_formed(auth_req_id) {
+        return Err((StatusCode::NOT_FOUND, "request not found").into_response());
+    }
     match p.ciba.get(auth_req_id).await {
         Ok(Some(r)) if r.account == account => Ok(r),
         Ok(_) => Err((StatusCode::NOT_FOUND, "request not found").into_response()),
@@ -729,6 +733,26 @@ mod tests {
             StatusCode::NO_CONTENT
         );
         assert_eq!(ciba.get(other.as_str()).await.unwrap().unwrap().status, CibaStatus::Denied);
+    }
+
+    /// Firestore が文書 ID として断る形の auth_req_id は、引かずに 404 にする（引けば 400 が 500 になる）。
+    #[tokio::test]
+    async fn a_malformed_auth_req_id_is_not_found_rather_than_an_error() {
+        let (host, state) = fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let ciba = Arc::new(crate::ciba::FirestoreCibaStore::new(fs.clone()));
+        let p = Arc::new(Provider::new("https://idp.example").with_firestore(fs).with_ciba(ciba));
+        let too_long = "a".repeat(200);
+        for id in ["__x__", too_long.as_str()] {
+            // 引きに行けば、この 400 が返る（実の Firestore が断るときと同じ）。
+            state.fail_once_with("GET", "cibaRequests", None, StatusCode::BAD_REQUEST);
+            assert_eq!(reject_as(&p, id, app_of(&p, ACCOUNT).await).await, StatusCode::NOT_FOUND, "{id}");
+            assert_eq!(options_as(&p, id, app_of(&p, ACCOUNT).await).await.status(), StatusCode::NOT_FOUND, "{id}");
+            state.clear_failures();
+        }
+        // 形の正しい ID なら引きに行き、Firestore の誤りは 500 のまま。上の 404 が引かずに返したものだと示す。
+        state.fail_once_with("GET", "cibaRequests", None, StatusCode::BAD_REQUEST);
+        assert_eq!(reject_as(&p, "no-such-id", app_of(&p, ACCOUNT).await).await, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     /// credential ID の一覧と challenge は、宛先の利用者にだけ渡す。approve は今までどおり passkey だけで通る。
