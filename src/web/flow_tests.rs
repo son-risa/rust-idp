@@ -408,6 +408,88 @@ async fn a_single_use_initial_access_token_registers_only_once() {
     assert!(crate::dcr_store::peek_iat(fs, &iat_hash).await.unwrap().is_none(), "IAT が残っている");
 }
 
+fn from_ip(ip: &str) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert("x-forwarded-for", ip.parse().unwrap());
+    h
+}
+
+/// 使い捨ての IAT による登録は、IP ごとに回数の上限がある（IAT を毎回替えても、上限を超えた分は 429）。
+/// ほかの IP からは続けて登録できる。
+#[tokio::test]
+async fn registration_with_initial_access_tokens_is_rate_limited_per_ip() {
+    let p = test_provider().await;
+    let fs = p.docs.as_deref().unwrap();
+    let expires_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
+    let register = |ip: &'static str| {
+        let p = p.clone();
+        async move {
+            let constraints = crate::dcr::IatConstraints {
+                allowed_redirect_hosts: vec!["rp.example.com".into()],
+                allowed_grant_types: vec!["authorization_code".into()],
+                profile: crate::dcr::ClientProfile::Public,
+            };
+            let (raw_iat, iat_hash) = crate::dcr::gen_random_token();
+            crate::dcr_store::put_iat(fs, &iat_hash, &constraints, expires_at, false).await.unwrap();
+            let mut headers = from_ip(ip);
+            headers.insert(header::AUTHORIZATION, format!("Bearer {raw_iat}").parse().unwrap());
+            let body = json!({ "redirect_uris": ["https://rp.example.com/cb"] }).to_string();
+            oidc::register(State(p), headers, body).await.status()
+        }
+    };
+
+    for i in 0..5 {
+        assert_eq!(register("192.0.2.1").await, StatusCode::CREATED, "{i} 回目");
+    }
+    assert_eq!(register("192.0.2.1").await, StatusCode::TOO_MANY_REQUESTS, "上限を超えても登録できた");
+    assert_eq!(register("192.0.2.2").await, StatusCode::CREATED, "ほかの IP まで止まった");
+}
+
+/// signup のメールは、同じ IP からも、同じアドレスへも、回数の上限を超えて送らない（429）。
+#[tokio::test]
+async fn signup_emails_are_rate_limited_per_ip_and_per_address() {
+    let p = test_provider().await;
+    let signup = |ip: String, email: String| {
+        register::register_email_challenge(State(p.clone()), from_ip(&ip), Json(serde_json::from_value(json!({ "email": email })).unwrap()))
+    };
+
+    for i in 0..5 {
+        assert_eq!(signup("192.0.2.10".into(), format!("a{i}@example.com")).await.status(), StatusCode::NO_CONTENT);
+    }
+    let over = signup("192.0.2.10".into(), "a5@example.com".into()).await;
+    assert_eq!(over.status(), StatusCode::TOO_MANY_REQUESTS, "同じ IP から上限を超えて送れた");
+
+    for i in 0..5 {
+        assert_eq!(signup(format!("198.51.100.{i}"), "same@example.com".into()).await.status(), StatusCode::NO_CONTENT);
+    }
+    let over = signup("198.51.100.99".into(), "same@example.com".into()).await;
+    assert_eq!(over.status(), StatusCode::TOO_MANY_REQUESTS, "同じアドレスへ上限を超えて送れた");
+}
+
+/// 復旧のメールも、同じ IP からも、同じアドレスへも、回数の上限を超えて送らない（429）。
+#[tokio::test]
+async fn recovery_emails_are_rate_limited_per_ip_and_per_address() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let recover = |ip: String, email: String| {
+        let form: recover::RecoverForm = serde_json::from_value(json!({ "email": email })).unwrap();
+        recover::recover_submit(State(p.clone()), from_ip(&ip), CookieJar::default(), Form(form))
+    };
+
+    for i in 0..5 {
+        assert_eq!(recover("192.0.2.20".into(), format!("b{i}@example.com")).await.status(), StatusCode::OK);
+    }
+    let over = recover("192.0.2.20".into(), "b5@example.com".into()).await;
+    assert_eq!(over.status(), StatusCode::TOO_MANY_REQUESTS, "同じ IP から上限を超えて送れた");
+
+    for i in 0..5 {
+        assert_eq!(recover(format!("198.51.100.{i}"), email.clone()).await.status(), StatusCode::OK);
+    }
+    let over = recover("198.51.100.99".into(), email.clone()).await;
+    assert_eq!(over.status(), StatusCode::TOO_MANY_REQUESTS, "同じアドレスへ上限を超えて送れた");
+}
+
 /// account_admin::disable_account で凍結したアカウントが、実HTTPハンドラ(login_passkey_verify)
 /// 経由でログインを拒否されることを検証する。login.rs 側の disabled チェックの配線確認。
 #[tokio::test]

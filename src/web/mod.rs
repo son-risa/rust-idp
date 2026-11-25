@@ -1011,6 +1011,65 @@ mod obs_tests {
         assert!(out.contains("token_issued"));
     }
 
+    /// 要求の Authorization の値（Bearer の token・Basic の資格情報・DCR の IAT）は、本番と同じ
+    /// `fmt().json()` の記録のどこにも出ない。router を丸ごと通し、中間層とハンドラの両方の記録を見る。
+    #[tokio::test]
+    async fn the_authorization_header_value_never_reaches_the_log() {
+        use axum::http::{header, Request};
+        use tower::ServiceExt;
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(VecWriter(buf.clone()))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        const BEARER: &str = "SECRET-BEARER-7f3a9c";
+        const CLIENT_SECRET: &str = "SECRET-CLIENT-2b8e41";
+        let basic = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, format!("rp:{CLIENT_SECRET}"));
+        let p = crate::provider::Provider::new("https://op.example").with_client(crate::model::Client {
+            client_id: "rp".into(),
+            redirect_uris: vec![],
+            token_endpoint_auth_method: "client_secret_basic".into(),
+            client_secret: Some(crate::dcr::hash_token("other")),
+            grant_types: vec!["authorization_code".into()],
+            post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
+            dpop_bound: false,
+            jwks: vec![],
+            jwks_uri: None,
+            require_par: false,
+            require_pkce: false,
+            id_token_signed_response_alg: None,
+        });
+        let app = super::router_with_legacy_hosts(p, "");
+        let form = "application/x-www-form-urlencoded";
+        let requests = [
+            ("GET", "/userinfo", format!("Bearer {BEARER}"), None),
+            ("GET", "/me/profile", format!("DPoP {BEARER}"), None),
+            ("POST", "/oauth/register", format!("Bearer {BEARER}"), Some(("application/json", "{}"))),
+            ("POST", "/token", format!("Basic {basic}"), Some((form, "grant_type=authorization_code&code=C"))),
+            ("POST", "/introspect", format!("Basic {basic}"), Some((form, "token=AT"))),
+            ("POST", "/oauth/mandate/consume", format!("Basic {basic}"), Some((form, "token=AT"))),
+        ];
+        for (method, path, authorization, body) in requests {
+            let mut req = Request::builder().method(method).uri(path).header(header::AUTHORIZATION, authorization);
+            if let Some((ct, _)) = body {
+                req = req.header(header::CONTENT_TYPE, ct);
+            }
+            let body = body.map(|(_, b)| b.to_string()).unwrap_or_default();
+            app.clone().oneshot(req.body(axum::body::Body::from(body)).unwrap()).await.unwrap();
+        }
+
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert_eq!(out.matches("\"http_request\"").count(), 6, "要求の記録が出ていない: {out}");
+        for secret in [BEARER, CLIENT_SECRET, basic.as_str()] {
+            assert!(!out.contains(secret), "Authorization の値 {secret} が記録に出た: {out}");
+        }
+    }
+
     /// sub 擬似化: 同じ sub は安定、異なる sub は別、生メールを含まない。
     #[test]
     fn pseudonymize_sub_is_stable_and_not_plaintext() {
