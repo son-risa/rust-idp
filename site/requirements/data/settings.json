@@ -1,0 +1,631 @@
+{
+ "ST": [
+  {
+   "id": "ST-001",
+   "name": "env:ADDR",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "infra",
+   "default": "読み口の行に無し（無ければ PORT、さらに無ければ \"8080\"）",
+   "effect": "ローカル実行（K_SERVICE 無し）で待ち受ける port を、値の末尾の :port から決める。",
+   "reader": "src/main.rs:103",
+   "parent": null
+  },
+  {
+   "id": "ST-002",
+   "name": "env:BASE_PATH",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "空（unwrap_or_default）",
+   "effect": "issuer の path の接頭辞になり、全部の道をこの接頭辞の下に置く（issuer = ORIGIN + BASE_PATH）。",
+   "reader": "src/main.rs:49; src/gcp.rs:605",
+   "parent": null
+  },
+  {
+   "id": "ST-003",
+   "name": "env:CIBA_RP_SECRET",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "管理コマンド migrate-static-clients --apply のとき、在れば Secret Manager の同じ名の値と一致を確かめ、食い違えば止まる（本体の起動では読まない）。",
+   "reader": "src/gcp.rs:547",
+   "parent": null
+  },
+  {
+   "id": "ST-004",
+   "name": "env:CONFORMANCE_FAPI_CALLBACK",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "OpenID 認定スイートの公開の callback の URL",
+   "effect": "FAPI 認定用の静的 client（fapi-1・fapi-2）の redirect_uri を変える。",
+   "reader": "src/main.rs:133",
+   "parent": null
+  },
+  {
+   "id": "ST-005",
+   "name": "env:FAPI1_KID",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "FAPI 認定スイートの client fapi-1 の公開鍵（EC の kid）を与える。FAPI1_X・FAPI1_Y・FAPI1_KID の 3 つが揃うときだけ fapi-1 を静的に登録する。",
+   "reader": "src/main.rs:132",
+   "parent": null
+  },
+  {
+   "id": "ST-006",
+   "name": "env:FAPI1_X",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "FAPI 認定スイートの client fapi-1 の公開鍵（EC の x）を与える。FAPI1_X・FAPI1_Y・FAPI1_KID の 3 つが揃うときだけ fapi-1 を静的に登録する。",
+   "reader": "src/main.rs:130",
+   "parent": null
+  },
+  {
+   "id": "ST-007",
+   "name": "env:FAPI1_Y",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "FAPI 認定スイートの client fapi-1 の公開鍵（EC の y）を与える。FAPI1_X・FAPI1_Y・FAPI1_KID の 3 つが揃うときだけ fapi-1 を静的に登録する。",
+   "reader": "src/main.rs:131",
+   "parent": null
+  },
+  {
+   "id": "ST-008",
+   "name": "env:FAPI2_KID",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "FAPI 認定スイートの client fapi-2 の公開鍵（EC の kid）を与える。FAPI2_X・FAPI2_Y・FAPI2_KID の 3 つが揃うときだけ fapi-2 を静的に登録する。",
+   "reader": "src/main.rs:132",
+   "parent": null
+  },
+  {
+   "id": "ST-009",
+   "name": "env:FAPI2_X",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "FAPI 認定スイートの client fapi-2 の公開鍵（EC の x）を与える。FAPI2_X・FAPI2_Y・FAPI2_KID の 3 つが揃うときだけ fapi-2 を静的に登録する。",
+   "reader": "src/main.rs:130",
+   "parent": null
+  },
+  {
+   "id": "ST-010",
+   "name": "env:FAPI2_Y",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "FAPI 認定スイートの client fapi-2 の公開鍵（EC の y）を与える。FAPI2_X・FAPI2_Y・FAPI2_KID の 3 つが揃うときだけ fapi-2 を静的に登録する。",
+   "reader": "src/main.rs:131",
+   "parent": null
+  },
+  {
+   "id": "ST-011",
+   "name": "env:FIDO_CONFORMANCE_ENABLED",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "読み口の行に無し（未設定は無効。\"1\" か \"true\" のときだけ有効）",
+   "effect": "FIDO2 Conformance 用の /fido/* の道を載せるかを決める。",
+   "reader": "src/web/mod.rs:215",
+   "parent": null
+  },
+  {
+   "id": "ST-012",
+   "name": "env:FIDO_ORIGIN",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "\"http://{FIDO_RP_ID}\"",
+   "effect": "/fido/* の WebAuthn 検証で期待する clientDataJSON の origin を変える。",
+   "reader": "src/fido/mod.rs:70",
+   "parent": null
+  },
+  {
+   "id": "ST-013",
+   "name": "env:FIDO_RP_ID",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "\"localhost\"",
+   "effect": "/fido/* の WebAuthn の RP ID を変える。",
+   "reader": "src/fido/mod.rs:69",
+   "parent": null
+  },
+  {
+   "id": "ST-014",
+   "name": "env:FIDO_RP_NAME",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "\"rust-idp FIDO2\"",
+   "effect": "/fido/* の WebAuthn の RP の表示名を変える。",
+   "reader": "src/fido/mod.rs:72",
+   "parent": null
+  },
+  {
+   "id": "ST-015",
+   "name": "env:FIRESTORE_DATABASE_ID",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "\"(default)\"（空も未設定とみなす。src/firestore.rs:147）",
+   "effect": "つなぐ Firestore の database を変える。",
+   "reader": "src/firestore.rs:217",
+   "parent": null
+  },
+  {
+   "id": "ST-016",
+   "name": "env:FIRESTORE_EMULATOR_HOST",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "Firestore の宛先を emulator に向け、K_SERVICE が無くても Firestore を使う配線を入れる（KMS・Secret Manager・Resend は入れない）。",
+   "reader": "src/gcp.rs:21; src/firestore.rs:221; src/main.rs:89",
+   "parent": null
+  },
+  {
+   "id": "ST-017",
+   "name": "env:GCLOUD_PROJECT",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "（伏せる）",
+   "effect": "Firestore・Secret Manager・KMS へ出るときの GCP の project を決める（GOOGLE_CLOUD_PROJECT より先に見る）。",
+   "reader": "src/gcp.rs:314; src/fido/mod.rs:75",
+   "parent": null
+  },
+  {
+   "id": "ST-018",
+   "name": "env:GOOGLE_CLOUD_PROJECT",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "（伏せる）",
+   "effect": "GCLOUD_PROJECT が無いときに、GCP の project を決める。",
+   "reader": "src/gcp.rs:315; src/fido/mod.rs:76",
+   "parent": null
+  },
+  {
+   "id": "ST-019",
+   "name": "env:INVITE_CLIENT_IDS",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "空（unwrap_or_default。どの client も許さない）",
+   "effect": "招待（/invites）と凍結（/accounts/disable）を呼べる confidential client を、カンマ区切りの client id で名指す。",
+   "reader": "src/main.rs:59",
+   "parent": null
+  },
+  {
+   "id": "ST-020",
+   "name": "env:KMS_ES256_KEY",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "ES256 の署名を Cloud KMS の鍵で行う（無いか初期化に失敗すれば Secret Manager の鍵へ落ちる）。",
+   "reader": "src/gcp.rs:28",
+   "parent": null
+  },
+  {
+   "id": "ST-021",
+   "name": "env:KMS_RS256_KEY",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "RS256 の署名を Cloud KMS の鍵で行う（無いか初期化に失敗すれば Secret Manager の鍵へ落ちる）。",
+   "reader": "src/gcp.rs:75",
+   "parent": null
+  },
+  {
+   "id": "ST-022",
+   "name": "env:K_SERVICE",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "infra",
+   "default": "読み口の行に無し",
+   "effect": "Cloud Run で動いていることを示し、構造化 JSON のログ・0.0.0.0:PORT の待ち受け・Firestore と KMS／Secret Manager の鍵と Resend の配線・正規の鍵が無ければ起動しない守りを入れる。",
+   "reader": "src/main.rs:28; src/main.rs:84; src/main.rs:94; src/gcp.rs:21; src/gcp.rs:24; src/fido/mod.rs:74",
+   "parent": null
+  },
+  {
+   "id": "ST-023",
+   "name": "env:LEGACY_HOSTS",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "空（unwrap_or_default。転送しない）",
+   "effect": "Host が名指した古いホストの要求を、AASA を除いて ORIGIN の同じ path へ 308 で送る。",
+   "reader": "src/web/mod.rs:221",
+   "parent": null
+  },
+  {
+   "id": "ST-024",
+   "name": "env:LOG_PSEUDONYM_KEY",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "空（unwrap_or_default）",
+   "effect": "ログに出す sub の擬似化トークンに混ぜる salt を変える。",
+   "reader": "src/web/mod.rs:588",
+   "parent": null
+  },
+  {
+   "id": "ST-025",
+   "name": "env:ORIGIN",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "core",
+   "default": "\"http://localhost:8080\"（管理コマンドでは既定無しで止まる。src/gcp.rs:604）",
+   "effect": "issuer の scheme とホストを決め、LEGACY_HOSTS の転送先にもなる。",
+   "reader": "src/main.rs:48; src/gcp.rs:604",
+   "parent": null
+  },
+  {
+   "id": "ST-026",
+   "name": "env:PORT",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "infra",
+   "default": "\"8080\"",
+   "effect": "Cloud Run では 0.0.0.0 で待ち受ける port、ローカルでは ADDR が無いときの port を決める。",
+   "reader": "src/main.rs:96; src/main.rs:106",
+   "parent": null
+  },
+  {
+   "id": "ST-027",
+   "name": "env:RESEND_API_KEY",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "connect",
+   "default": "読み口の行に無し",
+   "effect": "在ればメールを Resend で送り、無ければ送らずログに出す（Firestore の配線が入るときだけ読む）。",
+   "reader": "src/gcp.rs:135",
+   "parent": null
+  },
+  {
+   "id": "ST-028",
+   "name": "env:RUST_LOG",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "kind": "infra",
+   "default": "\"info\"（src/main.rs:27）",
+   "effect": "ログの出す深さ（filter）を変える。",
+   "reader": "src/main.rs:26",
+   "parent": null
+  },
+  {
+   "id": "ST-029",
+   "name": "deploy:配備の形",
+   "place": "配備",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（Dockerfile・rust-toolchain.toml・Cargo.toml を直して build し直し、配備し直す）",
+   "kind": "infra",
+   "default": "Dockerfile と rust-toolchain.toml の行どおり",
+   "effect": "実行の OS は Debian trixie-slim、言語は Rust 1.100.0（edition 2024）、枠組みは axum 0.8・tokio 1。gcp の feature で build した 1 本の binary を Cloud Run のコンテナとして PORT=8080 で動かし（README の gcloud run deploy --source）、台の数は repo で固定せず、保存先を Firestore に置いて台をまたぐ前提で動く。",
+   "reader": "Dockerfile:6; Dockerfile:14; Dockerfile:20; Dockerfile:24; rust-toolchain.toml:3; Cargo.toml:4; Cargo.toml:32; Cargo.toml:36; README.md:217; src/gcp.rs:130",
+   "parent": null
+  }
+ ],
+ "SCL": {
+  "ST-001": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-002": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-003": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-004": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-005": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-006": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-007": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-008": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-009": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-010": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-011": {
+   "c": "①入口",
+   "s": "確か",
+   "w": "\"1\" か \"true\" のとき /fido/* の 6 本の道が載り、未設定なら道が無く 404 になる",
+   "n": 6
+  },
+  "ST-012": {
+   "c": "②結果",
+   "s": "確か",
+   "w": "FIDO_CONFORMANCE_ENABLED が有効なときだけ、/fido/* の検証で照らす origin が変わる"
+  },
+  "ST-013": {
+   "c": "②結果",
+   "s": "確か",
+   "w": "FIDO_CONFORMANCE_ENABLED が有効なときだけ、/fido/* の options に載る RP ID と検証の照合先が変わる"
+  },
+  "ST-014": {
+   "c": "②結果",
+   "s": "確か",
+   "w": "FIDO_CONFORMANCE_ENABLED が有効なときだけ、/fido/attestation/options が返す rp.name が変わる"
+  },
+  "ST-015": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-016": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-017": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-018": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-019": {
+   "c": "①入口",
+   "s": "確か",
+   "w": "名指した confidential client の要求だけが通り、ほかの client と public client は 403 になる",
+   "n": 2
+  },
+  "ST-020": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-021": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-022": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-023": {
+   "c": "①入口",
+   "s": "確か",
+   "w": "全部の道の手前にかかる門で、Host だけで決まり道を選ばないので、子の行には結ばない（AASA だけは転送しない）",
+   "n": 0
+  },
+  "ST-024": {
+   "c": "②結果",
+   "s": "確か",
+   "w": "ログの sub の擬似化トークン（h: の値）が変わる。応答は変わらない"
+  },
+  "ST-025": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-026": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-027": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-028": {
+   "c": "④土台",
+   "s": "見込み"
+  },
+  "ST-029": {
+   "c": "④土台",
+   "s": "確か"
+  }
+ },
+ "GN": {
+  "ST-011": {
+   "n": "env:FIDO_CONFORMANCE_ENABLED",
+   "w": "\"1\" か \"true\" のとき /fido/* の 6 本の道が載り、未設定なら道が無く 404 になる",
+   "b": "道が無い（404）→ 道が在る",
+   "s": "確か",
+   "e": "src/web/mod.rs:215; src/web/mod.rs:231; src/web/mod.rs:342; src/fido/mod.rs:143"
+  },
+  "ST-019": {
+   "n": "env:INVITE_CLIENT_IDS",
+   "w": "名指した confidential client の要求だけが通り、ほかの client と public client は 403 になる",
+   "b": "どの client も 403 → 名指した confidential client は通る",
+   "s": "確か",
+   "e": "src/main.rs:59; src/web/register.rs:416; src/web/register.rs:478; src/web/register.rs:501"
+  }
+ },
+ "GPID": {
+  "ST-011": [
+   "A-064#1",
+   "A-064#2",
+   "A-065#1",
+   "A-065#2",
+   "A-066#1",
+   "A-066#2"
+  ],
+  "ST-019": [
+   "A-039#1",
+   "A-041#1"
+  ]
+ },
+ "GATE": {
+  "A-064#1": [
+   "ST-011"
+  ],
+  "A-064#2": [
+   "ST-011"
+  ],
+  "A-065#1": [
+   "ST-011"
+  ],
+  "A-065#2": [
+   "ST-011"
+  ],
+  "A-066#1": [
+   "ST-011"
+  ],
+  "A-066#2": [
+   "ST-011"
+  ],
+  "A-039#1": [
+   "ST-019"
+  ],
+  "A-041#1": [
+   "ST-019"
+  ]
+ },
+ "OV": [
+  {
+   "names": [
+    "env:GCLOUD_PROJECT",
+    "env:GOOGLE_CLOUD_PROJECT"
+   ],
+   "order": "GCLOUD_PROJECT が勝つ（どちらも無ければ既定の project）",
+   "how": "src/gcp.rs:314; src/gcp.rs:315; src/fido/mod.rs:75; src/fido/mod.rs:76"
+  },
+  {
+   "names": [
+    "env:ADDR",
+    "env:PORT"
+   ],
+   "order": "ローカルでは ADDR が勝つ（Cloud Run では PORT だけを見る）",
+   "how": "src/main.rs:103; src/main.rs:106; src/main.rs:96"
+  },
+  {
+   "names": [
+    "env:PORT",
+    "Dockerfile の ENV PORT"
+   ],
+   "order": "設定 file から作る（Dockerfile の ENV が env の PORT を作る）",
+   "how": "Dockerfile:24; src/main.rs:96"
+  },
+  {
+   "names": [
+    "env:KMS_ES256_KEY",
+    "Secret Manager の oidc-signing-key-es256"
+   ],
+   "order": "環境が勝つ（KMS の鍵が無いか初期化に失敗すれば Secret Manager へ落ちる）",
+   "how": "src/gcp.rs:28; src/gcp.rs:45"
+  },
+  {
+   "names": [
+    "env:KMS_RS256_KEY",
+    "Secret Manager の oidc-signing-key-rs256"
+   ],
+   "order": "環境が勝つ（KMS の鍵が無いか初期化に失敗すれば Secret Manager へ落ちる）",
+   "how": "src/gcp.rs:75; src/gcp.rs:92"
+  },
+  {
+   "names": [
+    "env:CIBA_RP_SECRET",
+    "Secret Manager の CIBA_RP_SECRET"
+   ],
+   "order": "Secret Manager が勝つ（env は在れば一致を確かめるだけで、食い違えば止まる）",
+   "how": "src/gcp.rs:536; src/gcp.rs:547; src/gcp.rs:607"
+  }
+ ],
+ "SP": [],
+ "UR": [],
+ "notes": [
+  "試験の中だけで読む読み口を 2 か所除いた: src/formal_ledger_tests.rs:175 の UPDATE_PREMISE_TABLES（cfg(test) の mod）と src/firestore.rs:1186 の FIRESTORE_EMULATOR_HOST（mod tests の中）。除いた名は UPDATE_PREMISE_TABLES の 1 つ（FIRESTORE_EMULATOR_HOST は本体の読み口が在るので行に残した）。tests/ には読み口が無い。",
+  "std::env::var を包む helper が 2 つ在る: require_env(name)（src/gcp.rs:515、呼び口は ORIGIN の src/gcp.rs:604 だけ）と secret_hash_from_manager_verified(name)（src/gcp.rs:535、呼び口は CIBA_RP_SECRET の src/gcp.rs:607 だけ）。名は呼び口で決まるので行に起こし、UR には入れていない。",
+  "FAPI1_X・FAPI1_Y・FAPI1_KID・FAPI2_X・FAPI2_Y・FAPI2_KID は format!(\"{prefix}_X\") などで名を組む（src/main.rs:130-132）が、prefix は src/main.rs:72 の定数の配列で 2 つに決まるので、6 行に起こした。決まり 13 を字どおりに読んで UR に回すなら、この 6 行と入れ替えになる。",
+  "RUST_LOG は repo のコードに名が出ない。tracing_subscriber の EnvFilter::try_from_default_env（src/main.rs:26）が読む名を、外の crate の既定から推したので見込みにした。",
+  "LEGACY_HOSTS は①入口にしたが、全部の道の手前の門（src/web/mod.rs:371 で app 全体に層を置き、src/web/mod.rs:441 で Host だけを見て 308）なので、GPID・GATE には結ばず n=0 にした。AASA（A-063#1）だけは転送しない。",
+  "K_SERVICE と FIRESTORE_EMULATOR_HOST がどちらも無いと Provider の firestore が None になり、Firestore を要る多くの道が 503（no firestore）を返す（例: src/web/register.rs:499）。本番の Cloud Run では K_SERVICE が常に在るので、道の門ではなく④土台・③つなぎ先とし、子の行には結ばなかった。",
+  "FAPI*_X/Y/KID は、揃えば静的な client を足す（その client の要求が通る）という意味で入口にも読めるが、道の判定ではなく client の登録（データ）を変えるものなので③つなぎ先（外部の認定スイートの鍵）にした。",
+  "FIDO_ORIGIN・FIDO_RP_ID・FIDO_RP_NAME は FidoState::from_env（src/web/mod.rs:232）でだけ読み、それは FIDO_CONFORMANCE_ENABLED が有効なときだけ呼ばれる。src/fido/mod.rs:75-77 の GCLOUD_PROJECT・GOOGLE_CLOUD_PROJECT の読み口も同じ条件の下にある。",
+  "同じ名を複数の場所で読む設定は、reader に \"; \" でつないで全部書いた（BASE_PATH・ORIGIN・PORT・K_SERVICE・FIRESTORE_EMULATOR_HOST・GCLOUD_PROJECT・GOOGLE_CLOUD_PROJECT）。台本が reader を 1 つの file:行 と決めているなら、先頭の 1 つが主な読み口。",
+  "GCLOUD_PROJECT・GOOGLE_CLOUD_PROJECT の既定（src/gcp.rs:316・src/fido/mod.rs:77）は本番の GCP の project の id なので（伏せる）にした。",
+  "CIBA_RP_SECRET と KMS の 2 つの OV の片方は Secret Manager で、決まり 3 の置き場（環境・設定 file・DB）に無い。台の数（Cloud Run の max-instances など）は repo に指定が無く、配備の形には「固定せず」と書いた。",
+  "ORIGIN は本体（src/main.rs:48）では既定へ落ちるが、管理コマンド migrate-static-clients --apply（src/gcp.rs:604）では未設定や空で止まる。同じ名で既定が 2 通りある。"
+ ]
+}

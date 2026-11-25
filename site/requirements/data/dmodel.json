@@ -1,0 +1,2367 @@
+{
+ "DMR": [
+  {
+   "id": "accessTokens",
+   "did": "D-001",
+   "kind": "コレクション",
+   "ncol": 10,
+   "pk": [
+    "token"
+   ],
+   "ms": [
+    "authTime(秒)"
+   ],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "account_admin.rs:205,226（凍結・削除で accounts の accountId を鍵に accessTokens を引いて消す）"
+    },
+    {
+     "sym": "~>",
+     "to": "clients|static_clients",
+     "via": "clientId",
+     "cf": "code",
+     "why": "web/oidc.rs:598（revoke で認証した client と clientId を突き合わせる）"
+    }
+   ],
+   "skip": [
+    "jkt: DPoP 鍵の拇印。指す表が無い",
+    "aud: resource の URI。id でない"
+   ],
+   "src": [
+    "accessTokens: [{token:string @pk, clientId:string, accountId:string, scope:string, expiresAt:timestamp, jkt:string?, aud:string?, acr:string?, authTime:datetime(秒)?, authorizationDetails:string(JSON)?, mandateConsumed:bool?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "accountLocks",
+   "did": "D-002",
+   "kind": "コレクション",
+   "ncol": 1,
+   "pk": [
+    "email"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [
+    "文書 id（email）: 鍵の名に email を使うだけで、accounts を引かない（registration.rs:660）"
+   ],
+   "src": [
+    "accountLocks: [{email:string @pk, expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "accounts",
+   "did": "D-003",
+   "kind": "コレクション",
+   "ncol": 13,
+   "pk": [
+    "email"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "credentials",
+     "via": "credentialId",
+     "cf": "code",
+     "why": "registration.rs:411-412,580（古い形の 1 本。credentials の id と突き合わせる）"
+    },
+    {
+     "sym": "~>",
+     "to": "credentials",
+     "via": "recoveredWith",
+     "cf": "code",
+     "why": "web/account.rs:23（復旧で足した passkey の id と突き合わせる）"
+    }
+   ],
+   "skip": [
+    "email: 文書 id と同じ値を欄にも持つ（registration.rs:508 で credential_fields を写す）"
+   ],
+   "src": [
+    "accounts: [{email:string @pk, accountId:string @unique, disabled:bool, verified:bool, credentialsMigrated:bool, createdAt:timestamp, recoveredAt:timestamp?, recoveredWith:string?, credentialId:string, pubX:string, pubY:string, signCount:int, aaguid:string}]",
+    "// credentialId・pubX・pubY・signCount・aaguid は前の版が読む古い形の passkey 1 本（registration.rs:261-270）"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "accountsByUuid",
+   "did": "D-004",
+   "kind": "コレクション",
+   "ncol": 1,
+   "pk": [
+    "accountId"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "email",
+     "cf": "code",
+     "why": "registration.rs:768-777 と web/login.rs:272,282（accountId から email を引き、その email で accounts を引く）"
+    },
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(docId) to (accountId)",
+     "cf": "code",
+     "why": "account_admin.rs:115（accounts の accountId で消す）"
+    }
+   ],
+   "skip": [],
+   "src": [
+    "accountsByUuid: [{accountId:string @pk, email:string}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "adminIatFlash",
+   "did": "D-005",
+   "kind": "コレクション",
+   "ncol": 2,
+   "pk": [
+    "flash_id"
+   ],
+   "ms": [
+    "expires_at(秒)"
+   ],
+   "rels": [],
+   "skip": [
+    "raw_token: 生の IAT。hash を取れば dcrTokens の id になるが、ここでは引かない（web/admin.rs:1158）"
+   ],
+   "src": [
+    "adminIatFlash: [{flash_id:string @pk, raw_token:string, expires_at:datetime(秒)}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "admins",
+   "did": "D-006",
+   "kind": "コレクション",
+   "ncol": 1,
+   "pk": [
+    "\"_registry\"（固定の 1 文書）"
+   ],
+   "ms": [
+    "entries.granted_at(秒)"
+   ],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(entries.account_id) to (accountId)",
+     "cf": "code",
+     "why": "web/admin.rs:195（accounts の accountId と突き合わせて管理者の印を出す）、web/register.rs:506"
+    }
+   ],
+   "skip": [
+    "entries.granted_by: 付けた管理者の accountId。書くだけで引かない"
+   ],
+   "src": [
+    "admins: [{id:\"_registry\" @pk, entries:json(string)[{account_id:string, granted_by:string, granted_at:datetime(秒)}]}]"
+   ],
+   "pg": [],
+   "gap": [
+    "entries は Firestore の配列でなく JSON の文字列 1 つ（admin_store.rs:53-56）"
+   ]
+  },
+  {
+   "id": "auditLog",
+   "did": "D-007",
+   "kind": "コレクション",
+   "ncol": 5,
+   "pk": [
+    "UUID v4（自動）"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [
+    "actor: \"cli\"・管理者の accountId・\"client:<client_id>\" が混ざる",
+    "target: accountId・client_id・IAT の hash などが操作で変わる"
+   ],
+   "src": [
+    "auditLog: [{id:uuid @pk, actor:string, action:string, target:string, detail:string, at:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "authCodes",
+   "did": "D-008",
+   "kind": "コレクション",
+   "ncol": 15,
+   "pk": [
+    "code"
+   ],
+   "ms": [
+    "authTime(秒)"
+   ],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "grants.rs:256→163-169（token で accounts を accountId で引き、凍結を見る）"
+    },
+    {
+     "sym": "~>",
+     "to": "clients|static_clients",
+     "via": "clientId",
+     "cf": "code",
+     "why": "grants.rs:183（token で認証した client と突き合わせる）"
+    },
+    {
+     "sym": "~>",
+     "to": "accessTokens",
+     "via": "issuedAccessToken",
+     "cf": "code",
+     "why": "firestore_store.rs:254-255（再利用のとき、この id で accessTokens を消す）"
+    },
+    {
+     "sym": "~>",
+     "to": "refreshTokens",
+     "via": "issuedRefreshToken",
+     "cf": "code",
+     "why": "firestore_store.rs:259-260（再利用のとき、この id から refreshTokens の系列を消す）"
+    }
+   ],
+   "skip": [
+    "dpopJkt: DPoP 鍵の拇印。指す表が無い",
+    "nonce: RP が付けた値。id でない"
+   ],
+   "src": [
+    "authCodes: [{code:string @pk, clientId:string, accountId:string, redirectUri:string, scope:string, authTime:datetime(秒), expiresAt:timestamp, used:bool, nonce:string?, codeChallenge:string?, codeChallengeMethod:string?, acr:string?, dpopJkt:string?, resource:string?, issuedAccessToken:string?, issuedRefreshToken:string?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "cibaHistory",
+   "did": "D-009",
+   "kind": "コレクション",
+   "ncol": 8,
+   "pk": [
+    "auth_req_id"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [
+    "文書 id: cibaRequests の auth_req_id を写す。要求は解決の後に消えるので引かない（ciba.rs:404）",
+    "account: 引く鍵は access token の accountId（web/ciba.rs:35-41）で、accounts を引かない",
+    "clientId: 一覧に出すだけで clients を引かない"
+   ],
+   "src": [
+    "cibaHistory: [{auth_req_id:string @pk, account:string, clientId:string, scope:string, bindingMessage:string, outcome:\"approved\"|\"denied\"|\"expired\", resolvedAt:timestamp, expireAt:timestamp, authorizationDetails:string(JSON)?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "cibaRequests",
+   "did": "D-010",
+   "kind": "コレクション",
+   "ncol": 7,
+   "pk": [
+    "auth_req_id"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(account) to (accountId)",
+     "cf": "code",
+     "why": "grants.rs:517→163-169（承認済みの要求で accounts を accountId で引く）、web/ciba.rs:216"
+    },
+    {
+     "sym": "~>",
+     "to": "clients|static_clients",
+     "via": "clientId",
+     "cf": "code",
+     "why": "grants.rs:496（poll した client と突き合わせる）"
+    }
+   ],
+   "skip": [],
+   "src": [
+    "cibaRequests: [{auth_req_id:string @pk, clientId:string, account:string, scope:string, bindingMessage:string, status:\"pending\"|\"approved\"|\"denied\", expiresAt:timestamp, authorizationDetails:string(JSON)?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "clients",
+   "did": "D-011",
+   "kind": "コレクション",
+   "ncol": 1,
+   "pk": [
+    "client_id"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [],
+   "src": [
+    "clients: [{client_id:string @pk, json:json(string){client_id, redirect_uris[], token_endpoint_auth_method, client_secret?, grant_types[], post_logout_redirect_uris[], initiate_login_uri?, dpop_bound, jwks[], jwks_uri?, require_par, require_pkce, id_token_signed_response_alg?}}]"
+   ],
+   "pg": [],
+   "gap": [
+    "欄は json 1 つ。中身は model.rs:17-45 の Client を JSON の文字列にしたもの（13 の鍵）"
+   ]
+  },
+  {
+   "id": "credentials",
+   "did": "D-012",
+   "kind": "コレクション",
+   "ncol": 8,
+   "pk": [
+    "credentialId"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "registration.rs:363（引いた passkey の accountId をアカウントと突き合わせる）、registration.rs:342"
+    }
+   ],
+   "skip": [
+    "email: 書くだけで読まない（引くのは accountId）"
+   ],
+   "src": [
+    "credentials: [{credentialId:string @pk, email:string, accountId:string, pubX:string, pubY:string, signCount:int, aaguid:string, createdAt:timestamp, lastUsedAt:timestamp?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "dcrTokens",
+   "did": "D-013",
+   "kind": "コレクション",
+   "ncol": 3,
+   "pk": [
+    "hash（IAT の hash）"
+   ],
+   "ms": [
+    "expires_at(秒)"
+   ],
+   "rels": [],
+   "skip": [],
+   "src": [
+    "dcrTokens: [{hash:string @pk, constraints:json(string){allowed_redirect_hosts[], allowed_grant_types[], profile}, expires_at:datetime(秒), reusable:bool}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "emailChallenges",
+   "did": "D-014",
+   "kind": "コレクション",
+   "ncol": 6,
+   "pk": [
+    "token"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "email",
+     "cf": "code",
+     "why": "web/register.rs:186-187→registration.rs:370,330（覗いた email で accounts を引く）"
+    },
+    {
+     "sym": "~>",
+     "to": "interactions",
+     "via": "uid",
+     "cf": "code",
+     "why": "registration.rs:82→web/mod.rs:149（uid で interactions を引いてログインを済ませる）"
+    }
+   ],
+   "skip": [
+    "clientId: /account の URL に写すだけで、clients を引くのは次の要求（web/mod.rs:166）",
+    "returnTo: 戻り先の URL。id でない"
+   ],
+   "src": [
+    "emailChallenges: [{token:string @pk, email:string, expiresAt:timestamp, purpose:\"recovery\"?, returnTo:string?, uid:string?, clientId:string?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "fcmTokens",
+   "did": "D-015",
+   "kind": "コレクション",
+   "ncol": 3,
+   "pk": [
+    "accountId"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(docId) to (accountId)",
+     "cf": "code",
+     "why": "account_admin.rs:113（accounts の accountId で消す）、fcm.rs:32"
+    }
+   ],
+   "skip": [
+    "token: FCM の端末の token。外部システムの id で表が無い"
+   ],
+   "src": [
+    "fcmTokens: [{accountId:string @pk, token:string, platform:string, updatedAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "fidoChallenges",
+   "did": "D-016",
+   "kind": "コレクション",
+   "ncol": 3,
+   "pk": [
+    "challenge"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [
+    "username: 試験の利用者名。指す表が無い（fidoCredentials.user と名で引き合うだけ）"
+   ],
+   "src": [
+    "fidoChallenges: [{challenge:string @pk, username:string, userVerification:string, expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "fidoCredentials",
+   "did": "D-017",
+   "kind": "コレクション",
+   "ncol": 9,
+   "pk": [
+    "credId"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [
+    "user: 試験の利用者名。指す表が無い"
+   ],
+   "src": [
+    "fidoCredentials: [{credId:string @pk, user:string, credId:string, signCount:int, kty:\"es256\"|\"rs256\"|\"rs1\"|\"ed25519\", x:string?, y:string?, n:string?, e:string?, pk:string?}]"
+   ],
+   "pg": [],
+   "gap": [
+    "鍵の欄は kty で変わる（es256 は x・y、rs256・rs1 は n・e、ed25519 は pk。fido/store.rs:121-133）"
+   ]
+  },
+  {
+   "id": "interactions",
+   "did": "D-018",
+   "kind": "コレクション",
+   "ncol": 6,
+   "pk": [
+    "uid"
+   ],
+   "ms": [
+    "authTime(秒)"
+   ],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "web/login.rs:228,151（accounts から引いたアカウントの accountId を書く）"
+    },
+    {
+     "sym": "~>",
+     "to": "parRequests",
+     "via": "requestUri",
+     "cf": "code",
+     "why": "web/oidc.rs:250,343→par.rs:67-71（urn の接頭辞を外した値が parRequests の id）"
+    }
+   ],
+   "skip": [
+    "browserBinding: cookie の秘密の hash。指す表が無い"
+   ],
+   "src": [
+    "interactions: [{uid:string @pk, rawQuery:string, browserBinding:string, expiresAt:timestamp, accountId:string?, authTime:datetime(秒)?, requestUri:string?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "nonces",
+   "did": "D-019",
+   "kind": "コレクション",
+   "ncol": 1,
+   "pk": [
+    "\"<種類>:<jti>\"（dpop:・cjwt:・jar:）"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [
+    "文書 id の jti: 外から来た JWT の id。指す表が無い"
+   ],
+   "src": [
+    "nonces: [{key:string @pk, expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "parRequests",
+   "did": "D-020",
+   "kind": "コレクション",
+   "ncol": 3,
+   "pk": [
+    "request_uri の id"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "clients|static_clients",
+     "via": "clientId",
+     "cf": "code",
+     "why": "web/oidc.rs:137-138（authorize の client_id と突き合わせる）"
+    }
+   ],
+   "skip": [],
+   "src": [
+    "parRequests: [{id:string @pk, clientId:string, params:string(urlencoded), expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "profiles",
+   "did": "D-021",
+   "kind": "コレクション",
+   "ncol": 7,
+   "pk": [
+    "accountId"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(docId) to (accountId)",
+     "cf": "code",
+     "why": "account_admin.rs:114（accounts の accountId で消す）、web/account.rs:161"
+    }
+   ],
+   "skip": [
+    "email: 名は email だが中身は accountId（registration.rs:843 は引数をそのまま書き、呼び手は accountId を渡す）。読む所が無い"
+   ],
+   "src": [
+    "profiles: [{accountId:string @pk, email:string, name:string?, nickname:string?, birthdate:string?, gender:string?, zoneinfo:string?, locale:string?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "refreshFamilyRevocations",
+   "did": "D-022",
+   "kind": "コレクション",
+   "ncol": 1,
+   "pk": [
+    "familyId"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [],
+   "src": [
+    "refreshFamilyRevocations: [{familyId:string @pk, expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "refreshTokens",
+   "did": "D-023",
+   "kind": "コレクション",
+   "ncol": 11,
+   "pk": [
+    "token"
+   ],
+   "ms": [
+    "authTime(秒)"
+   ],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "account_admin.rs:212,226、grants.rs:380→163-169"
+    },
+    {
+     "sym": "~>",
+     "to": "clients|static_clients",
+     "via": "clientId",
+     "cf": "code",
+     "why": "grants.rs:331（refresh した client と突き合わせる）"
+    },
+    {
+     "sym": "~>",
+     "to": "refreshFamilyRevocations",
+     "via": "familyId",
+     "cf": "code",
+     "why": "grants.rs:358→firestore_store.rs:415（系列の札を引く）"
+    },
+    {
+     "sym": "~>",
+     "to": "refreshTokens",
+     "via": "replacedBy",
+     "cf": "code",
+     "why": "firestore_store.rs:90（失効のとき replacedBy を辿る）"
+    }
+   ],
+   "skip": [
+    "jkt: DPoP 鍵の拇印。指す表が無い"
+   ],
+   "src": [
+    "refreshTokens: [{token:string @pk, clientId:string, accountId:string, scope:string, expiresAt:timestamp, resource:string?, jkt:string?, acr:string?, authTime:datetime(秒)?, familyId:string, used:bool, replacedBy:string?}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "sessions",
+   "did": "D-024",
+   "kind": "コレクション",
+   "ncol": 3,
+   "pk": [
+    "sid"
+   ],
+   "ms": [
+    "authTime(秒)"
+   ],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "account_admin.rs:166,198→226（accounts の accountId で引いて消す）"
+    }
+   ],
+   "skip": [],
+   "src": [
+    "sessions: [{sid:string @pk, accountId:string, authTime:datetime(秒), expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "webauthnChallenges",
+   "did": "D-025",
+   "kind": "コレクション",
+   "ncol": 5,
+   "pk": [
+    "challenge"
+   ],
+   "ms": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "email",
+     "cf": "code",
+     "why": "web/login.rs:248,282（消費した challenge の email で accounts を引く）"
+    },
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(accountId) to (accountId)",
+     "cf": "code",
+     "why": "registration.rs:487（登録で、在るアカウントの accountId と突き合わせる）"
+    }
+   ],
+   "skip": [
+    "uid: kind で中身が変わる（ログインは interactions の uid、CIBA 承認は auth_req_id、/account は \"account\"、復旧は \"recovery\"、登録は空）"
+   ],
+   "src": [
+    "webauthnChallenges: [{challenge:string @pk, email:string, kind:\"reg\"|\"auth\"|\"ciba-approve\", uid:string, accountId:string, expiresAt:timestamp}]"
+   ],
+   "pg": [],
+   "gap": []
+  },
+  {
+   "id": "static_clients",
+   "did": "D-026",
+   "kind": "外の物",
+   "ncol": 0,
+   "pk": [
+    "client_id"
+   ],
+   "ms": [],
+   "rels": [],
+   "skip": [],
+   "src": [
+    "static_clients: 起動時に環境変数（FAPI1_*・FAPI2_*）から Provider.clients に積む Client。resolve_client が clients より先に見る（provider.rs:162-168、main.rs:68-73）"
+   ],
+   "pg": [],
+   "gap": [
+    "DB に無い。本番は環境変数を置かないので空"
+   ]
+  }
+ ],
+ "OPDM": {
+  "A-003": [
+   [
+    "D-008",
+    "authCodes",
+    1
+   ],
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-020",
+    "parRequests",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-026",
+    "static_clients",
+    0
+   ]
+  ],
+  "A-004": [
+   [
+    "D-008",
+    "authCodes",
+    1
+   ],
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-020",
+    "parRequests",
+    1
+   ],
+   [
+    "D-026",
+    "static_clients",
+    0
+   ]
+  ],
+  "A-005": [
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-026",
+    "static_clients",
+    0
+   ]
+  ],
+  "A-006": [
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-026",
+    "static_clients",
+    0
+   ]
+  ],
+  "A-007": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-008": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-021",
+    "profiles",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-009": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-008",
+    "authCodes",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ],
+   [
+    "D-022",
+    "refreshFamilyRevocations",
+    1
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ]
+  ],
+  "A-010": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ]
+  ],
+  "A-011": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ]
+  ],
+  "A-012": [
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-013",
+    "dcrTokens",
+    1
+   ]
+  ],
+  "A-013": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ]
+  ],
+  "A-014": [
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-026",
+    "static_clients",
+    0
+   ]
+  ],
+  "A-015": [
+   [
+    "D-020",
+    "parRequests",
+    1
+   ]
+  ],
+  "A-016": [
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-021",
+    "profiles",
+    1
+   ]
+  ],
+  "A-017": [
+   [
+    "D-021",
+    "profiles",
+    1
+   ]
+  ],
+  "A-018": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-021",
+    "profiles",
+    1
+   ]
+  ],
+  "A-019": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-015",
+    "fcmTokens",
+    1
+   ]
+  ],
+  "A-020": [
+   [
+    "D-009",
+    "cibaHistory",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ]
+  ],
+  "A-021": [
+   [
+    "D-009",
+    "cibaHistory",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ]
+  ],
+  "A-022": [
+   [
+    "D-015",
+    "fcmTokens",
+    1
+   ]
+  ],
+  "A-023": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-024": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-009",
+    "cibaHistory",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-025": [
+   [
+    "D-009",
+    "cibaHistory",
+    1
+   ],
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ]
+  ],
+  "A-026": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ]
+  ],
+  "A-027": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-028": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-029": [
+   [
+    "D-002",
+    "accountLocks",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-021",
+    "profiles",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-030": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-011",
+    "clients",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-021",
+    "profiles",
+    1
+   ],
+   [
+    "D-026",
+    "static_clients",
+    0
+   ]
+  ],
+  "A-031": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-032": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-033": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-034": [
+   [
+    "D-002",
+    "accountLocks",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-035": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-002",
+    "accountLocks",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-036": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-037": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-038": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-002",
+    "accountLocks",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-018",
+    "interactions",
+    1
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ],
+   [
+    "D-025",
+    "webauthnChallenges",
+    1
+   ]
+  ],
+  "A-039": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ]
+  ],
+  "A-040": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-014",
+    "emailChallenges",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-041": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-042": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ]
+  ],
+  "A-043": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ],
+   [
+    "D-015",
+    "fcmTokens",
+    1
+   ],
+   [
+    "D-021",
+    "profiles",
+    1
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-044": [
+   [
+    "D-001",
+    "accessTokens",
+    1
+   ],
+   [
+    "D-002",
+    "accountLocks",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    0
+   ],
+   [
+    "D-023",
+    "refreshTokens",
+    1
+   ],
+   [
+    "D-024",
+    "sessions",
+    1
+   ]
+  ],
+  "A-049": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ]
+  ],
+  "A-050": [
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-004",
+    "accountsByUuid",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ]
+  ],
+  "A-052": [
+   [
+    "D-011",
+    "clients",
+    1
+   ]
+  ],
+  "A-053": [
+   [
+    "D-011",
+    "clients",
+    1
+   ]
+  ],
+  "A-054": [
+   [
+    "D-011",
+    "clients",
+    1
+   ]
+  ],
+  "A-055": [
+   [
+    "D-011",
+    "clients",
+    1
+   ]
+  ],
+  "A-056": [
+   [
+    "D-013",
+    "dcrTokens",
+    1
+   ]
+  ],
+  "A-057": [
+   [
+    "D-005",
+    "adminIatFlash",
+    1
+   ],
+   [
+    "D-013",
+    "dcrTokens",
+    1
+   ]
+  ],
+  "A-058": [
+   [
+    "D-013",
+    "dcrTokens",
+    1
+   ]
+  ],
+  "A-059": [
+   [
+    "D-005",
+    "adminIatFlash",
+    1
+   ]
+  ],
+  "A-064": [
+   [
+    "D-016",
+    "fidoChallenges",
+    1
+   ],
+   [
+    "D-017",
+    "fidoCredentials",
+    1
+   ]
+  ],
+  "A-065": [
+   [
+    "D-016",
+    "fidoChallenges",
+    1
+   ],
+   [
+    "D-017",
+    "fidoCredentials",
+    1
+   ]
+  ],
+  "A-067": [
+   [
+    "D-011",
+    "clients",
+    1
+   ]
+  ],
+  "A-068": [
+   [
+    "D-002",
+    "accountLocks",
+    1
+   ],
+   [
+    "D-003",
+    "accounts",
+    1
+   ],
+   [
+    "D-012",
+    "credentials",
+    1
+   ]
+  ],
+  "A-069": [
+   [
+    "D-010",
+    "cibaRequests",
+    1
+   ],
+   [
+    "D-009",
+    "cibaHistory",
+    1
+   ]
+  ],
+  "A-070": [
+   [
+    "D-015",
+    "fcmTokens",
+    1
+   ]
+  ]
+ },
+ "DMOP": {
+  "accessTokens": {
+   "o": [
+    "A-009",
+    "A-010",
+    "A-011",
+    "A-013",
+    "A-035",
+    "A-038",
+    "A-041",
+    "A-043",
+    "A-044"
+   ],
+   "m": [],
+   "c": 8,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "accountLocks": {
+   "o": [
+    "A-029",
+    "A-034",
+    "A-035",
+    "A-038",
+    "A-044",
+    "A-068"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "accounts": {
+   "o": [
+    "A-007",
+    "A-008",
+    "A-009",
+    "A-018",
+    "A-019",
+    "A-023",
+    "A-024",
+    "A-026",
+    "A-027",
+    "A-028",
+    "A-029",
+    "A-030",
+    "A-031",
+    "A-032",
+    "A-033",
+    "A-034",
+    "A-035",
+    "A-036",
+    "A-037",
+    "A-038",
+    "A-039",
+    "A-040",
+    "A-041",
+    "A-042",
+    "A-043",
+    "A-044",
+    "A-049",
+    "A-050",
+    "A-068"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "accountsByUuid": {
+   "o": [
+    "A-008",
+    "A-016",
+    "A-018",
+    "A-023",
+    "A-027",
+    "A-029",
+    "A-030",
+    "A-031",
+    "A-032",
+    "A-033",
+    "A-034",
+    "A-035",
+    "A-036",
+    "A-038",
+    "A-040",
+    "A-041",
+    "A-042",
+    "A-043",
+    "A-044",
+    "A-050"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "adminIatFlash": {
+   "o": [
+    "A-057",
+    "A-059"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "admins": {
+   "o": [
+    "A-038",
+    "A-041",
+    "A-043",
+    "A-044",
+    "A-045",
+    "A-046",
+    "A-049",
+    "A-050"
+   ],
+   "m": [],
+   "c": 12,
+   "e": 0,
+   "x": true,
+   "u": ""
+  },
+  "auditLog": {
+   "o": [
+    "A-034",
+    "A-035",
+    "A-038",
+    "A-041",
+    "A-042",
+    "A-043",
+    "A-044",
+    "A-045",
+    "A-046",
+    "A-050",
+    "A-051",
+    "A-054",
+    "A-055",
+    "A-057",
+    "A-058",
+    "A-072"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": true,
+   "u": ""
+  },
+  "authCodes": {
+   "o": [
+    "A-003",
+    "A-004",
+    "A-009"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "cibaHistory": {
+   "o": [
+    "A-020",
+    "A-021",
+    "A-024",
+    "A-025",
+    "A-069"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "cibaRequests": {
+   "o": [
+    "A-009",
+    "A-019",
+    "A-020",
+    "A-021",
+    "A-023",
+    "A-024",
+    "A-025",
+    "A-069"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "clients": {
+   "o": [
+    "A-003",
+    "A-004",
+    "A-005",
+    "A-006",
+    "A-012",
+    "A-014",
+    "A-030",
+    "A-052",
+    "A-053",
+    "A-054",
+    "A-055",
+    "A-067"
+   ],
+   "m": [],
+   "c": 8,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "credentials": {
+   "o": [
+    "A-007",
+    "A-008",
+    "A-019",
+    "A-023",
+    "A-024",
+    "A-026",
+    "A-027",
+    "A-028",
+    "A-029",
+    "A-030",
+    "A-031",
+    "A-032",
+    "A-033",
+    "A-034",
+    "A-035",
+    "A-036",
+    "A-037",
+    "A-038",
+    "A-039",
+    "A-040",
+    "A-043",
+    "A-049",
+    "A-050",
+    "A-068"
+   ],
+   "m": [
+    "A-044"
+   ],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "dcrTokens": {
+   "o": [
+    "A-012",
+    "A-056",
+    "A-057",
+    "A-058"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "emailChallenges": {
+   "o": [
+    "A-026",
+    "A-027",
+    "A-028",
+    "A-029",
+    "A-036",
+    "A-037",
+    "A-038",
+    "A-039",
+    "A-040"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "fcmTokens": {
+   "o": [
+    "A-019",
+    "A-022",
+    "A-043",
+    "A-070"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "fidoChallenges": {
+   "o": [
+    "A-064",
+    "A-065"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "fidoCredentials": {
+   "o": [
+    "A-064",
+    "A-065"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "interactions": {
+   "o": [
+    "A-003",
+    "A-004",
+    "A-005",
+    "A-006",
+    "A-008",
+    "A-026",
+    "A-029",
+    "A-036",
+    "A-038"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "nonces": {
+   "o": [
+    "A-003",
+    "A-009",
+    "A-015",
+    "A-019"
+   ],
+   "m": [],
+   "c": 13,
+   "e": 0,
+   "x": true,
+   "u": ""
+  },
+  "parRequests": {
+   "o": [
+    "A-003",
+    "A-004",
+    "A-015"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "profiles": {
+   "o": [
+    "A-008",
+    "A-016",
+    "A-017",
+    "A-018",
+    "A-029",
+    "A-030",
+    "A-043"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "refreshFamilyRevocations": {
+   "o": [
+    "A-009"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "refreshTokens": {
+   "o": [
+    "A-009",
+    "A-013",
+    "A-035",
+    "A-038",
+    "A-041",
+    "A-043",
+    "A-044"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "sessions": {
+   "o": [
+    "A-003",
+    "A-008",
+    "A-014",
+    "A-027",
+    "A-029",
+    "A-032",
+    "A-034",
+    "A-035",
+    "A-036",
+    "A-038",
+    "A-040",
+    "A-041",
+    "A-043",
+    "A-044"
+   ],
+   "m": [],
+   "c": 23,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "webauthnChallenges": {
+   "o": [
+    "A-007",
+    "A-008",
+    "A-023",
+    "A-024",
+    "A-028",
+    "A-029",
+    "A-031",
+    "A-032",
+    "A-033",
+    "A-034",
+    "A-037",
+    "A-038"
+   ],
+   "m": [],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  },
+  "static_clients": {
+   "o": [],
+   "m": [
+    "A-003",
+    "A-004",
+    "A-005",
+    "A-006",
+    "A-014",
+    "A-030"
+   ],
+   "c": 0,
+   "e": 0,
+   "x": false,
+   "u": ""
+  }
+ },
+ "outside": [
+  {
+   "name": "ES256 の署名鍵（KMS_ES256_KEY が名指す鍵）",
+   "place": "Cloud KMS",
+   "ops": [
+    "A-002",
+    "A-009",
+    "A-014"
+   ],
+   "at": "gcp.rs:28"
+  },
+  {
+   "name": "RS256 の署名鍵（KMS_RS256_KEY が名指す鍵）",
+   "place": "Cloud KMS",
+   "ops": [
+    "A-002",
+    "A-009",
+    "A-014"
+   ],
+   "at": "gcp.rs:75"
+  },
+  {
+   "name": "ES256 の署名鍵 oidc-signing-key-es256（KMS を使わないときの代わり）",
+   "place": "Secret Manager",
+   "ops": [
+    "A-002",
+    "A-009",
+    "A-014"
+   ],
+   "at": "gcp.rs:45"
+  },
+  {
+   "name": "RS256 の署名鍵 oidc-signing-key-rs256（KMS を使わないときの代わり）",
+   "place": "Secret Manager",
+   "ops": [
+    "A-002",
+    "A-009",
+    "A-014"
+   ],
+   "at": "gcp.rs:92"
+  },
+  {
+   "name": "CIBA_RP_SECRET（CIBA の RP の client secret。移行コマンドが hash にして clients へ書く）",
+   "place": "Secret Manager",
+   "ops": [],
+   "at": "gcp.rs:607"
+  }
+ ],
+ "notes": [
+  "表の目録は Firestore に無いので、code が渡すコレクション名（const と文字列）を git grep で洗った 25 個を行にした。サブコレクションは無い。CLI（gcp.rs の管理コマンド）だけが触る表は無い。",
+  "メモリの中だけの代わり（Firestore を使わない構成とテスト用）は行にしていない: MemoryStore（store.rs:173。interactions・sessions・コード・AT・RT・系列の札）、MemoryCibaStore（ciba.rs:439）、NonceStore::Memory（nonce.rs:43）、MemFidoStore（fido/mod.rs:81）。",
+  "外の物 static_clients を D-026 として末尾に足した（abc 順の外）。FAPI 試験用に環境変数から積む client で、本番は空。clientId の参照は {clients|static_clients} と書いた。使う操作は見込み（m）に置いた。",
+  "accounts の文書 id は email で、accountId は欄（@unique とみなした）。accountId を指す参照は via (..) to (accountId) で書いた。文書 id そのものが accountId の表（accountsByUuid・fcmTokens・profiles）は (docId) to (accountId) と書いた。",
+  "profiles の欄 email には accountId が入る（registration.rs:843 は引数 email をそのまま書き、呼び手はすべて accountId を渡す）。registration.rs:781,834 の注記「profiles/{email}」は古い。",
+  "日時の整数はすべて秒で、ミリ秒の整数は無い。Firestore の timestamp 型は記法で timestamp と書き、ms には入れなかった。",
+  "横断にした表: auditLog（監査）、admins（認可の名簿）、nonces（DPoP・client_assertion・JAR の jti の単回化）。OPDM には出さず、DMOP の o には直に触る操作を、c には前置きだけで届く操作の数を入れた。",
+  "共通の前置きとして数だけにしたもの: authenticate_client（web/mod.rs:714）が引く clients と nonces、authenticate_token（web/mod.rs:764）が引く accessTokens と nonces、session_account・check_admin（web/mod.rs:205、web/admin.rs:15）が引く sessions と admins、/account の me()（web/account.rs:38）が引く sessions。me() が引く accountsByUuid と accounts は画面の中身に使うので確かに入れた。",
+  "見込みは A-044 の credentials だけ: delete_passkeys → remove_all_credentials → remove_all_locked → delete_all_credentials と helper が 3 段になる（account_admin.rs:143、registration.rs:625、registration.rs:733）。",
+  "表に触らない操作: A-001・A-002・A-060〜A-063・A-066。A-047・A-048 は前置きだけ、A-045・A-046・A-051 は横断の表（admins・auditLog）だけなので OPDM に行が無い。",
+  "FIDO 試験の表（fidoChallenges・fidoCredentials）は FIDO_CONFORMANCE_ENABLED のときだけ経路が出る（web/mod.rs:231）。本番では使わない。Firestore の project も本体と別に決める（fido/mod.rs:75）。",
+  "webauthnChallenges.uid は kind で中身が変わるので関係にしなかった。cibaHistory は監査の性格だが CIBA の操作だけが使うので横断にしなかった。",
+  "期限切れの文書の掃除は Firestore の TTL ポリシーを前提にしている（expiresAt・expireAt。ciba.rs:17）が、TTL の設定は repo に無いので pg は空。",
+  "失敗の時だけ通る道（e）は、どの表でもその操作がほかの道でも触るので 0 にした（例: A-009 のコード再利用でのトークンの失効、A-034 の discard_credential）。",
+  "outside の署名鍵の ops は、鍵で署名する A-009 と、公開鍵を出す・検める A-002・A-014。鍵を書く操作は無い（起動時に読むだけ。gcp.rs:24-120）。CIBA_RP_SECRET は CLI だけが読むので ops は空。RESEND_API_KEY は外部システムの資格で業務の物でないので outside に入れていない。",
+  "A-067〜A-072（運用の道具だけの操作と内部のきっかけ）の記録する表は、データモデルの下請けの後に手で足した（src/gcp.rs:594-613、src/registration.rs:426-458、src/ciba.rs:418-432、src/fcm.rs:31-36、src/audit_log.rs:21-34）。"
+ ]
+}

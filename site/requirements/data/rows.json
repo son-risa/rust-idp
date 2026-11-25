@@ -1,0 +1,4198 @@
+{
+ "ROWS": [
+  {
+   "id": "A-001",
+   "obj": "発見の文書（.well-known/openid-configuration）",
+   "type": "取得",
+   "verb": "",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /.well-known/openid-configuration",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/.well-known/openid-configuration"
+     },
+     "auth": "無し",
+     "cond": "誰でも読める",
+     "at": [
+      "src/web/oidc.rs:5"
+     ],
+     "why": "router から handler まで辿った（src/web/mod.rs:243）",
+     "cells": [
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-002",
+   "obj": "署名の公開鍵（jwks）",
+   "type": "一覧",
+   "verb": "",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /jwks",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/jwks"
+     },
+     "auth": "無し",
+     "cond": "誰でも読める。RS も署名の確かめに使う",
+     "at": [
+      "src/web/oidc.rs:64"
+     ],
+     "why": "src/web/mod.rs:244",
+     "cells": [
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-003",
+   "obj": "認可の要求（authorize）",
+   "type": "追加",
+   "verb": "",
+   "orig": "authorize",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /authorize",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/authorize"
+     },
+     "auth": "無し（sid の cookie があれば SSO に使う）",
+     "cond": "client_id が解決でき redirect_uri が登録と一致するとき（合わなければ RP へ返さず画面に誤りを出す）。require_par の client は PAR の request_uri が要る。PAR の request_uri は作った client だけが使える。sid のセッションが prompt・max_age を満たせば、ログインの画面を出さずに code を出す",
+     "rel": "自: sid のセッションの本人として code を受ける。他: ほかの client が預けた request_uri を使う",
+     "at": [
+      "src/web/oidc.rs:84-217",
+      "src/web/oidc.rs:137-141",
+      "src/web/oidc.rs:169-175",
+      "src/web/oidc.rs:182-190"
+     ],
+     "why": "handler を読んだ。RP の列は、この道をブラウザが呼ぶので該当しないとした（RP の条件は条件の文に書いた）",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-004",
+   "obj": "認可の要求（authorize）",
+   "type": "動作",
+   "verb": "再開する",
+   "orig": "authorize/resume",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /authorize/resume",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/authorize/resume"
+     },
+     "auth": "cookie（印 __Host-ix_{uid}）",
+     "cond": "ログインを始めたブラウザの印があり、ログインを済ませた interaction のときだけ。interaction は 1 度だけ使える",
+     "rel": "他: ほかのブラウザが始めた interaction",
+     "at": [
+      "src/web/oidc.rs:219-267",
+      "src/web/mod.rs:78-87"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-005",
+   "obj": "認可の要求（authorize）",
+   "type": "取得",
+   "verb": "",
+   "orig": "ログインの画面",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /login/{uid}",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/login/{uid}"
+     },
+     "auth": "cookie（印）",
+     "cond": "始めたブラウザだけにログインの画面を出す。interaction が切れていれば、その client の initiate_login_uri へ送り直す",
+     "rel": "他: ほかのブラウザ（印が合わない）。ほかのブラウザには画面を出さず、client の入口へ誘う",
+     "at": [
+      "src/web/login.rs:18-60"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-006",
+   "obj": "認可の要求（authorize）",
+   "type": "動作",
+   "verb": "取り消す",
+   "orig": "login/cancel",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /login/{uid}/cancel",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/login/{uid}/cancel"
+     },
+     "auth": "cookie（印）",
+     "cond": "始めたブラウザだけが取り消せる。登録済みの redirect_uri へ access_denied を返す",
+     "at": [
+      "src/web/oidc.rs:271-308"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-007",
+   "obj": "ログインの challenge（login/passkey/options）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /login/{uid}/passkey/options",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/login/{uid}/passkey/options"
+     },
+     "auth": "無し",
+     "cond": "誰でも challenge を作れる。email を付けると、その人の passkey の id を allowCredentials で返す",
+     "at": [
+      "src/web/login.rs:167-212"
+     ],
+     "why": "handler を読んだ",
+     "doubt": "email を送れば登録の有無と passkey の id が分かる（列挙できる）。意図の確かめが要る",
+     "cells": [
+      "可",
+      "可",
+      "可",
+      "可",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false
+    }
+   ],
+   "cells": [
+    "可",
+    "可",
+    "可",
+    "可",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-008",
+   "obj": "SSO のセッション（sid）",
+   "type": "動作",
+   "verb": "ログインして code を出す",
+   "orig": "login/passkey/verify",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /login/{uid}/passkey/verify",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/login/{uid}/passkey/verify"
+     },
+     "auth": "passkey、cookie（印）",
+     "cond": "passkey の署名が合い、アカウントが止まっておらず、interaction を始めたブラウザのとき。セッションを張って /authorize/resume へ送る",
+     "rel": "自: passkey の持ち主。他: ほかの人の passkey は署名が合わない",
+     "at": [
+      "src/web/login.rs:214-236",
+      "src/web/login.rs:139-165",
+      "src/web/login.rs:316-322"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-009",
+   "obj": "token（access・refresh・ID）",
+   "type": "動作",
+   "verb": "発行する",
+   "orig": "token",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /token",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/token"
+     },
+     "auth": "client 認証（client_secret_basic・private_key_jwt・none）、DPoP（client が dpop_bound なら必須）",
+     "cond": "client が grant を許されていること（allows_grant）。code・refresh token・auth_req_id はその client に出たものだけ。code は redirect_uri と PKCE が合うとき。アカウントが止まっていれば断る",
+     "rel": "自: その client に出た code・refresh token・CIBA の要求",
+     "at": [
+      "src/web/oidc.rs:414-462",
+      "src/grants.rs:171",
+      "src/grants.rs:183-204",
+      "src/grants.rs:331-332",
+      "src/grants.rs:496-497"
+     ],
+     "why": "handler と grant を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "断",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "断",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-010",
+   "obj": "token（access・refresh）",
+   "type": "取得",
+   "verb": "",
+   "orig": "introspect",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /introspect",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/introspect"
+     },
+     "auth": "client 認証（confidential に限る）",
+     "cond": "confidential な client なら、どの client に出た access token でも引ける。無効・不明・失効は active=false だけ返す",
+     "rel": "他: ほかの client に出た token も引ける（client で絞らない）",
+     "at": [
+      "src/web/oidc.rs:508-535",
+      "src/web/oidc.rs:464-470"
+     ],
+     "why": "handler を読んだ",
+     "doubt": "RS が自分宛ての token だけを引けるよう絞るかは決まっていない",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-011",
+   "obj": "支払いの委任（mandate）",
+   "type": "動作",
+   "verb": "使い切る",
+   "orig": "oauth/mandate/consume",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /oauth/mandate/consume",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/oauth/mandate/consume"
+     },
+     "auth": "client 認証（confidential に限る）",
+     "cond": "confidential な client なら呼べる。mandate を 1 度だけ使い切る（CAS）",
+     "rel": "他: mandate の token の宛先の client かは見ない",
+     "at": [
+      "src/web/oidc.rs:538-570"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-012",
+   "obj": "client",
+   "type": "追加",
+   "verb": "",
+   "orig": "oauth/register（DCR）",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /oauth/register",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/oauth/register"
+     },
+     "auth": "Initial Access Token（Bearer、一度きり）",
+     "cond": "管理者が発行した IAT を持つこと。期限内で、使い捨ての IAT は 1 度で消える。IAT の制約（profile・redirect の host など）の内の client だけ作れる。使い捨ての IAT は IP ごとの回数の上限が掛かる",
+     "rel": "呼ぶ時点では client が無いので、誰の列は匿名（IAT を持つ人）とした",
+     "at": [
+      "src/web/oidc.rs:976-1080",
+      "src/web/oidc.rs:1032",
+      "src/web/oidc.rs:1053",
+      "src/web/oidc.rs:1062-1075"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-013",
+   "obj": "token（access・refresh）",
+   "type": "動作",
+   "verb": "失効させる",
+   "orig": "revoke",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /revoke",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/revoke"
+     },
+     "auth": "client 認証（public も可）",
+     "cond": "自分に出た access token・refresh token だけを消す。ほかの client の token や不明な token でも 200 を返して何もしない",
+     "rel": "自: token の client_id が呼んだ client と同じ",
+     "at": [
+      "src/web/oidc.rs:573-608"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "断",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "見えない",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "断",
+    "該当しない"
+   ],
+   "deny": "見えない"
+  },
+  {
+   "id": "A-014",
+   "obj": "SSO のセッション（sid）",
+   "type": "削除",
+   "verb": "",
+   "orig": "end-session（ログアウト）",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /end-session",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/end-session"
+     },
+     "auth": "id_token_hint（無いか確かめに失敗すれば、確かめの画面を出すだけ）",
+     "cond": "hint の署名・iss・aud が合い sub が今のセッションの本人なら、確かめずにセッションを消す。それ以外でセッションがあれば確かめの画面を出す。post_logout_redirect_uri は client の登録と合うときだけ戻す",
+     "rel": "自: セッションの本人。RP の自: id_token_hint の aud が呼んだ client。他: hint の sub が別の人なら確かめの画面を出す",
+     "at": [
+      "src/web/oidc.rs:668-675",
+      "src/web/oidc.rs:693-813"
+     ],
+     "why": "handler と試験（src/web/oidc.rs:1252-1520）を読んだ",
+     "cells": [
+      "該当しない",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "条件つき",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /end-session",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/end-session"
+     },
+     "auth": "id_token_hint、または確かめの画面の form（自分の origin に限る）",
+     "cond": "GET と同じ。confirm を付けた form の POST は、自分の origin から来たものだけ（違えば 403）",
+     "at": [
+      "src/web/oidc.rs:679-691",
+      "src/web/mod.rs:398-405"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "該当しない",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "条件つき",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "該当しない",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "条件つき",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-015",
+   "obj": "認可の要求の預け（par）",
+   "type": "追加",
+   "verb": "",
+   "orig": "par",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /par",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/par"
+     },
+     "auth": "client 認証、DPoP（任意）",
+     "cond": "client 認証が通ること。request_uri を含む要求は断る。request object があれば署名を確かめる。作った request_uri はその client だけが /authorize で使える",
+     "at": [
+      "src/web/oidc.rs:815-880"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-016",
+   "obj": "利用者の claims（userinfo）",
+   "type": "取得",
+   "verb": "",
+   "orig": "userinfo",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /userinfo",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/userinfo"
+     },
+     "auth": "access token（Bearer か DPoP）",
+     "cond": "token の scope で許した claim だけ返す。DPoP に束縛した token は proof が要る",
+     "rel": "RP の他: token を持てば通る（Bearer は持ち手を確かめない）",
+     "at": [
+      "src/web/oidc.rs:882-898",
+      "src/web/mod.rs:764-826"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "可",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /userinfo",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/userinfo"
+     },
+     "auth": "access token（body の access_token も可）",
+     "cond": "GET と同じ",
+     "at": [
+      "src/web/oidc.rs:958-965"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "可",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "可",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-017",
+   "obj": "利用者の profile（me/profile）",
+   "type": "取得",
+   "verb": "",
+   "orig": "",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /me/profile",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/me/profile"
+     },
+     "auth": "access token",
+     "cond": "token の本人の、編集できる claim だけ返す",
+     "rel": "RP の他: token を持てば通る（Bearer は持ち手を確かめない）",
+     "at": [
+      "src/web/oidc.rs:913-925"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "可",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "可",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-018",
+   "obj": "利用者の profile（me/profile）",
+   "type": "更新",
+   "verb": "",
+   "orig": "PUT me/profile・account/profile",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "PUT /me/profile",
+     "route": {
+      "place": "base",
+      "method": "PUT",
+      "path": "/me/profile"
+     },
+     "cells": [
+      "断",
+      "口無し",
+      "口無し",
+      "口無し",
+      "口無し",
+      "可",
+      "該当しない",
+      "該当しない"
+     ],
+     "auth": "access token",
+     "cond": "token の本人の profile を、編集できる claim だけ書き換える（送った欄だけ。検査は登録の画面と同じ）",
+     "at": [
+      "src/web/oidc.rs:927-951",
+      "src/registration.rs:837-860"
+     ],
+     "why": "handler を読んだ",
+     "show": [
+      1,
+      3,
+      5
+     ],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /account/profile",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/account/profile"
+     },
+     "cells": [
+      "断",
+      "条件つき",
+      "口無し",
+      "条件つき",
+      "口無し",
+      "口無し",
+      "該当しない",
+      "該当しない"
+     ],
+     "auth": "cookie（sid、確かめ済み）",
+     "cond": "最近 passkey で本人と確かめたセッションで、自分の origin から来たとき。名前（name）だけを変える",
+     "at": [
+      "src/web/account.rs:494-513",
+      "src/web/account.rs:64-78",
+      "src/web/mod.rs:325-328"
+     ],
+     "why": "handler と試験（src/web/account.rs:634-664）を読んだ",
+     "show": [
+      1,
+      3,
+      5
+     ],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "入口で違う",
+    "口無し",
+    "入口で違う",
+    "口無し",
+    "入口で違う",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-019",
+   "obj": "CIBA の要求（backchannel-authentication）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /backchannel-authentication",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/backchannel-authentication"
+     },
+     "auth": "client 認証",
+     "cond": "client が CIBA の grant を許されていること。private_key_jwt の client は署名した request object が要る。宛先が止まっているか居なければ、居ないのと同じに扱う。client と login_hint ごとの回数の上限",
+     "at": [
+      "src/web/ciba.rs:95-275",
+      "src/web/ciba.rs:196-200",
+      "src/web/ciba.rs:237-240"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-020",
+   "obj": "CIBA の要求（ciba）",
+   "type": "一覧",
+   "verb": "",
+   "orig": "待っている要求",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /ciba",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/ciba"
+     },
+     "cells": [
+      "条件つき",
+      "可",
+      "口無し",
+      "可",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "auth": "cookie（sid）",
+     "cond": "ログインしていなければ、サインインへの案内を出す。自分宛ての待っている要求だけ並べる",
+     "at": [
+      "src/web/ciba.rs:277-364"
+     ],
+     "why": "handler を読んだ",
+     "deny": "断る",
+     "show": [
+      0
+     ],
+     "showDeny": true,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "GET /ciba/pending",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/ciba/pending"
+     },
+     "cells": [
+      "断",
+      "可",
+      "口無し",
+      "可",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "auth": "access token",
+     "cond": "token の本人宛ての要求だけ返す。ついでに期限の切れた要求を片づける",
+     "at": [
+      "src/web/ciba.rs:4-32"
+     ],
+     "why": "handler を読んだ",
+     "deny": "断る",
+     "show": [
+      0
+     ],
+     "showDeny": true,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "入口で違う",
+    "可",
+    "口無し",
+    "可",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "入口で違う"
+  },
+  {
+   "id": "A-021",
+   "obj": "CIBA の要求（ciba/history）",
+   "type": "一覧",
+   "verb": "",
+   "orig": "答えた要求の履歴",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /ciba/history",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/ciba/history"
+     },
+     "auth": "access token",
+     "cond": "token の本人宛ての履歴だけ。ついでに期限切れを片づける",
+     "at": [
+      "src/web/ciba.rs:34-68"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "可",
+      "口無し",
+      "可",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "可",
+    "口無し",
+    "可",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-022",
+   "obj": "端末の通知先（ciba/fcm-tokens）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /ciba/fcm-tokens",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/ciba/fcm-tokens"
+     },
+     "auth": "access token",
+     "cond": "token の本人の通知先として保存する",
+     "at": [
+      "src/web/ciba.rs:70-93"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "可",
+      "口無し",
+      "可",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "可",
+    "口無し",
+    "可",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-023",
+   "obj": "CIBA の承認の challenge（ciba/passkey-options）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /ciba/{auth_req_id}/passkey-options",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/ciba/{auth_req_id}/passkey-options"
+     },
+     "auth": "cookie（sid、自分の origin から）か access token",
+     "cond": "要求の宛先の利用者だけ。名乗りが無ければ 401、cookie で他の origin から来れば 403、宛先が違うか期限切れなら 404",
+     "rel": "自: 要求の宛先（account）が名乗った人",
+     "at": [
+      "src/web/ciba.rs:399-456",
+      "src/web/ciba.rs:366-395"
+     ],
+     "why": "handler と試験（src/web/ciba.rs:641-720）を読んだ",
+     "cells": [
+      "断",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "見えない",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "見えない"
+  },
+  {
+   "id": "A-024",
+   "obj": "CIBA の要求（ciba）",
+   "type": "動作",
+   "verb": "承認する",
+   "orig": "approve",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /ciba/{auth_req_id}/approve",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/ciba/{auth_req_id}/approve"
+     },
+     "auth": "passkey（ログインは要らない）",
+     "cond": "challenge がこの要求のために出たもので、宛先の利用者の passkey の署名が合い、アカウントが止まっておらず、要求が待ちのとき",
+     "rel": "他: ほかの人の passkey は宛先と合わない",
+     "at": [
+      "src/web/ciba.rs:458-539"
+     ],
+     "why": "handler と試験（src/web/ciba.rs:641-662）を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-025",
+   "obj": "CIBA の要求（ciba）",
+   "type": "動作",
+   "verb": "拒否する",
+   "orig": "reject",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /ciba/{auth_req_id}/reject",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/ciba/{auth_req_id}/reject"
+     },
+     "auth": "cookie（sid、自分の origin から）か access token",
+     "cond": "要求の宛先の利用者だけ。期限切れは 409 で拒否として確定させない",
+     "at": [
+      "src/web/ciba.rs:541-575",
+      "src/web/ciba.rs:366-395"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "見えない",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "見えない"
+  },
+  {
+   "id": "A-026",
+   "obj": "登録の申し込み（signup）",
+   "type": "動作",
+   "verb": "確かめのメールを送る",
+   "orig": "signup・signup/email-challenge",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /signup",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/signup"
+     },
+     "auth": "無し",
+     "cond": "登録の画面を出す",
+     "at": [
+      "src/web/register.rs:24-56"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "可",
+      "条件つき",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /signup",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/signup"
+     },
+     "auth": "無し",
+     "cond": "IP とメールアドレスごとの回数の上限の内で、確かめのメールを送る。登録済みのアドレスには、登録済みの知らせか復旧のメールを送る",
+     "at": [
+      "src/web/register.rs:105-147",
+      "src/web/register.rs:58-103"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "可",
+      "条件つき",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /signup/email-challenge",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/signup/email-challenge"
+     },
+     "auth": "無し",
+     "cond": "アプリから。上限は画面と同じ",
+     "at": [
+      "src/web/register.rs:149-176"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "可",
+      "条件つき",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "可",
+    "条件つき",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-027",
+   "obj": "登録の申し込み（signup）",
+   "type": "取得",
+   "verb": "",
+   "orig": "メールの token を確かめる",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /signup/verify",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/signup/verify"
+     },
+     "auth": "メールの token",
+     "cond": "メールのリンクの着地。token が生きていれば passkey を作る画面を出す",
+     "at": [
+      "src/web/register.rs:348-405"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /signup/verify-email",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/signup/verify-email"
+     },
+     "auth": "メールの token",
+     "cond": "アプリから token を確かめる。登録済みなら 409",
+     "at": [
+      "src/web/register.rs:178-200"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-028",
+   "obj": "登録の challenge（signup/passkey/options）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /signup/passkey/options",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/signup/passkey/options"
+     },
+     "auth": "メールの token",
+     "cond": "生きた token を持ち、そのアドレスがまだ登録されていないとき",
+     "at": [
+      "src/web/register.rs:610-710",
+      "src/web/register.rs:586-600"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-029",
+   "obj": "アカウント",
+   "type": "追加",
+   "verb": "",
+   "orig": "signup/passkey/verify（passkey を付けて作る）",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /signup/passkey/verify",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/signup/passkey/verify"
+     },
+     "auth": "メールの token、passkey",
+     "cond": "メールの token と登録の challenge を 1 度ずつ使い、passkey を付けてアカウントを作る",
+     "at": [
+      "src/web/register.rs:712-800"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-030",
+   "obj": "アカウント（account）",
+   "type": "取得",
+   "verb": "",
+   "orig": "アカウントの画面",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /account",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/account"
+     },
+     "auth": "cookie（sid）",
+     "cond": "セッションが無いか、アカウントが止まっていれば、サインインのボタンだけ出す。あれば自分の passkey の一覧と名前を出す",
+     "at": [
+      "src/web/account.rs:94-292",
+      "src/web/account.rs:38-55"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "可",
+      "口無し",
+      "可",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "可",
+    "口無し",
+    "可",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-031",
+   "obj": "サインインの challenge（account/signin/options）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /account/signin/options",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/account/signin/options"
+     },
+     "auth": "無し（cookie（sid）があれば passkey を絞る）",
+     "cond": "誰でも challenge を作れる",
+     "at": [
+      "src/web/account.rs:294-329"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "可",
+      "可",
+      "可",
+      "可",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "可",
+    "可",
+    "可",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-032",
+   "obj": "SSO のセッション（sid）",
+   "type": "追加",
+   "verb": "",
+   "orig": "account/signin/verify（アカウントの画面に入る）",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /account/signin/verify",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/account/signin/verify"
+     },
+     "auth": "passkey",
+     "cond": "passkey の署名が合い、アカウントが止まっていないとき。前のセッションは消して新しく張る",
+     "at": [
+      "src/web/account.rs:331-350",
+      "src/web/login.rs:238-325"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "断",
+      "条件つき",
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "断",
+    "条件つき",
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-033",
+   "obj": "passkey を足す challenge（account/passkeys/options）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /account/passkeys/options",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/account/passkeys/options"
+     },
+     "auth": "cookie（sid、確かめ済み）",
+     "cond": "最近 passkey で確かめたセッションで、passkey が上限の数より少ないとき",
+     "at": [
+      "src/web/account.rs:352-376",
+      "src/web/account.rs:64-78"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "条件つき",
+      "口無し",
+      "条件つき",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "条件つき",
+    "口無し",
+    "条件つき",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-034",
+   "obj": "passkey",
+   "type": "追加",
+   "verb": "",
+   "orig": "account/passkeys/verify",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /account/passkeys/verify",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/account/passkeys/verify"
+     },
+     "auth": "cookie（sid、確かめ済み）、passkey",
+     "cond": "A-033 と同じ。challenge をその人のために出したとき",
+     "at": [
+      "src/web/account.rs:378-443"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "条件つき",
+      "口無し",
+      "条件つき",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "条件つき",
+    "口無し",
+    "条件つき",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-035",
+   "obj": "passkey",
+   "type": "削除",
+   "verb": "",
+   "orig": "account/passkeys/delete（1 つ）",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /account/passkeys/delete",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/account/passkeys/delete"
+     },
+     "auth": "cookie（sid、確かめ済み）",
+     "cond": "最後の 1 つは消せない。復旧したばかりの passkey は消せない。消したら、ほかのセッションと token を失効させる",
+     "at": [
+      "src/web/account.rs:445-485"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "条件つき",
+      "口無し",
+      "条件つき",
+      "口無し",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "条件つき",
+    "口無し",
+    "条件つき",
+    "口無し",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-036",
+   "obj": "復旧の申し込み（recover）",
+   "type": "動作",
+   "verb": "復旧のメールを送る",
+   "orig": "recover",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /recover",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/recover"
+     },
+     "auth": "無し（t があればメールの token）",
+     "cond": "復旧の画面を出す。token があれば passkey を作り直す画面",
+     "at": [
+      "src/web/recover.rs:88-215"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "可",
+      "条件つき",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "API の道",
+     "name": "POST /recover",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/recover"
+     },
+     "auth": "無し",
+     "cond": "回数の上限の内で、登録済みのアドレスに復旧のメールを送る",
+     "at": [
+      "src/web/recover.rs:217-251"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "可",
+      "条件つき",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "可",
+    "条件つき",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-037",
+   "obj": "復旧の challenge（recover/options）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /recover/options",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/recover/options"
+     },
+     "auth": "メールの token",
+     "cond": "復旧の token が生き、アカウントが止まっておらず passkey を持ち、管理者でないとき（管理者は復旧できない）",
+     "at": [
+      "src/web/recover.rs:253-290",
+      "src/web/recover.rs:30-50"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-038",
+   "obj": "passkey",
+   "type": "置換",
+   "verb": "",
+   "orig": "recover/verify（今の passkey を新しい 1 つに替える）",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /recover/verify",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/recover/verify"
+     },
+     "auth": "メールの token、passkey",
+     "cond": "A-037 と同じ。新しい passkey を足し、前の passkey とセッション・token を失効させ、知らせのメールを送る",
+     "at": [
+      "src/web/recover.rs:292-381",
+      "src/web/recover.rs:383-407"
+     ],
+     "why": "handler を読んだ",
+     "doubt": "メールの受け箱を取られると passkey を替えられる（管理者を除く）。受け箱が本人の確かめの要になっている",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-039",
+   "obj": "招待（invites）",
+   "type": "追加",
+   "verb": "",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /invites",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/invites"
+     },
+     "auth": "client 認証（INVITE_CLIENT_IDS の client）",
+     "cond": "confidential で INVITE_CLIENT_IDS に載った client だけ。止まったアカウント宛てには status=disabled を返す",
+     "at": [
+      "src/web/register.rs:407-469",
+      "src/web/register.rs:471-490"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-040",
+   "obj": "招待（invite）",
+   "type": "取得",
+   "verb": "",
+   "orig": "招待のリンクを開く",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /invite",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/invite"
+     },
+     "auth": "招待の token",
+     "cond": "生きた招待の token のとき、passkey を作る画面を出す",
+     "at": [
+      "src/web/register.rs:538-584"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-041",
+   "obj": "アカウント",
+   "type": "動作",
+   "verb": "止める",
+   "orig": "accounts/disable・admin/users/disable",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "POST /accounts/disable",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/accounts/disable"
+     },
+     "cells": [
+      "断",
+      "口無し",
+      "口無し",
+      "口無し",
+      "口無し",
+      "条件つき",
+      "該当しない",
+      "該当しない"
+     ],
+     "auth": "client 認証（INVITE_CLIENT_IDS の client）",
+     "cond": "INVITE_CLIENT_IDS の confidential な client だけ。宛先が管理者なら 409（protected）。止めると、セッションと token を失効させる",
+     "at": [
+      "src/web/register.rs:492-536",
+      "src/web/register.rs:471-490",
+      "src/account_admin.rs:43-60"
+     ],
+     "why": "handler を読んだ",
+     "show": [
+      3,
+      4,
+      5
+     ],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/users/{account_id}/disable",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/users/{account_id}/disable"
+     },
+     "cells": [
+      "断",
+      "口無し",
+      "口無し",
+      "断",
+      "可",
+      "口無し",
+      "該当しない",
+      "該当しない"
+     ],
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。自分は止められない（403）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:373-400",
+      "src/web/admin.rs:383-389"
+     ],
+     "why": "handler を読んだ",
+     "show": [
+      3,
+      4,
+      5
+     ],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "disable-account",
+     "at": [
+      "src/gcp.rs:454"
+     ],
+     "why": "運用者が Firestore の資格情報で打つ。表の誰の列にも当たらない",
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "口無し",
+    "口無し",
+    "入口で違う",
+    "入口で違う",
+    "入口で違う",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-042",
+   "obj": "アカウント",
+   "type": "更新",
+   "verb": "",
+   "orig": "admin/users/enable（止めたのを戻す）",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/users/{account_id}/enable",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/users/{account_id}/enable"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:402-422"
+     ],
+     "why": "handler を読んだ",
+     "doubt": "管理者の自: 止まった管理者はセッションを失うので道が無い（口無し）と見た",
+     "cells": [
+      "断",
+      "口無し",
+      "口無し",
+      "口無し",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false
+    },
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "enable-account",
+     "at": [
+      "src/gcp.rs:492"
+     ],
+     "why": "運用者が打つ",
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "口無し",
+    "口無し",
+    "口無し",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-043",
+   "obj": "アカウント",
+   "type": "削除",
+   "verb": "",
+   "orig": "admin/users/delete",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/users/{account_id}/delete",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/users/{account_id}/delete"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。相手が管理者でなく、止めてあるときだけ消せる",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:456-495"
+     ],
+     "why": "handler と試験（src/web/admin.rs:1358）を読んだ",
+     "cells": [
+      "断",
+      "口無し",
+      "口無し",
+      "断",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "口無し",
+    "口無し",
+    "断",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-044",
+   "obj": "passkey",
+   "type": "削除",
+   "verb": "",
+   "orig": "admin/users/delete-passkeys（全部）",
+   "via": "親",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/users/{account_id}/delete-passkeys",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/users/{account_id}/delete-passkeys"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。自分と管理者の passkey は消せない（409）。アカウントと sub は残る",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:424-454"
+     ],
+     "why": "handler と試験（src/web/admin.rs:1439）を読んだ",
+     "cells": [
+      "断",
+      "口無し",
+      "口無し",
+      "断",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "口無し",
+    "口無し",
+    "断",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-045",
+   "obj": "管理者（admins）",
+   "type": "追加",
+   "verb": "",
+   "orig": "grant-admin",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/users/{account_id}/grant-admin",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/users/{account_id}/grant-admin"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。既に管理者なら何もしない",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:497-522"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "断",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "grant-admin",
+     "at": [
+      "src/gcp.rs:372"
+     ],
+     "why": "運用者が打つ。最初の管理者はこの道で作る",
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "断",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-046",
+   "obj": "管理者（admins）",
+   "type": "削除",
+   "verb": "",
+   "orig": "revoke-admin",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/users/{account_id}/revoke-admin",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/users/{account_id}/revoke-admin"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。最後の管理者は外せない（409）。自分を外すと管理画面の外の完了の画面で終わる",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:524-565",
+      "src/web/admin.rs:552-557"
+     ],
+     "why": "handler と試験（src/web/admin.rs:1308-1345）を読んだ",
+     "cells": [
+      "断",
+      "断",
+      "断",
+      "条件つき",
+      "条件つき",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "revoke-admin",
+     "at": [
+      "src/gcp.rs:421"
+     ],
+     "why": "運用者が打つ",
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "断",
+    "断",
+    "条件つき",
+    "条件つき",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-047",
+   "obj": "管理者（admins）",
+   "type": "取得",
+   "verb": "",
+   "orig": "admin/whoami",
+   "via": "尋ねた人",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/whoami",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/whoami"
+     },
+     "auth": "管理者",
+     "cond": "管理者なら自分の account_id を返す。未ログインは 401（サインインへ送らない）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:51-58",
+      "src/web/admin.rs:15-29"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-048",
+   "obj": "管理画面の表紙（admin）",
+   "type": "取得",
+   "verb": "",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:143-158"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-049",
+   "obj": "アカウント",
+   "type": "一覧",
+   "verb": "",
+   "orig": "admin/users",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/users",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/users"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:162-215"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-050",
+   "obj": "アカウント",
+   "type": "取得",
+   "verb": "",
+   "orig": "admin/users/{account_id}",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/users/{account_id}",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/users/{account_id}"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:217-371"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "断",
+      "断",
+      "可",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "断",
+    "断",
+    "可",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-051",
+   "obj": "監査の記録（audit）",
+   "type": "一覧",
+   "verb": "",
+   "orig": "admin/audit",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/audit",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/audit"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:567-602"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-052",
+   "obj": "client",
+   "type": "一覧",
+   "verb": "",
+   "orig": "admin/clients",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/clients",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/clients"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:604-635"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-053",
+   "obj": "client",
+   "type": "取得",
+   "verb": "",
+   "orig": "admin/clients/{client_id}",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/clients/{client_id}",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/clients/{client_id}"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:637-747"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-054",
+   "obj": "client",
+   "type": "動作",
+   "verb": "失効させる",
+   "orig": "admin/clients/revoke",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/clients/{client_id}/revoke",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/clients/{client_id}/revoke"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:866-886"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "revoke-client",
+     "at": [
+      "src/gcp.rs:325"
+     ],
+     "why": "運用者が打つ",
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-055",
+   "obj": "client",
+   "type": "更新",
+   "verb": "",
+   "orig": "post-logout・initiate-login",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/clients/{client_id}/post-logout",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/clients/{client_id}/post-logout"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。post_logout_redirect_uris を置き換える",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:749-811"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/clients/{client_id}/initiate-login",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/clients/{client_id}/initiate-login"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。initiate_login_uri を置き換える",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:813-864"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-056",
+   "obj": "登録の鍵（Initial Access Token）",
+   "type": "一覧",
+   "verb": "",
+   "orig": "admin/iats",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/iats",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/iats"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:888-961"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-057",
+   "obj": "登録の鍵（Initial Access Token）",
+   "type": "追加",
+   "verb": "",
+   "orig": "admin/iats/new",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/iats/new",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/iats/new"
+     },
+     "auth": "管理者",
+     "cond": "発行の画面を出す",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:985-1020"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/iats/new",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/iats/new"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）。dcrTokens には hash だけを保存する。生の IAT は一度だけ見せる文書（adminIatFlash、5 分で切れる）に置き、その頁（flash）へ送る",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:1022-1138",
+      "src/web/admin.rs:1112-1121"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "mint",
+     "at": [
+      "src/gcp.rs:170"
+     ],
+     "why": "運用者が打つ。profile・TTL・使い回しを引数で決める",
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-058",
+   "obj": "登録の鍵（Initial Access Token）",
+   "type": "動作",
+   "verb": "失効させる",
+   "orig": "admin/iats/revoke",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "POST /admin/iats/{hash}/revoke",
+     "route": {
+      "place": "base",
+      "method": "POST",
+      "path": "/admin/iats/{hash}/revoke"
+     },
+     "auth": "管理者",
+     "cond": "管理者だけ。状態を変える POST は自分の origin から来たものだけ（admin_same_origin）",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
+      "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
+      "src/web/admin.rs:963-983"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-059",
+   "obj": "登録の鍵の生の値（iats/flash）",
+   "type": "動作",
+   "verb": "一度だけ見せる",
+   "orig": "admin/iats/flash",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "管理画面の道",
+     "name": "GET /admin/iats/flash/{flash_id}",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/admin/iats/flash/{flash_id}"
+     },
+     "auth": "管理者",
+     "cond": "管理者で flash_id を知っていること。1 度見せたら消す。GET なので門は掛からない",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "at": [
+      "src/web/admin.rs:1140-1200",
+      "src/web/admin.rs:1158"
+     ],
+     "why": "handler と試験（src/web/admin.rs:1411）を読んだ",
+     "doubt": "発行した管理者に限らず、どの管理者でも flash_id を知れば見られる",
+     "cells": [
+      "断",
+      "該当しない",
+      "断",
+      "該当しない",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "断る",
+     "showDeny": false
+    }
+   ],
+   "cells": [
+    "断",
+    "該当しない",
+    "断",
+    "該当しない",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": "断る"
+  },
+  {
+   "id": "A-060",
+   "obj": "試しの RP（デモ）",
+   "type": "動作",
+   "verb": "ログインを試す",
+   "orig": "/・callback",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "画面の道",
+     "name": "GET /",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/"
+     },
+     "auth": "無し",
+     "cond": "試しの RP（public client）の画面。管理画面とアカウントの画面のサインインの入口も兼ねる",
+     "at": [
+      "src/web/pages.rs:9-58",
+      "src/web/admin.rs:33-35"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "可",
+      "可",
+      "可",
+      "可",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "画面の道",
+     "name": "GET /callback",
+     "route": {
+      "place": "base",
+      "method": "GET",
+      "path": "/callback"
+     },
+     "auth": "無し",
+     "cond": "code を受けて profile を出す画面（中の JS が /token と /me/profile を呼ぶ）",
+     "at": [
+      "src/web/pages.rs:60-120"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "可",
+      "可",
+      "可",
+      "可",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "可",
+    "可",
+    "可",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-061",
+   "obj": "道の送り返し",
+   "type": "動作",
+   "verb": "BASE_PATH へ送る",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "送り返しの道",
+     "name": "GET /（host の直下）",
+     "route": {
+      "place": "top",
+      "method": "GET",
+      "path": "/"
+     },
+     "auth": "無し",
+     "cond": "BASE_PATH が空でないときだけ在る",
+     "at": [
+      "src/web/mod.rs:348-354"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "送り返しの道",
+     "name": "GET {BASE_PATH}/（host の直下）",
+     "route": {
+      "place": "top",
+      "method": "GET",
+      "path": "{BASE_PATH}/"
+     },
+     "auth": "無し",
+     "cond": "BASE_PATH が空でないときだけ在る",
+     "at": [
+      "src/web/mod.rs:355-361"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-062",
+   "obj": "メールのリンク（r）",
+   "type": "動作",
+   "verb": "アプリか画面へ渡す",
+   "orig": "",
+   "via": "直接",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "送り返しの道",
+     "name": "GET /r（host の直下）",
+     "route": {
+      "place": "top",
+      "method": "GET",
+      "path": "/r"
+     },
+     "auth": "無し（token は先の画面へ渡すだけ）",
+     "cond": "メールのリンクの着地。アプリが横取りしなければ画面へ送る",
+     "at": [
+      "src/web/register.rs:322-331"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "可",
+      "可",
+      "可",
+      "可",
+      "可",
+      "該当しない",
+      "該当しない",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "可",
+    "可",
+    "可",
+    "可",
+    "該当しない",
+    "該当しない",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-063",
+   "obj": "アプリの関連づけ（apple-app-site-association）",
+   "type": "取得",
+   "verb": "",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "API の道",
+     "name": "GET /.well-known/apple-app-site-association（host の直下）",
+     "route": {
+      "place": "top",
+      "method": "GET",
+      "path": "/.well-known/apple-app-site-association"
+     },
+     "auth": "無し",
+     "cond": "iOS が読む。LEGACY_HOSTS でも送り返さない",
+     "at": [
+      "src/web/register.rs:333-346"
+     ],
+     "why": "handler を読んだ",
+     "cells": [
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない",
+      "可",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない",
+    "可",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-064",
+   "obj": "FIDO の適合試験の登録（fido/attestation）",
+   "type": "動作",
+   "verb": "試しに登録する",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "試験の道",
+     "name": "POST /fido/attestation/options（host の直下・試験の時だけ）",
+     "route": {
+      "place": "fido",
+      "method": "POST",
+      "path": "/fido/attestation/options"
+     },
+     "auth": "無し",
+     "cond": "FIDO_CONFORMANCE_ENABLED=1 のときだけ道が在る（本番では置かない）",
+     "at": [
+      "src/fido/mod.rs:143",
+      "src/web/mod.rs:212-220"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "試験の道",
+     "name": "POST /fido/attestation/result（host の直下・試験の時だけ）",
+     "route": {
+      "place": "fido",
+      "method": "POST",
+      "path": "/fido/attestation/result"
+     },
+     "auth": "無し",
+     "cond": "同上",
+     "at": [
+      "src/fido/mod.rs:144"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-065",
+   "obj": "FIDO の適合試験の認証（fido/assertion）",
+   "type": "動作",
+   "verb": "試しに認証する",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "試験の道",
+     "name": "POST /fido/assertion/options（host の直下・試験の時だけ）",
+     "route": {
+      "place": "fido",
+      "method": "POST",
+      "path": "/fido/assertion/options"
+     },
+     "auth": "無し",
+     "cond": "FIDO_CONFORMANCE_ENABLED=1 のときだけ道が在る（本番では置かない）",
+     "at": [
+      "src/fido/mod.rs:145",
+      "src/web/mod.rs:212-220"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "試験の道",
+     "name": "POST /fido/assertion/result（host の直下・試験の時だけ）",
+     "route": {
+      "place": "fido",
+      "method": "POST",
+      "path": "/fido/assertion/result"
+     },
+     "auth": "無し",
+     "cond": "同上",
+     "at": [
+      "src/fido/mod.rs:146"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-066",
+   "obj": "FIDO の MDS（fido/mds）",
+   "type": "動作",
+   "verb": "試しの MDS を確かめる・置く",
+   "orig": "",
+   "via": "全体",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "試験の道",
+     "name": "POST /fido/mds/_verify（host の直下・試験の時だけ）",
+     "route": {
+      "place": "fido",
+      "method": "POST",
+      "path": "/fido/mds/_verify"
+     },
+     "auth": "無し",
+     "cond": "FIDO_CONFORMANCE_ENABLED=1 のときだけ道が在る（本番では置かない）",
+     "at": [
+      "src/fido/mod.rs:148",
+      "src/web/mod.rs:212-220"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    },
+    {
+     "kind": "試験の道",
+     "name": "POST /fido/mds/config（host の直下・試験の時だけ）",
+     "route": {
+      "place": "fido",
+      "method": "POST",
+      "path": "/fido/mds/config"
+     },
+     "auth": "無し",
+     "cond": "同上",
+     "at": [
+      "src/fido/mod.rs:149"
+     ],
+     "why": "router を読んだ",
+     "cells": [
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない",
+      "条件つき",
+      "該当しない"
+     ],
+     "show": [],
+     "deny": "",
+     "showDeny": false,
+     "doubt": ""
+    }
+   ],
+   "cells": [
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない",
+    "条件つき",
+    "該当しない"
+   ],
+   "deny": ""
+  },
+  {
+   "id": "A-067",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "migrate-static-clients",
+     "at": [
+      "src/gcp.rs:587"
+     ],
+     "why": "運用者が打つ。コードに在る静的な client を Firestore の clients へ写す",
+     "doubt": ""
+    }
+   ],
+   "obj": "client",
+   "type": "動作",
+   "verb": "静的な client を移す",
+   "orig": "migrate-static-clients",
+   "via": "全体",
+   "note": "運用者が運用の道具（CLI）で打つだけ。権限の列は運用者を持たない"
+  },
+  {
+   "id": "A-068",
+   "mid": "",
+   "status": "",
+   "children": [
+    {
+     "kind": "運用の道具（CLI）",
+     "name": "migrate-credentials",
+     "at": [
+      "src/gcp.rs:643"
+     ],
+     "why": "運用者が打つ。passkey の記録を新しい置き場へ移す",
+     "doubt": ""
+    }
+   ],
+   "obj": "passkey",
+   "type": "動作",
+   "verb": "置き場を移す",
+   "orig": "migrate-credentials",
+   "via": "全体",
+   "note": "運用者が運用の道具（CLI）で打つだけ。権限の列は運用者を持たない"
+  },
+  {
+   "id": "A-069",
+   "obj": "期限の切れた記録",
+   "type": "動作",
+   "verb": "掃除する",
+   "orig": "sweep_expired",
+   "via": "全体",
+   "mid": "",
+   "status": "内部のきっかけで動く",
+   "note": "時間（定期の掃除）と、/ciba/pending・/ciba/history の中で動く",
+   "at": [
+    "src/provider.rs:141-153",
+    "src/web/ciba.rs:10",
+    "src/web/ciba.rs:40"
+   ],
+   "children": []
+  },
+  {
+   "id": "A-070",
+   "obj": "端末への通知（FCM）",
+   "type": "動作",
+   "verb": "送る",
+   "orig": "push",
+   "via": "親",
+   "mid": "",
+   "status": "内部のきっかけで動く",
+   "note": "CIBA の要求（A-019）の中で、宛先の利用者の端末へ送る",
+   "at": [
+    "src/web/ciba.rs:250-262"
+   ],
+   "children": []
+  },
+  {
+   "id": "A-071",
+   "obj": "メール",
+   "type": "動作",
+   "verb": "送る",
+   "orig": "mailer",
+   "via": "親",
+   "mid": "",
+   "status": "内部のきっかけで動く",
+   "note": "登録（A-026）・復旧（A-036・A-038）の中で送る。招待（A-039）はリンクを返すだけでメールは送らない（src/web/register.rs:407-469）",
+   "at": [
+    "src/web/register.rs:58-103",
+    "src/web/recover.rs:217-251",
+    "src/web/recover.rs:367"
+   ],
+   "children": []
+  },
+  {
+   "id": "A-072",
+   "obj": "監査の記録（audit）",
+   "type": "追加",
+   "verb": "",
+   "orig": "audit_log::record",
+   "via": "親",
+   "mid": "",
+   "status": "内部のきっかけで動く",
+   "note": "管理の操作と passkey の削除・アカウントを止める操作の中で書く",
+   "at": [
+    "src/audit_log.rs:21"
+   ],
+   "children": []
+  }
+ ]
+}
