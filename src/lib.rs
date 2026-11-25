@@ -31,6 +31,8 @@ mod dcr_store;
 #[cfg(test)]
 mod diff_tests;
 mod document_store;
+#[cfg(test)]
+mod document_store_contract;
 mod dpop;
 mod error;
 mod es256;
