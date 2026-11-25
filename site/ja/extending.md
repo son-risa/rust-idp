@@ -19,8 +19,8 @@
 | 利用者の出どころ | 自前の登録 → 既存の利用者 DB・SCIM | 口はまだ無い。名簿は `DocumentStore` の `accounts` の集まりにある。登録・無効化・token の発行が、そこを直に読む。id_token などの claim は `Store::find_account` が返す | なし。`find_account` は `Store` の契約の試験に入っていない |
 | 知らせの手段 | Resend → SMTP・SES | `Mailer`（`with_mailer`） | あり。`mailer_contract.rs` |
 | 連携先の形 | OIDC の RP・API の introspection → 既存の Basic 認証のサイトの前に置く forward-auth・SAML | 口はまだ無い。経路は `rust_idp::router` が組む | なし |
-| 認可の型 | grant の種類・確かめの規則 | `GrantHandler`（`with_grant`）・`AuthorizationCheck`（`with_check`）・`ResponseMode`（`with_response_mode`） | なし |
-| client の認証の方式 | private_key_jwt・Basic → mTLS | `ClientAuthMethod`（`with_client_auth`）・`DpopVerifier`（`with_dpop`）。mTLS は、入力の `ClientAuthInput` に client の証明書の欄が無い。入力を広げるところから始める | なし |
+| 認可の型 | grant の種類・確かめの規則 | `GrantHandler`（`with_grant`）・`AuthorizationCheck`（`with_check`）・`ResponseMode`（`with_response_mode`） | あり。`grant_handler_contract.rs`・`authorization_check_contract.rs`・`response_mode_contract.rs` |
+| client の認証の方式 | private_key_jwt・Basic → mTLS | `ClientAuthMethod`（`with_client_auth`）・`DpopVerifier`（`with_dpop`）。mTLS は、入力の `ClientAuthInput` に client の証明書の欄が無い。入力を広げるところから始める | あり。`client_auth_contract.rs`・`dpop_verifier_contract.rs` |
 | 見張り | OpenTelemetry など | 口はまだ無い。rust-idp は `tracing` で記録を出す。ライブラリとして使うなら、組む側が `tracing` の subscriber を選べる。binary は `src/main.rs` で subscriber を決めている | なし |
 | 多テナント | 1 つの process で複数の issuer | 口はまだ無い。1 つの `Provider` は issuer を 1 つだけ持つ | なし |
 

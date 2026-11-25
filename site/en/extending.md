@@ -19,8 +19,8 @@ This page is for developers who want to adapt rust-idp to their own environment.
 | Where users come from | Own sign-up → an existing user DB, SCIM | No extension point yet. The user list is the `accounts` collection in `DocumentStore`. Sign-up, deactivation and token issuance read it directly. Claims for the id_token and similar come from `Store::find_account` | None. `find_account` is not in the `Store` contract tests |
 | How messages are sent | Resend → SMTP, SES | `Mailer` (`with_mailer`) | Yes: `mailer_contract.rs` |
 | What it connects to | OIDC RPs, API introspection → forward-auth in front of an existing site that uses Basic auth, SAML | No extension point yet. `rust_idp::router` builds the routes | None |
-| Authorization types | Grant types, request checks | `GrantHandler` (`with_grant`), `AuthorizationCheck` (`with_check`), `ResponseMode` (`with_response_mode`) | None |
-| Client authentication | private_key_jwt, Basic → mTLS | `ClientAuthMethod` (`with_client_auth`), `DpopVerifier` (`with_dpop`). For mTLS, the input `ClientAuthInput` has no field for the client certificate. Start by extending the input | None |
+| Authorization types | Grant types, request checks | `GrantHandler` (`with_grant`), `AuthorizationCheck` (`with_check`), `ResponseMode` (`with_response_mode`) | Yes: `grant_handler_contract.rs`, `authorization_check_contract.rs`, `response_mode_contract.rs` |
+| Client authentication | private_key_jwt, Basic → mTLS | `ClientAuthMethod` (`with_client_auth`), `DpopVerifier` (`with_dpop`). For mTLS, the input `ClientAuthInput` has no field for the client certificate. Start by extending the input | Yes: `client_auth_contract.rs`, `dpop_verifier_contract.rs` |
 | Observability | OpenTelemetry and others | No extension point yet. rust-idp writes its logs with `tracing`. As a library, your application chooses the `tracing` subscriber. The binary sets its subscriber in `src/main.rs` | None |
 | Multi-tenancy | Several issuers in one process | No extension point yet. One `Provider` has exactly one issuer | None |
 
