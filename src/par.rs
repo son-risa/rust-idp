@@ -2,7 +2,10 @@
 //! クライアントが認可リクエストを事前 POST し request_uri を受け取る。
 //! authorize はその request_uri からパラメータを復元する。FAPI 2.0 で必須。
 
-use crate::firestore::{self, Firestore};
+use crate::firestore;
+use crate::document_store::DocumentStore;
+#[cfg(all(test, feature = "gcp"))]
+use crate::firestore::Firestore;
 use crate::jws::b64url;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,7 +23,7 @@ fn now() -> u64 {
 pub struct RequestUri(pub String);
 
 /// 認可リクエストを保存し request_uri を返す。params は元の urlencoded クエリ。
-pub async fn create(fs: &Firestore, client_id: &str, params: &str) -> Result<RequestUri, String> {
+pub async fn create(fs: &dyn DocumentStore, client_id: &str, params: &str) -> Result<RequestUri, String> {
     let mut buf = [0u8; 32];
     getrandom::fill(&mut buf).expect("OS の乱数源");
     let id = b64url(buf);
@@ -40,7 +43,7 @@ pub async fn create(fs: &Firestore, client_id: &str, params: &str) -> Result<Req
 /// request_uri を読むが削除しない (client_id, params)。期限切れ・不正は None。
 /// 認可完了前は再利用可能とするため /authorize ではこちらを使い、
 /// コード発行時に delete で単回化する（RFC 9126: 完了後の再利用は不可）。
-pub async fn peek(fs: &Firestore, request_uri: &str) -> Result<Option<(String, String)>, String> {
+pub async fn peek(fs: &dyn DocumentStore, request_uri: &str) -> Result<Option<(String, String)>, String> {
     let id = match request_uri.strip_prefix(URN_PREFIX) {
         Some(id) if (20..=100).contains(&id.len()) => id,
         _ => return Ok(None),
@@ -64,7 +67,7 @@ pub async fn peek(fs: &Firestore, request_uri: &str) -> Result<Option<(String, S
 }
 
 /// request_uri を単回消費する（コード発行時に呼ぶ）。並行した完了のうち、削除に勝った 1 つだけが true。
-pub async fn consume(fs: &Firestore, request_uri: &str) -> Result<bool, String> {
+pub async fn consume(fs: &dyn DocumentStore, request_uri: &str) -> Result<bool, String> {
     let Some(id) = request_uri.strip_prefix(URN_PREFIX) else {
         return Ok(false);
     };

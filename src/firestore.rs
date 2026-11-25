@@ -11,6 +11,8 @@
 //! 使い分け、staging での動作確認が本番データに一切触れないようにするための分離。
 
 #[cfg(feature = "gcp")]
+use crate::document_store::DocumentStore;
+#[cfg(feature = "gcp")]
 use base64::Engine;
 use serde_json::{json, Value};
 #[cfg(feature = "gcp")]
@@ -156,57 +158,51 @@ fn http_client() -> reqwest::Client {
     crate::http::builder().timeout(HTTP_TIMEOUT).build().expect("reqwest client")
 }
 
-/// `gcp` の feature 無しの Firestore。値の無い型なので、`Provider` の `firestore` は常に None になり、
-/// これを要る経路（passkey の登録とログイン、PAR、DCR、管理画面など）は今のローカル実行
-/// （FIRESTORE_EMULATOR_HOST 無し）と同じく 503 などで断る。その経路の上に書いた処理を
-/// gcp 無しでも compile するために、呼ばれている method だけを同じ形で持つ。
-#[cfg(not(feature = "gcp"))]
-pub enum Firestore {}
-
-#[cfg(not(feature = "gcp"))]
-#[allow(clippy::unused_async)]
-impl Firestore {
-    pub async fn set_doc(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
-        match *self {}
+/// Firestore の [`DocumentStore`]。各操作は同じ名前の method（REST の 1 往復）をそのまま呼ぶ。
+#[cfg(feature = "gcp")]
+#[async_trait::async_trait]
+impl DocumentStore for Firestore {
+    async fn set_doc(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        Firestore::set_doc(self, col, id, fields).await
     }
-    pub async fn update_field(&self, _: &str, _: &str, _: &str, _: Value) -> Result<(), String> {
-        match *self {}
+    async fn update_field(&self, col: &str, id: &str, field: &str, value: Value) -> Result<(), String> {
+        Firestore::update_field(self, col, id, field, value).await
     }
-    pub async fn update_fields(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
-        match *self {}
+    async fn update_fields(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        Firestore::update_fields(self, col, id, fields).await
     }
-    pub async fn merge_fields(&self, _: &str, _: &str, _: Value, _: &[String]) -> Result<(), String> {
-        match *self {}
+    async fn merge_fields(&self, col: &str, id: &str, fields: Value, remove: &[String]) -> Result<(), String> {
+        Firestore::merge_fields(self, col, id, fields, remove).await
     }
-    pub async fn get_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
-        match *self {}
+    async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        Firestore::get_doc(self, col, id).await
     }
-    pub async fn get_doc_with_update_time(&self, _: &str, _: &str) -> Result<Option<(Value, String)>, String> {
-        match *self {}
+    async fn get_doc_with_update_time(&self, col: &str, id: &str) -> Result<Option<(Value, String)>, String> {
+        Firestore::get_doc_with_update_time(self, col, id).await
     }
-    pub async fn set_doc_if_unchanged(&self, _: &str, _: &str, _: Value, _: &str) -> Result<bool, String> {
-        match *self {}
+    async fn set_doc_if_unchanged(&self, col: &str, id: &str, fields: Value, update_time: &str) -> Result<bool, String> {
+        Firestore::set_doc_if_unchanged(self, col, id, fields, update_time).await
     }
-    pub async fn create_if_absent(&self, _: &str, _: &str, _: Value) -> Result<bool, String> {
-        match *self {}
+    async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String> {
+        Firestore::create_if_absent(self, col, id, fields).await
     }
-    pub async fn delete_doc_if_unchanged(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
-        match *self {}
+    async fn delete_doc_if_unchanged(&self, col: &str, id: &str, update_time: &str) -> Result<bool, String> {
+        Firestore::delete_doc_if_unchanged(self, col, id, update_time).await
     }
-    pub async fn take_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
-        match *self {}
+    async fn take_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        Firestore::take_doc(self, col, id).await
     }
-    pub async fn query_eq(&self, _: &str, _: &str, _: &str) -> Result<Vec<(String, Value)>, String> {
-        match *self {}
+    async fn query_eq(&self, col: &str, field: &str, value: &str) -> Result<Vec<(String, Value)>, String> {
+        Firestore::query_eq(self, col, field, value).await
     }
-    pub async fn list_recent_ordered(&self, _: &str, _: &str, _: u32) -> Result<Vec<(String, Value)>, String> {
-        match *self {}
+    async fn list_recent_ordered(&self, col: &str, order_field: &str, limit: u32) -> Result<Vec<(String, Value)>, String> {
+        Firestore::list_recent_ordered(self, col, order_field, limit).await
     }
-    pub async fn list_collection(&self, _: &str) -> Result<Vec<(String, Value, String)>, String> {
-        match *self {}
+    async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String> {
+        Firestore::list_collection(self, col).await
     }
-    pub async fn delete_doc(&self, _: &str, _: &str) -> Result<(), String> {
-        match *self {}
+    async fn delete_doc(&self, col: &str, id: &str) -> Result<(), String> {
+        Firestore::delete_doc(self, col, id).await
     }
 }
 

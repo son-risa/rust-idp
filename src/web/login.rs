@@ -169,7 +169,7 @@ pub(super) async fn login_passkey_options(
     Path(uid): Path<String>,
     Json(req): Json<LoginPkOptionsReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -217,7 +217,7 @@ pub(super) async fn login_passkey_verify(
     Path(uid): Path<String>,
     Json(req): Json<AuthVerifyReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -237,7 +237,7 @@ pub(super) async fn login_passkey_verify(
 /// 凍結したアカウントと accountId の無いアカウントは断る。誤りは画面が訳す固定文（SERVER_ERRORS）。
 pub(super) async fn verify_assertion(
     p: &Provider,
-    fs: &crate::firestore::Firestore,
+    fs: &dyn crate::document_store::DocumentStore,
     req: &AuthVerifyReq,
     expected_uid: &str,
 ) -> Result<crate::registration::Account, Response> {

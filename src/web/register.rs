@@ -57,7 +57,7 @@ pub(super) struct RegisterForm {
 /// `lang` はブラウザのフォームから来たときだけ Some。ネイティブの JSON API は None（両言語で送る）。
 pub(super) async fn issue_register_email(
     p: &Provider,
-    fs: &crate::firestore::Firestore,
+    fs: &dyn crate::document_store::DocumentStore,
     email: &str,
     ip: &str,
     lang: Option<Lang>,
@@ -109,7 +109,7 @@ pub(super) async fn register_submit(
     Form(form): Form<RegisterForm>,
 ) -> Response {
     let email = form.email.trim().to_lowercase();
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return plain_error(&localize("[[Something went wrong. Please try again.]]", Lang::from_headers(&headers))),
     };
@@ -152,7 +152,7 @@ pub(super) async fn register_email_challenge(
     Json(req): Json<EmailChallengeReq>,
 ) -> Response {
     let email = req.email.trim().to_lowercase();
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -179,7 +179,7 @@ pub(super) async fn register_verify_email(
     State(p): State<Arc<Provider>>,
     Json(req): Json<VerifyEmailReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -360,7 +360,7 @@ async fn link_landing(p: &Provider, jar: &CookieJar, lang: Lang, token: &str, we
     if token.is_empty() {
         return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
     }
-    let target = match &p.firestore {
+    let target = match p.docs.as_deref() {
         Some(fs) => crate::registration::peek_email_challenge(fs, token).await.unwrap_or_else(|e| {
             tracing::warn!("peek_email_challenge: {e}");
             None
@@ -409,7 +409,7 @@ pub(super) async fn invite_create(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -494,7 +494,7 @@ pub(super) async fn account_disable(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -542,7 +542,7 @@ pub(super) async fn invite_page(
     Query(q): Query<MagicQuery>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => {
             return (
@@ -583,7 +583,7 @@ pub(super) async fn invite_page(
 
 /// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
 /// 登録の後に残りの token で、通知も失効も無しに passkey を足せないようにする。
-async fn refuse_token_for_registered(fs: &crate::firestore::Firestore, token: &str) -> Option<Response> {
+async fn refuse_token_for_registered(fs: &dyn crate::document_store::DocumentStore, token: &str) -> Option<Response> {
     let email = match crate::registration::peek_email_challenge(fs, token).await {
         Ok(Some(email)) => email,
         Ok(None) => return None,
@@ -611,7 +611,7 @@ pub(super) async fn register_passkey_options(
     State(p): State<Arc<Provider>>,
     Json(req): Json<RegPkOptionsReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -714,7 +714,7 @@ pub(super) async fn register_passkey_verify(
     jar: CookieJar,
     Json(req): Json<RegVerifyReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -940,7 +940,7 @@ mod invite_tests {
         assert!(html.contains(&format!("AFTER=\"{return_to}\"")), "戻り先が焼き込まれる");
 
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         assert!(crate::registration::has_passkey(fs, "new@example.com").await.unwrap());
         let cred = crate::registration::get_account(fs, "new@example.com").await.unwrap().unwrap();
         let claims = p.store.find_account(&cred.account_id).await.claims;
@@ -970,7 +970,7 @@ mod invite_tests {
         let first = token_of(body_json(first).await["url"].as_str().unwrap());
         let second = invite(&p, basic("amate", "s3cret"), "a@example.com", &rt).await;
         let second = token_of(body_json(second).await["url"].as_str().unwrap());
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let second_opts = body_json(
             register_passkey_options(
                 State(p.clone()),
@@ -1049,7 +1049,7 @@ mod invite_tests {
         let resp = disable(&p, basic("amate", "s3cret"), " A@Example.com").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["status"], "disabled");
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         assert!(crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
         let audit = fs.query_eq("auditLog", "action", "disable_account").await.unwrap();
         assert_eq!(audit.len(), 1);
@@ -1072,7 +1072,7 @@ mod invite_tests {
         let first = invite(&p, basic("amate", "s3cret"), "boss@example.com", &rt).await;
         let token = token_of(body_json(first).await["url"].as_str().unwrap());
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let account_id = crate::registration::get_account(fs, "boss@example.com").await.unwrap().unwrap().account_id;
         crate::admin_store::grant_admin(fs, &account_id, "cli").await.unwrap();
 
@@ -1106,7 +1106,7 @@ mod invite_tests {
                 .await;
         assert_eq!(public.status(), StatusCode::FORBIDDEN);
         assert_eq!(disable(&p, basic("amate", "s3cret"), "not-an-email").await.status(), StatusCode::BAD_REQUEST);
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         assert!(!crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
     }
 
@@ -1130,7 +1130,7 @@ mod invite_tests {
     #[tokio::test]
     async fn ordinary_signup_token_is_not_an_invite() {
         let p = provider(&["amate"]).await;
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let token = crate::registration::create_email_challenge(fs, "a@example.com")
             .await
             .unwrap();
@@ -1141,7 +1141,7 @@ mod invite_tests {
     }
 
     async fn claims_of(p: &Arc<Provider>, email: &str) -> HashMap<String, serde_json::Value> {
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let cred = crate::registration::get_account(fs, email).await.unwrap().unwrap();
         p.store.find_account(&cred.account_id).await.claims
     }
@@ -1160,7 +1160,7 @@ mod invite_tests {
     #[tokio::test]
     async fn ordinary_signup_takes_the_name_optionally() {
         let p = provider(&[]).await;
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let without = crate::registration::create_email_challenge(fs, "plain@example.com").await.unwrap();
         assert_eq!(register_named(&p, &without, None).await, StatusCode::CREATED, "fido2demo のように氏名を送らない登録は今までどおり");
         assert!(!claims_of(&p, "plain@example.com").await.contains_key("name"));
@@ -1172,7 +1172,7 @@ mod invite_tests {
     #[tokio::test]
     async fn a_name_that_is_too_long_or_has_control_characters_is_refused() {
         let p = provider(&[]).await;
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         for bad in [
             "あ".repeat(81),
             "a\nb".to_string(),

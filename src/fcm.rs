@@ -2,7 +2,10 @@
 //! token は fcmTokens/{account_id} に単一保存（シングルデバイス前提。複数端末では
 //! 最後に登録した token だけが生存する）。送信は metadata トークンで v1 を直叩き。
 
-use crate::firestore::{self, Firestore};
+use crate::document_store::DocumentStore;
+use crate::firestore;
+#[cfg(feature = "gcp")]
+use crate::firestore::Firestore;
 use serde_json::json;
 #[cfg(feature = "gcp")]
 use serde_json::Value;
@@ -14,7 +17,7 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-pub async fn save_token(fs: &Firestore, account_id: &str, token: &str, platform: &str) -> Result<(), String> {
+pub async fn save_token(fs: &dyn DocumentStore, account_id: &str, token: &str, platform: &str) -> Result<(), String> {
     fs.set_doc(
         COL,
         account_id,
@@ -28,7 +31,7 @@ pub async fn save_token(fs: &Firestore, account_id: &str, token: &str, platform:
 }
 
 #[cfg(feature = "gcp")]
-async fn get_token(fs: &Firestore, account_id: &str) -> Result<Option<String>, String> {
+async fn get_token(fs: &dyn DocumentStore, account_id: &str) -> Result<Option<String>, String> {
     match fs.get_doc(COL, account_id).await? {
         Some(f) => Ok(firestore::field_str(&f, "token").map(|s| s.to_string())),
         None => Ok(None),

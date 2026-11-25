@@ -76,7 +76,7 @@ pub(super) async fn fcm_token_register(
         Ok(at) => at,
         Err(r) => return r,
     };
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -97,7 +97,7 @@ pub(super) async fn backchannel_auth(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -251,7 +251,9 @@ pub(super) async fn backchannel_auth(
             // token 未登録/送信失敗でも Web 承認は可能なのでベストエフォート。
             // fcm::save_token は at.account_id（UUID）で保存するため、宛先解決も account_id で行う。
             #[cfg(feature = "gcp")]
-            let _ = crate::fcm::send_ciba_request(fs, &account_id, &client.client_id, &scope, &binding, id.as_str(), authorization_details.as_deref()).await;
+            if let Some(fcm) = &p.fcm {
+                let _ = crate::fcm::send_ciba_request(fcm, &account_id, &client.client_id, &scope, &binding, id.as_str(), authorization_details.as_deref()).await;
+            }
             (
                 [(header::CACHE_CONTROL, "no-store")],
                 Json(serde_json::json!({ "auth_req_id": id.0, "expires_in": 300, "interval": 2 })),
@@ -402,7 +404,7 @@ pub(super) async fn ciba_approve_options(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -460,7 +462,7 @@ pub(super) async fn ciba_approve(
     Path(auth_req_id): Path<String>,
     Json(req): Json<AuthVerifyReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -598,7 +600,7 @@ mod tests {
             sign_count: 0,
             aaguid: String::new(),
         };
-        crate::registration::save_credential(&fs, EMAIL, ACCOUNT, &reg).await.unwrap();
+        crate::registration::save_credential(&*fs, EMAIL, ACCOUNT, &reg).await.unwrap();
         let ciba = Arc::new(MemoryCibaStore::default());
         let id = ciba.create("rp", ACCOUNT, "openid", "pay 100", None).await.unwrap();
         let p = Provider::new("https://idp.example").with_firestore(fs).with_ciba(ciba.clone());
@@ -615,7 +617,7 @@ mod tests {
         challenge_for: &str,
         signer: &SigningKey,
     ) -> StatusCode {
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let challenge =
             crate::registration::create_webauthn_challenge(fs, EMAIL, ChallengeKind::CibaApprove, challenge_for, "")
                 .await

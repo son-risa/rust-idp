@@ -6,6 +6,8 @@ use crate::ciba::{CibaRateLimiter, CibaStore, MemoryCibaStore};
 use crate::client_auth::*;
 use crate::dpop::{DpopVerifier, Es256Dpop};
 use crate::error::OAuthError;
+use crate::document_store::DocumentStore;
+#[cfg(feature = "gcp")]
 use crate::firestore::Firestore;
 use crate::grants::*;
 use crate::jws::{Es256Signer, JwsSigner};
@@ -26,8 +28,12 @@ pub struct Provider {
     pub(crate) signer: Arc<dyn JwsSigner>,
     /// 追加の署名鍵（RS256 等）。jwks 公開と alg 選択に使う。
     pub(crate) extra_signers: Vec<Arc<dyn JwsSigner>>,
-    /// メール確認登録用（Cloud Run 上でのみ Some）。gcp の feature 無しでは常に None。
-    pub(crate) firestore: Option<Arc<Firestore>>,
+    /// パスキーの登録とログイン・復旧・管理画面・PAR・DCR・CIBA の承認などの保存先。
+    /// None ならそれらの経路は 503 などで断る（既定）。本番（Cloud Run）は Firestore。
+    pub(crate) docs: Option<Arc<dyn DocumentStore>>,
+    /// FCM の push の送り先（project とアクセストークン）。本番の Firestore と同じもの。
+    #[cfg(feature = "gcp")]
+    pub(crate) fcm: Option<Arc<Firestore>>,
     /// CIBA バックチャネル要求の永続化。既定は In-memory、本番は Firestore 実装を注入する。
     pub(crate) ciba: Arc<dyn CibaStore>,
     /// CIBA の (client_id, account) ごとレート制限。push スパム抑止のバックストップ。
@@ -79,7 +85,9 @@ impl Provider {
             store: Arc::new(MemoryStore::default()),
             signer: Arc::new(Es256Signer::generate()),
             extra_signers: Vec::new(),
-            firestore: None,
+            docs: None,
+            #[cfg(feature = "gcp")]
+            fcm: None,
             mailer: Arc::new(LogMailer),
             ciba: Arc::new(MemoryCibaStore::default()),
             ciba_rate: Arc::new(CibaRateLimiter::default()),
@@ -163,8 +171,8 @@ impl Provider {
         if let Some(c) = self.clients.get(id) {
             return Some(c.clone());
         }
-        let fs = self.firestore.as_ref()?;
-        crate::dcr_store::load_client(fs, id).await
+        let docs = self.docs.as_deref()?;
+        crate::dcr_store::load_client(docs, id).await
     }
 
     pub fn with_base_path(mut self, base_path: impl Into<String>) -> Self {
@@ -176,7 +184,16 @@ impl Provider {
     pub(crate) fn with_firestore(mut self, fs: Arc<Firestore>) -> Self {
         // JAR jti もインスタンス跨ぎで単回化する（DPoP / client_assertion と同様）。
         self.jar_jti = crate::nonce::NonceStore::firestore(fs.clone());
-        self.firestore = Some(fs);
+        self.docs = Some(fs.clone());
+        self.fcm = Some(fs);
+        self
+    }
+
+    /// パスキーの登録とログイン・復旧・管理画面・PAR・DCR・CIBA の承認などの保存先を差し込む。
+    /// 差し込まなければ、それらの経路は 503 などで断る。1 つの process で試すなら
+    /// [`MemoryDocumentStore`](crate::MemoryDocumentStore)。
+    pub fn with_document_store(mut self, docs: Arc<dyn DocumentStore>) -> Self {
+        self.docs = Some(docs);
         self
     }
 

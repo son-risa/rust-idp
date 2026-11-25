@@ -29,6 +29,7 @@ mod dcr;
 mod dcr_store;
 #[cfg(test)]
 mod diff_tests;
+mod document_store;
 mod dpop;
 mod error;
 mod es256;
@@ -71,6 +72,7 @@ pub use ciba::{AuthReqId, BackchannelAuthRequest, CibaHistoryEntry, CibaStatus, 
 pub use client_auth::{ClientAuthInput, ClientAuthMethod};
 pub use context::AddressedRequest;
 pub use dcr::hash_token;
+pub use document_store::{DocumentStore, MemoryDocumentStore};
 pub use dpop::{DpopVerifier, Es256Dpop};
 pub use error::OAuthError;
 pub use grants::GrantHandler;

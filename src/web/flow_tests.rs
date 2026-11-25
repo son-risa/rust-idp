@@ -128,7 +128,7 @@ async fn body_text(resp: Response) -> String {
 /// email 確認は registration:: を直接叩き、passkey 登録は実 HTTP ハンドラを通す。
 /// 戻り値: (SigningKey, credential_id, account_id)。
 async fn register_test_account(p: &Arc<Provider>, email: &str) -> (SigningKey, Vec<u8>, String) {
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email_token = crate::registration::create_email_challenge(fs, email).await.unwrap();
 
     let opts_req: register::RegPkOptionsReq =
@@ -287,7 +287,7 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
 #[tokio::test]
 async fn register_confidential_secret_returns_raw_secret_once() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
 
     let constraints = crate::dcr::IatConstraints {
         allowed_redirect_hosts: vec!["rp.example.com".into()],
@@ -332,7 +332,7 @@ async fn disabled_account_cannot_login() {
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key, _cred_id, _account_id) = register_test_account(&p, &email).await;
 
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let out = crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
     assert_matches!(out, crate::account_admin::DisableOutcome::Disabled { .. });
 
@@ -374,7 +374,7 @@ async fn admin_mint_iat_flash_is_shown_once() {
     let p = test_provider().await;
     let email = format!("admin-{}@example.com", uuid::Uuid::new_v4());
     let (_key, _cred_id, account_id) = register_test_account(&p, &email).await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     crate::admin_store::grant_admin(fs, &account_id, "test").await.unwrap();
 
     let sid = uuid::Uuid::new_v4().to_string();
@@ -461,7 +461,7 @@ async fn reregistration_reuses_existing_account_id() {
 
     // 管理者が passkey だけを消した後に、同じ email で作り直す。account_id は変わってはならない
     // （変わると、過去に発行済みの sub を持つ他システムとの紐付けが切れる）。
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     crate::registration::remove_all_credentials(fs, &email).await.unwrap();
     let email_token = crate::registration::create_email_challenge(fs, &email).await.unwrap();
     let opts_req: register::RegPkOptionsReq =
@@ -478,7 +478,7 @@ async fn reregistration_reuses_existing_account_id() {
 async fn leftover_signup_token_is_refused_once_registered() {
     let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     // 確認のメールを 2 通出し、1 通目で登録した後に残りの 1 通を使う。
     let leftover = crate::registration::create_email_challenge(fs, &email).await.unwrap();
     register_test_account(&p, &email).await;
@@ -508,7 +508,7 @@ async fn sign_count_update_preserves_account_id() {
     login_with_email(&p, &email, &key, 1).await;
     login_with_email(&p, &email, &key, 2).await;
 
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let account = crate::registration::get_account(fs, &email).await.unwrap().unwrap();
     assert_eq!(account.account_id, account_id, "signCount 更新のたびに accountId が消えていないこと");
     let cred = crate::registration::sole_credential(fs, &email).await.unwrap();
@@ -583,7 +583,7 @@ async fn disabled_account_cannot_approve_ciba() {
     let body = body_json(ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(form)).await).await;
     let auth_req_id = body["auth_req_id"].as_str().unwrap().to_string();
 
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
 
     let (h, jar) = ciba_page_of(&p, &account_id).await;
@@ -655,7 +655,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
     assert_eq!(by_handle.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
 
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     crate::account_admin::disable_account(fs, "test", &victim).await.unwrap();
     let (_uid, frozen) = email_login_response(&p, &victim, &attacker, 0).await;
     assert_eq!(frozen.status(), StatusCode::UNAUTHORIZED, "署名が通らないうちは凍結を明かさない");
@@ -688,7 +688,7 @@ async fn add_passkey(p: &Arc<Provider>, email: &str, account_id: &str, cred_id: 
         sign_count: 0,
         aaguid: String::new(),
     };
-    crate::registration::save_credential(p.firestore.as_ref().unwrap(), email, account_id, &outcome).await.unwrap();
+    crate::registration::save_credential(p.docs.as_deref().unwrap(), email, account_id, &outcome).await.unwrap();
     key
 }
 
@@ -726,7 +726,7 @@ async fn another_accounts_passkey_id_is_not_accepted() {
     let (_, _, victim_id) = register_test_account(&p, &victim).await;
     let victim_key = add_passkey(&p, &victim, &victim_id, b"victim-second").await;
     let me = format!("me-{}@example.com", uuid::Uuid::new_v4());
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let my_id = uuid::Uuid::new_v4().to_string();
     let outcome = crate::webauthn::RegOutcome { credential_id: "mine".into(), pub_x: "x".into(), pub_y: "y".into(), sign_count: 0, aaguid: String::new() };
     crate::registration::save_credential(fs, &me, &my_id, &outcome).await.unwrap();
@@ -742,7 +742,7 @@ async fn deleting_an_account_removes_its_passkeys() {
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, cred1, account_id) = register_test_account(&p, &email).await;
     add_passkey(&p, &email, &account_id, b"second-credential").await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     crate::account_admin::disable_account(fs, "cli", &email).await.unwrap();
     crate::account_admin::delete_account(fs, "cli", &email).await.unwrap();
     for id in [crate::webauthn::b64e(&cred1), crate::webauthn::b64e(b"second-credential")] {
@@ -863,7 +863,7 @@ async fn a_passkey_added_on_the_account_page_signs_in() {
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id.as_deref(), Some(account_id.as_str()));
 
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let audit = fs.query_eq("auditLog", "action", "add_passkey").await.unwrap();
     assert_eq!(audit.len(), 1);
 
@@ -876,7 +876,7 @@ async fn a_passkey_added_on_the_account_page_signs_in() {
 #[tokio::test]
 async fn registration_signs_the_user_in() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let token = crate::registration::create_email_challenge(fs, &email).await.unwrap();
     let opts_req: register::RegPkOptionsReq = serde_json::from_value(json!({ "token": token })).unwrap();
@@ -924,7 +924,7 @@ async fn confirmation_with_another_accounts_passkey_fails() {
     let me = format!("me-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, my_id) = register_test_account(&p, &me).await;
     let other = format!("other-{}@example.com", uuid::Uuid::new_v4());
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let other_id = uuid::Uuid::new_v4().to_string();
     let other_key = SigningKey::generate();
     let (x, y) = ec_xy(&other_key);
@@ -974,7 +974,7 @@ async fn removing_passkeys_on_the_account_page() {
     assert_eq!((s, b.as_str()), (StatusCode::CONFLICT, "last passkey"));
 
     // 前の版が読む古いフィールドは、残った passkey を指す。
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let f = fs.get_doc("accounts", &email).await.unwrap().unwrap();
     assert_eq!(crate::firestore::field_str(&f, "credentialId"), Some(crate::webauthn::b64e(b"second").as_str()));
 }
@@ -983,7 +983,7 @@ async fn removing_passkeys_on_the_account_page() {
 #[tokio::test]
 async fn signup_and_account_challenges_are_not_interchangeable() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, account_id) = register_test_account(&p, &email).await;
     let jar = session_jar(&p, &account_id, now()).await;
@@ -1015,7 +1015,7 @@ async fn signup_and_account_challenges_are_not_interchangeable() {
 #[tokio::test]
 async fn admin_removes_passkeys_only_and_the_user_registers_again_as_the_same_person() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key1, cred1, account_id) = register_test_account(&p, &email).await;
     add_passkey(&p, &email, &account_id, b"second").await;
@@ -1039,7 +1039,7 @@ async fn admin_removes_passkeys_only_and_the_user_registers_again_as_the_same_pe
 #[tokio::test]
 async fn removing_two_passkeys_at_once_leaves_one() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, cred1, account_id) = register_test_account(&p, &email).await;
     add_passkey(&p, &email, &account_id, b"second").await;
@@ -1063,7 +1063,7 @@ async fn removing_two_passkeys_at_once_leaves_one() {
 #[tokio::test]
 async fn a_stale_account_lock_is_taken_over() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, account_id) = register_test_account(&p, &email).await;
     let lock = |t: u64| json!({ "expiresAt": crate::firestore::ts(&crate::firestore::rfc3339(t)) });
@@ -1079,7 +1079,7 @@ async fn a_stale_account_lock_is_taken_over() {
 #[tokio::test]
 async fn a_dangling_mirror_is_repaired_on_the_next_removal() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, cred1, _) = register_test_account(&p, &email).await;
     fs.update_fields("accounts", &email, json!({ "credentialId": crate::firestore::s("gone") })).await.unwrap();
@@ -1093,7 +1093,7 @@ async fn a_dangling_mirror_is_repaired_on_the_next_removal() {
 #[tokio::test]
 async fn an_add_that_lands_after_the_admin_removed_all_passkeys_is_discarded() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, account_id) = register_test_account(&p, &email).await;
     let jar = session_jar(&p, &account_id, now()).await;
@@ -1166,7 +1166,7 @@ async fn recover_add(p: &Arc<Provider>, token: &str, jar: CookieJar, cred_id: &[
 #[tokio::test]
 async fn recovery_adds_a_passkey_keeps_the_others_and_signs_out_everywhere_else() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (old_key, _, account_id) = register_test_account(&p, &email).await;
     let elsewhere = session_jar(&p, &account_id, now()).await;
@@ -1194,7 +1194,7 @@ async fn recovery_adds_a_passkey_keeps_the_others_and_signs_out_everywhere_else(
 #[tokio::test]
 async fn recovery_is_not_offered_to_admins_or_disabled_accounts() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let admin = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, admin_id) = register_test_account(&p, &admin).await;
     crate::admin_store::grant_admin(fs, &admin_id, "test").await.unwrap();
@@ -1215,7 +1215,7 @@ async fn recovery_is_not_offered_to_admins_or_disabled_accounts() {
 #[tokio::test]
 async fn recovery_and_signup_tokens_are_not_interchangeable() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let id = uuid::Uuid::new_v4().to_string();
     add_passkey(&p, &email, &id, b"some-credential").await;
@@ -1235,7 +1235,7 @@ async fn recovery_and_signup_tokens_are_not_interchangeable() {
 #[tokio::test]
 async fn signing_up_again_sends_a_recovery_link_only_when_recoverable() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let recovery_tokens = || async {
         fs.list_collection("emailChallenges")
             .await
@@ -1260,7 +1260,7 @@ async fn signing_up_again_sends_a_recovery_link_only_when_recoverable() {
 #[tokio::test]
 async fn passkeys_from_before_a_recovery_cannot_be_removed_for_a_day() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     register_test_account(&p, &email).await;
     let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
@@ -1277,7 +1277,7 @@ async fn passkeys_from_before_a_recovery_cannot_be_removed_for_a_day() {
 #[tokio::test]
 async fn a_failed_recovery_attempt_does_not_use_up_the_link() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     register_test_account(&p, &email).await;
     let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
@@ -1303,7 +1303,7 @@ async fn a_failed_recovery_attempt_does_not_use_up_the_link() {
 #[tokio::test]
 async fn recovery_for_an_account_without_passkeys_points_to_sign_up() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     register_test_account(&p, &email).await;
     let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
@@ -1315,7 +1315,7 @@ async fn recovery_for_an_account_without_passkeys_points_to_sign_up() {
 #[tokio::test]
 async fn the_recovery_page_names_the_account_and_the_request_page_does_not_tell_who_is_registered() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     register_test_account(&p, &email).await;
     let token = crate::registration::create_recovery_challenge(fs, &email).await.unwrap();
@@ -1364,7 +1364,7 @@ async fn sign_in_started_here(p: &Arc<Provider>, client_id: &str) -> (String, Co
 
 /// /recover のフォームから送り、届いた復旧の token を返す。
 async fn send_recovery_from(p: &Arc<Provider>, email: &str, uid: &str, jar: CookieJar) -> String {
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let mut h = HeaderMap::new();
     h.insert("x-forwarded-for", format!("198.51.100.{}", uuid::Uuid::new_v4().as_bytes()[0]).parse().unwrap());
     let form: recover::RecoverForm = serde_json::from_value(json!({ "email": email, "uid": uid })).unwrap();
@@ -1383,7 +1383,7 @@ async fn send_recovery_from(p: &Arc<Provider>, email: &str, uid: &str, jar: Cook
 #[tokio::test]
 async fn recovery_from_the_sign_in_screen_continues_that_sign_in_in_the_same_browser() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (_, _, account_id) = register_test_account(&p, &email).await;
     let (uid, jar) = sign_in_started_here(&p, "rp-entry").await;
@@ -1455,7 +1455,7 @@ async fn recovery_in_another_browser_offers_the_apps_entry_instead() {
 #[tokio::test]
 async fn a_sign_in_started_in_another_browser_is_not_carried_by_the_email() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     register_test_account(&p, &email).await;
     // 他人の uid を持ち込んでも、その interaction を始めたブラウザでなければ token に残らない。
@@ -1467,7 +1467,7 @@ async fn a_sign_in_started_in_another_browser_is_not_carried_by_the_email() {
 #[tokio::test]
 async fn signing_up_from_the_sign_in_screen_continues_that_sign_in() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap();
+    let fs = p.docs.as_deref().unwrap();
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (uid, jar) = sign_in_started_here(&p, "rp-entry").await;
     let from = super::came_from(&p, &jar, &uid).await;
@@ -1492,7 +1492,7 @@ async fn signing_up_from_the_sign_in_screen_continues_that_sign_in() {
 #[tokio::test]
 async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_account() {
     let p = test_provider().await;
-    let fs = p.firestore.as_ref().unwrap().clone();
+    let fs = p.docs.clone().unwrap();
     let me = format!("me-{}@example.com", uuid::Uuid::new_v4());
     // & がエスケープされることを確かめるために入れる
     let other = format!("other&{}@example.com", uuid::Uuid::new_v4());
@@ -1502,7 +1502,7 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
         let p = p.clone();
         let fs = fs.clone();
         async move {
-            let t = crate::registration::create_recovery_challenge(&fs, &email).await.unwrap();
+            let t = crate::registration::create_recovery_challenge(&*fs, &email).await.unwrap();
             let q = Query(serde_json::from_value(json!({ "t": t })).unwrap());
             body_text(recover::recover_page(State(p), HeaderMap::new(), jar, q).await).await
         }
@@ -1517,7 +1517,7 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
 
     // 宛先に置換の印を書かれても、ほかの置換に展開されない
     let newcomer = format!("__TOKEN__{}@example.com", uuid::Uuid::new_v4());
-    let signup = crate::registration::create_email_challenge(&fs, &newcomer).await.unwrap();
+    let signup = crate::registration::create_email_challenge(&*fs, &newcomer).await.unwrap();
     let verify = |jar: CookieJar| {
         let q = Query(serde_json::from_value(json!({ "token": signup.clone() })).unwrap());
         register::verify_form(State(p.clone()), HeaderMap::new(), jar, q)
@@ -1535,7 +1535,7 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
     assert!(page.contains("Switch accounts?") && page.contains(r#"<div id="main" hidden>"#), "/r: {page}");
 
     let invited = format!("invited-{}@example.com", uuid::Uuid::new_v4());
-    let t = crate::registration::create_invite_challenge(&fs, &invited, "https://rp.example.com/after").await.unwrap();
+    let t = crate::registration::create_invite_challenge(&*fs, &invited, "https://rp.example.com/after").await.unwrap();
     let q = Query(serde_json::from_value(json!({ "t": t })).unwrap());
     let page = body_text(register::invite_page(State(p.clone()), HeaderMap::new(), session_jar(&p, &my_id, 0).await, q).await).await;
     assert!(page.contains("Switch accounts?") && page.contains(r#"<div id="main" hidden>"#), "invite: {page}");

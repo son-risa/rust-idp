@@ -111,7 +111,7 @@ fn requested_client_id(i: &crate::model::Interaction) -> String {
 /// メールのリンクで passkey を作ると、このブラウザのセッションはリンクのアカウントに替わる。
 /// 攻撃者が自分のアカウントのリンクを踏ませると、被害者は気づかずに攻撃者として RP に入る（ログイン CSRF）。
 async fn signed_in_as_other(p: &Provider, jar: &CookieJar, target_email: &str) -> Option<String> {
-    let fs = p.firestore.as_ref()?;
+    let fs = p.docs.as_deref()?;
     let session = p.store.get_session(jar.get(SID_COOKIE)?.value()).await?;
     let email = match crate::registration::find_email_by_account_id(fs, &session.account_id).await {
         Ok(e) => e?,

@@ -35,7 +35,7 @@ impl Me {
     }
 }
 
-async fn me(p: &Provider, fs: &crate::firestore::Firestore, jar: &CookieJar) -> Result<Option<Me>, String> {
+async fn me(p: &Provider, fs: &dyn crate::document_store::DocumentStore, jar: &CookieJar) -> Result<Option<Me>, String> {
     let Some(sid) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) else {
         return Ok(None);
     };
@@ -63,8 +63,8 @@ fn internal(context: &str, e: &str) -> Response {
 /// 本人と確かめてから時間が経っていれば 401 の "confirmation required"。
 async fn me_confirmed(p: &Provider, jar: &CookieJar) -> Result<Me, Response> {
     let fs = p
-        .firestore
-        .as_ref()
+        .docs
+        .as_deref()
         .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response())?;
     let me = match me(p, fs, jar).await {
         Ok(Some(m)) => m,
@@ -98,7 +98,7 @@ pub(super) async fn account_page(
     Query(q): Query<AccountQuery>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -292,7 +292,7 @@ async function del(id){
 /// 本人と確かめる（ログインしていなければ、ログインする）ための assertion の options。
 /// ログインしていればその人の passkey に絞る。
 pub(super) async fn signin_options(State(p): State<Arc<Provider>>, jar: CookieJar) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -333,7 +333,7 @@ pub(super) async fn signin_verify(
     jar: CookieJar,
     Json(req): Json<AuthVerifyReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -354,7 +354,7 @@ pub(super) async fn add_options(State(p): State<Arc<Provider>>, jar: CookieJar) 
         Ok(m) => m,
         Err(r) => return r,
     };
-    let fs = p.firestore.as_ref().expect("me_confirmed checked firestore");
+    let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let creds = match registration::list_credentials(fs, &me.account).await {
         Ok(c) => c,
         Err(e) => return internal("add_options: list_credentials", &e),
@@ -384,7 +384,7 @@ pub(super) async fn add_verify(
         Ok(m) => m,
         Err(r) => return r,
     };
-    let fs = p.firestore.as_ref().expect("me_confirmed checked firestore");
+    let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let challenge = match crate::webauthn::extract_challenge(&req.response.client_data_json) {
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
@@ -451,7 +451,7 @@ pub(super) async fn delete_passkey(
         Ok(m) => m,
         Err(r) => return r,
     };
-    let fs = p.firestore.as_ref().expect("me_confirmed checked firestore");
+    let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let a = &me.account;
     match registration::list_credentials(fs, a).await {
         Ok(creds) if creds.iter().any(|c| c.credential_id == req.id && held_by_recovery(a, c)) => {
@@ -496,7 +496,7 @@ pub(super) async fn save_name(State(p): State<Arc<Provider>>, jar: CookieJar, Js
         Ok(m) => m,
         Err(r) => return r,
     };
-    let fs = p.firestore.as_ref().expect("me_confirmed checked firestore");
+    let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let saved = f.name.trim().to_string();
     let updates = HashMap::from([("name".to_string(), f.name)]);
     match registration::save_profile(fs, &me.account.account_id, &updates).await {
@@ -532,7 +532,7 @@ mod tests {
             sign_count: 0,
             aaguid: String::new(),
         };
-        registration::save_credential(&fs, "u@example.com", "acc-u", &outcome).await.unwrap();
+        registration::save_credential(&*fs, "u@example.com", "acc-u", &outcome).await.unwrap();
         let p = Provider::new(format!("{ORIGIN}/oidc"))
             .with_base_path("/oidc")
             .with_firestore(fs.clone())
@@ -570,7 +570,7 @@ mod tests {
         }
 
         async fn name(&self) -> Option<String> {
-            registration::get_profile(&self.fs, "acc-u").await.unwrap().remove("name")
+            registration::get_profile(&*self.fs, "acc-u").await.unwrap().remove("name")
         }
 
         async fn claims(&self) -> HashMap<String, serde_json::Value> {
@@ -607,7 +607,7 @@ mod tests {
         let w = world().await;
         let sid = w.session(now()).await;
         let nick = HashMap::from([("nickname".to_string(), "taro".to_string())]);
-        registration::save_profile(&w.fs, "acc-u", &nick).await.unwrap();
+        registration::save_profile(&*w.fs, "acc-u", &nick).await.unwrap();
         assert_eq!(w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(), StatusCode::OK);
         let r = w.post(Some(&sid), Some(ORIGIN), "   ").await;
         assert_eq!(r.status(), StatusCode::OK);
@@ -685,7 +685,7 @@ mod tests {
         let sid = w.session(now()).await;
         let evil = r#""><script>alert(1)</script>'[[Passkeys]]__DEL____WEBAUTHN_JS__"#;
         let updates = HashMap::from([("name".to_string(), evil.to_string())]);
-        registration::save_profile(&w.fs, "acc-u", &updates).await.unwrap();
+        registration::save_profile(&*w.fs, "acc-u", &updates).await.unwrap();
         let html = w.page(&sid).await;
         assert!(!html.contains("<script>alert"), "{html}");
         assert!(

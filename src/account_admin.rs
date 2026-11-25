@@ -10,6 +10,8 @@
 //! [`crate::firestore::Firestore::query_eq`]（ciba.rs の list_pending/list_history と同じ
 //! 仕組み）でその場検索する。
 
+use crate::document_store::DocumentStore;
+#[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
 use crate::{audit_log, registration};
 
@@ -40,7 +42,7 @@ pub enum EnableOutcome {
 }
 
 /// actor は監査ログへ記録する呼び出し主体（CLI実行なら"cli"）。
-pub async fn disable_account(fs: &Firestore, actor: &str, email: &str) -> Result<DisableOutcome, String> {
+pub async fn disable_account(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<DisableOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DisableOutcome::NotFound),
@@ -70,7 +72,7 @@ pub async fn disable_account(fs: &Firestore, actor: &str, email: &str) -> Result
 
 /// AlreadyEnabled(no-op)でも disable_account 同様に必ず監査ログを残す
 /// （「べき等な管理操作の再実行」を disable/enable で対称に扱う）。
-pub async fn enable_account(fs: &Firestore, actor: &str, email: &str) -> Result<EnableOutcome, String> {
+pub async fn enable_account(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<EnableOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(EnableOutcome::NotFound),
@@ -100,7 +102,7 @@ pub enum DeleteOutcome {
 
 /// 凍結済みのアカウントを完全に消す。accounts・credentials・accountsByUuid・profiles と、
 /// セッション・トークンを消し、監査ログを残す。
-pub async fn delete_account(fs: &Firestore, actor: &str, email: &str) -> Result<DeleteOutcome, String> {
+pub async fn delete_account(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<DeleteOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DeleteOutcome::NotFound),
@@ -131,7 +133,7 @@ pub async fn delete_account(fs: &Firestore, actor: &str, email: &str) -> Result<
 /// passkey だけを全部消す。アカウント（accountId＝sub）とプロフィールは残すので、登録し直しても
 /// 同じ人のまま。端末をなくしたときなどに使うので、セッションとトークンも失効させる。
 /// アカウントが無ければ None。
-pub async fn delete_passkeys(fs: &Firestore, actor: &str, email: &str) -> Result<Option<usize>, String> {
+pub async fn delete_passkeys(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<Option<usize>, String> {
     let Some(a) = registration::get_account(fs, email).await? else {
         return Ok(None);
     };
@@ -161,7 +163,7 @@ pub async fn delete_passkeys(fs: &Firestore, actor: &str, email: &str) -> Result
 
 /// 本人が passkey を消したとき、いま使っているセッション以外のセッションと、発行済みのトークンを失効させる
 /// （消した passkey の端末に残るセッションやトークンを使わせない。どの passkey で入ったかは記録していない）。
-pub async fn revoke_other_sessions(fs: &Firestore, account_id: &str, keep_sid: &str) -> RevocationCounts {
+pub async fn revoke_other_sessions(fs: &dyn DocumentStore, account_id: &str, keep_sid: &str) -> RevocationCounts {
     let mut counts = RevocationCounts::default();
     match fs.query_eq("sessions", "accountId", account_id).await {
         Ok(rows) => {
@@ -193,7 +195,7 @@ pub async fn revoke_other_sessions(fs: &Firestore, account_id: &str, keep_sid: &
 /// コレクション単位で query_eq 自体が失敗しても他のコレクションの失効は続ける
 /// （1種類の障害で残りを諦めない）。失敗したコレクションは query_errors に記録し、
 /// 呼び出し側（CLI 出力・監査ログ）へその不確実性を伝える。
-async fn revoke_all(fs: &Firestore, account_id: &str) -> RevocationCounts {
+async fn revoke_all(fs: &dyn DocumentStore, account_id: &str) -> RevocationCounts {
     let mut counts = RevocationCounts::default();
     match revoke_by_account(fs, "sessions", account_id).await {
         Ok(n) => counts.sessions = n,
@@ -222,7 +224,7 @@ async fn revoke_all(fs: &Firestore, account_id: &str) -> RevocationCounts {
 /// account_id に紐づく col の全ドキュメントを検索し削除する。1件の削除失敗で残りを
 /// 諦めない（ベストエフォート。失敗したものは tracing::error に残す）。戻り値は実際に
 /// 削除できた件数。
-async fn revoke_by_account(fs: &Firestore, col: &str, account_id: &str) -> Result<usize, String> {
+async fn revoke_by_account(fs: &dyn DocumentStore, col: &str, account_id: &str) -> Result<usize, String> {
     let rows = fs.query_eq(col, "accountId", account_id).await?;
     let mut revoked = 0usize;
     for (id, _fields) in &rows {
@@ -248,7 +250,7 @@ mod tests {
         (host.clone(), Firestore::new_for_test("proj", host))
     }
 
-    async fn register(fs: &Firestore, email: &str, account_id: &str) {
+    async fn register(fs: &dyn DocumentStore, email: &str, account_id: &str) {
         let outcome = crate::webauthn::RegOutcome {
             credential_id: format!("cred-{}", uuid::Uuid::new_v4().simple()),
             pub_x: "x".into(),
