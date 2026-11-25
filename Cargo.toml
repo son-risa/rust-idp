@@ -6,7 +6,6 @@ rust-version = "1.100"
 license = "MIT"
 description = "OpenID Provider (FAPI 2.0, passkeys, CIBA, DPoP) as an axum Router, with pluggable storage adapters"
 repository = "https://github.com/son-risa/rust-idp"
-homepage = "https://github.com/son-risa/rust-idp"
 documentation = "https://docs.rs/rust-idp"
 readme = "README.md"
 keywords = ["oidc", "openid", "oauth2", "fapi", "webauthn"]
