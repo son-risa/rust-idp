@@ -10,8 +10,9 @@ ignored=$(mktemp)
 wanted=$(mktemp)
 trap 'rm -f "$listed" "$ignored" "$wanted"' EXIT
 
-cargo test --locked -q -- --list --format terse 2>/dev/null | sed -n 's/: test$//p' | sort -u >"$listed"
-cargo test --locked -q -- --list --format terse --ignored 2>/dev/null | sed -n 's/: test$//p' | sort -u >"$ignored"
+# Firestore の試験は gcp の feature の中にあるので、本番と同じ gcp 付きの一覧と照合する。
+cargo test --locked -q --features gcp -- --list --format terse 2>/dev/null | sed -n 's/: test$//p' | sort -u >"$listed"
+cargo test --locked -q --features gcp -- --list --format terse --ignored 2>/dev/null | sed -n 's/: test$//p' | sort -u >"$ignored"
 python3 -c 'import json,sys; [print(t) for r in json.load(open("formal/premises.json")) for t in r.get("tests", [])]' | sort -u >"$wanted"
 
 if [ ! -s "$listed" ]; then

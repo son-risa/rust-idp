@@ -6,11 +6,12 @@
 FROM rust:1.100.0-slim-trixie AS build
 WORKDIR /app
 # 依存だけ先にビルドしてレイヤキャッシュを効かせる。
+# 本番は Firestore・KMS などへ出る実装を入れた gcp の feature で build する（Cargo.toml の [features]）。
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --features gcp && rm -rf src
 COPY src ./src
 # touch でソース更新を確実に検知させてから本ビルド。
-RUN touch src/main.rs src/lib.rs && cargo build --release
+RUN touch src/main.rs src/lib.rs && cargo build --release --features gcp
 
 # 実行イメージは Debian slim（distroless でも可だが glibc 依存の調整が要るため slim を既定に）。
 FROM debian:trixie-slim
