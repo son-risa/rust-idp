@@ -1,0 +1,69 @@
+# English (default) build. Output goes to site/public/. Built with Zensical (reads mkdocs.yml); see site/build.sh.
+site_name: rust-idp
+site_description: A passkey-first OpenID Provider in Rust.
+# Only canonical links and the sitemap use this. Every link between pages is relative, so the
+# built site works under any path (son-risa.github.io/rust-idp/ or docs.amate.ai/idp/).
+site_url: !ENV [SITE_URL, "https://son-risa.github.io/rust-idp/"]
+repo_url: https://github.com/son-risa/rust-idp
+repo_name: son-risa/rust-idp
+edit_uri: ""
+copyright: rust-idp is released under the MIT License.
+
+docs_dir: en
+site_dir: public
+use_directory_urls: true
+
+theme:
+  name: material
+  variant: modern
+  custom_dir: overrides
+  language: en
+  font: false
+  features:
+    - navigation.footer
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: lucide/moon
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: lucide/sun
+        name: Light mode
+
+extra_css:
+  - assets/site.css
+
+extra:
+  generator: false
+  alternate:
+    - name: English
+      link: ./
+      lang: en
+    - name: 日本語
+      link: ja/
+      lang: ja
+
+markdown_extensions:
+  - tables
+  - attr_list
+  - md_in_html
+  - admonition
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Get started: get-started.md
+  - Verification: verification.md
+  - Requirements:
+      - Requirements list: requirements/index.md
+      - Rules for the list: requirements/rules.md
+  - Design documents: design-docs.md
