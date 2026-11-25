@@ -17,14 +17,14 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:205,226（凍結・削除で accounts の accountId を鍵に accessTokens を引いて消す）"
+     "why": "firestore_store.rs:479,483（Store::revoke_account。凍結・削除・passkey の削除・復旧で、accounts の accountId を鍵に accessTokens を引いて消す）"
     },
     {
      "sym": "~>",
      "to": "clients|static_clients",
      "via": "clientId",
      "cf": "code",
-     "why": "web/oidc.rs:598（revoke で認証した client と clientId を突き合わせる）"
+     "why": "web/oidc.rs:615（revoke で認証した client と clientId を突き合わせる）"
     }
    ],
    "skip": [
@@ -48,7 +48,7 @@
    "ms": [],
    "rels": [],
    "skip": [
-    "文書 id（email）: 鍵の名に email を使うだけで、accounts を引かない（registration.rs:660）"
+    "文書 id（email）: 鍵の名に email を使うだけで、accounts を引かない（registration.rs:687）"
    ],
    "src": [
     "accountLocks: [{email:string @pk, expiresAt:timestamp}]"
@@ -71,7 +71,7 @@
      "to": "credentials",
      "via": "credentialId",
      "cf": "code",
-     "why": "registration.rs:411-412,580（古い形の 1 本。credentials の id と突き合わせる）"
+     "why": "registration.rs:438-439,607（古い形の 1 本。credentials の id と突き合わせる）"
     },
     {
      "sym": "~>",
@@ -82,11 +82,11 @@
     }
    ],
    "skip": [
-    "email: 文書 id と同じ値を欄にも持つ（registration.rs:508 で credential_fields を写す）"
+    "email: 文書 id と同じ値を欄にも持つ（registration.rs:535 で credential_fields を写す）"
    ],
    "src": [
     "accounts: [{email:string @pk, accountId:string @unique, disabled:bool, verified:bool, credentialsMigrated:bool, createdAt:timestamp, recoveredAt:timestamp?, recoveredWith:string?, credentialId:string, pubX:string, pubY:string, signCount:int, aaguid:string}]",
-    "// credentialId・pubX・pubY・signCount・aaguid は前の版が読む古い形の passkey 1 本（registration.rs:261-270）"
+    "// credentialId・pubX・pubY・signCount・aaguid は前の版が読む古い形の passkey 1 本（registration.rs:264-273）"
    ],
    "pg": [],
    "gap": []
@@ -106,14 +106,14 @@
      "to": "accounts",
      "via": "email",
      "cf": "code",
-     "why": "registration.rs:768-777 と web/login.rs:272,282（accountId から email を引き、その email で accounts を引く）"
+     "why": "registration.rs:795-804 と web/login.rs:244,254（accountId から email を引き、その email で accounts を引く）"
     },
     {
      "sym": "~>",
      "to": "accounts",
      "via": "(docId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:115（accounts の accountId で消す）"
+     "why": "account_admin.rs:110（accounts の accountId で消す）"
     }
    ],
    "skip": [],
@@ -127,19 +127,27 @@
    "id": "adminIatFlash",
    "did": "D-005",
    "kind": "コレクション",
-   "ncol": 2,
+   "ncol": 3,
    "pk": [
     "flash_id"
    ],
    "ms": [
     "expires_at(秒)"
    ],
-   "rels": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(minted_by) to (accountId)",
+     "cf": "code",
+     "why": "web/admin.rs:1121（発行した管理者の accountId を書く）、web/admin.rs:1162（見る管理者と突き合わせ、発行した人にだけ見せる）"
+    }
+   ],
    "skip": [
-    "raw_token: 生の IAT。hash を取れば dcrTokens の id になるが、ここでは引かない（web/admin.rs:1158）"
+    "raw_token: 生の IAT。hash を取れば dcrTokens の id になるが、ここでは引かない（web/admin.rs:1160）"
    ],
    "src": [
-    "adminIatFlash: [{flash_id:string @pk, raw_token:string, expires_at:datetime(秒)}]"
+    "adminIatFlash: [{flash_id:string @pk, raw_token:string, expires_at:datetime(秒), minted_by:string}]"
    ],
    "pg": [],
    "gap": []
@@ -161,7 +169,7 @@
      "to": "accounts",
      "via": "(entries.account_id) to (accountId)",
      "cf": "code",
-     "why": "web/admin.rs:195（accounts の accountId と突き合わせて管理者の印を出す）、web/register.rs:506"
+     "why": "web/admin.rs:195（accounts の accountId と突き合わせて管理者の印を出す）、web/register.rs:519"
     }
    ],
    "skip": [
@@ -172,7 +180,7 @@
    ],
    "pg": [],
    "gap": [
-    "entries は Firestore の配列でなく JSON の文字列 1 つ（admin_store.rs:53-56）"
+    "entries は Firestore の配列でなく JSON の文字列 1 つ（admin_store.rs:56-59）"
    ]
   },
   {
@@ -226,14 +234,14 @@
      "to": "accessTokens",
      "via": "issuedAccessToken",
      "cf": "code",
-     "why": "firestore_store.rs:254-255（再利用のとき、この id で accessTokens を消す）"
+     "why": "firestore_store.rs:253-254（再利用のとき、この id で accessTokens を消す）"
     },
     {
      "sym": "~>",
      "to": "refreshTokens",
      "via": "issuedRefreshToken",
      "cf": "code",
-     "why": "firestore_store.rs:259-260（再利用のとき、この id から refreshTokens の系列を消す）"
+     "why": "firestore_store.rs:258-259（再利用のとき、この id から refreshTokens の系列を消す）"
     }
    ],
    "skip": [
@@ -333,7 +341,7 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "registration.rs:363（引いた passkey の accountId をアカウントと突き合わせる）、registration.rs:342"
+     "why": "registration.rs:390（引いた passkey の accountId をアカウントと突き合わせる）、registration.rs:369"
     }
    ],
    "skip": [
@@ -379,14 +387,14 @@
      "to": "accounts",
      "via": "email",
      "cf": "code",
-     "why": "web/register.rs:186-187→registration.rs:370,330（覗いた email で accounts を引く）"
+     "why": "web/register.rs:186-187→registration.rs:397,333（覗いた email で accounts を引く）"
     },
     {
      "sym": "~>",
      "to": "interactions",
      "via": "uid",
      "cf": "code",
-     "why": "registration.rs:82→web/mod.rs:149（uid で interactions を引いてログインを済ませる）"
+     "why": "registration.rs:85→web/mod.rs:149（uid で interactions を引いてログインを済ませる）"
     }
    ],
    "skip": [
@@ -414,7 +422,7 @@
      "to": "accounts",
      "via": "(docId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:113（accounts の accountId で消す）、fcm.rs:32"
+     "why": "account_admin.rs:108（accounts の accountId で消す）、fcm.rs:35"
     }
    ],
    "skip": [
@@ -483,14 +491,14 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "web/login.rs:228,151（accounts から引いたアカウントの accountId を書く）"
+     "why": "web/login.rs:200,151（accounts から引いたアカウントの accountId を書く）"
     },
     {
      "sym": "~>",
      "to": "parRequests",
      "via": "requestUri",
      "cf": "code",
-     "why": "web/oidc.rs:250,343→par.rs:67-71（urn の接頭辞を外した値が parRequests の id）"
+     "why": "web/oidc.rs:250,343→par.rs:70-74（urn の接頭辞を外した値が parRequests の id）"
     }
    ],
    "skip": [
@@ -561,11 +569,11 @@
      "to": "accounts",
      "via": "(docId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:114（accounts の accountId で消す）、web/account.rs:161"
+     "why": "account_admin.rs:109（accounts の accountId で消す）、web/account.rs:161"
     }
    ],
    "skip": [
-    "email: 名は email だが中身は accountId（registration.rs:843 は引数をそのまま書き、呼び手は accountId を渡す）。読む所が無い"
+    "email: 名は email だが中身は accountId（registration.rs:870 は引数をそのまま書き、呼び手は accountId を渡す）。読む所が無い"
    ],
    "src": [
     "profiles: [{accountId:string @pk, email:string, name:string?, nickname:string?, birthdate:string?, gender:string?, zoneinfo:string?, locale:string?}]"
@@ -607,7 +615,7 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:212,226、grants.rs:380→163-169"
+     "why": "firestore_store.rs:480,483（Store::revoke_account）、grants.rs:380→163-169"
     },
     {
      "sym": "~>",
@@ -621,14 +629,14 @@
      "to": "refreshFamilyRevocations",
      "via": "familyId",
      "cf": "code",
-     "why": "grants.rs:358→firestore_store.rs:415（系列の札を引く）"
+     "why": "grants.rs:358→firestore_store.rs:414（系列の札を引く）"
     },
     {
      "sym": "~>",
      "to": "refreshTokens",
      "via": "replacedBy",
      "cf": "code",
-     "why": "firestore_store.rs:90（失効のとき replacedBy を辿る）"
+     "why": "firestore_store.rs:89（失効のとき replacedBy を辿る）"
     }
    ],
    "skip": [
@@ -657,7 +665,7 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:166,198→226（accounts の accountId で引いて消す）"
+     "why": "firestore_store.rs:478,483（Store::revoke_account。accounts の accountId で引いて消す）"
     }
    ],
    "skip": [],
@@ -682,14 +690,14 @@
      "to": "accounts",
      "via": "email",
      "cf": "code",
-     "why": "web/login.rs:248,282（消費した challenge の email で accounts を引く）"
+     "why": "web/login.rs:220,254（消費した challenge の email で accounts を引く）"
     },
     {
      "sym": "~>",
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "registration.rs:487（登録で、在るアカウントの accountId と突き合わせる）"
+     "why": "registration.rs:514（登録で、在るアカウントの accountId と突き合わせる）"
     }
    ],
    "skip": [
@@ -713,7 +721,7 @@
    "rels": [],
    "skip": [],
    "src": [
-    "static_clients: 起動時に環境変数（FAPI1_*・FAPI2_*）から Provider.clients に積む Client。resolve_client が clients より先に見る（provider.rs:162-168、main.rs:68-73）"
+    "static_clients: 起動時に環境変数（FAPI1_*・FAPI2_*）から Provider.clients に積む Client。resolve_client が clients より先に見る（provider.rs:193-199、main.rs:55-60）"
    ],
    "pg": [],
    "gap": [
@@ -816,16 +824,6 @@
    ]
   ],
   "A-007": [
-   [
-    "D-003",
-    "accounts",
-    1
-   ],
-   [
-    "D-012",
-    "credentials",
-    1
-   ],
    [
     "D-025",
     "webauthnChallenges",
@@ -1870,7 +1868,6 @@
   },
   "accounts": {
    "o": [
-    "A-007",
     "A-008",
     "A-009",
     "A-018",
@@ -2054,7 +2051,6 @@
   },
   "credentials": {
    "o": [
-    "A-007",
     "A-008",
     "A-019",
     "A-023",
@@ -2307,7 +2303,7 @@
     "A-009",
     "A-014"
    ],
-   "at": "gcp.rs:28"
+   "at": "gcp.rs:29"
   },
   {
    "name": "RS256 の署名鍵（KMS_RS256_KEY が名指す鍵）",
@@ -2317,7 +2313,7 @@
     "A-009",
     "A-014"
    ],
-   "at": "gcp.rs:75"
+   "at": "gcp.rs:76"
   },
   {
    "name": "ES256 の署名鍵 oidc-signing-key-es256（KMS を使わないときの代わり）",
@@ -2327,7 +2323,7 @@
     "A-009",
     "A-014"
    ],
-   "at": "gcp.rs:45"
+   "at": "gcp.rs:46"
   },
   {
    "name": "RS256 の署名鍵 oidc-signing-key-rs256（KMS を使わないときの代わり）",
@@ -2337,31 +2333,31 @@
     "A-009",
     "A-014"
    ],
-   "at": "gcp.rs:92"
+   "at": "gcp.rs:93"
   },
   {
    "name": "CIBA_RP_SECRET（CIBA の RP の client secret。移行コマンドが hash にして clients へ書く）",
    "place": "Secret Manager",
    "ops": [],
-   "at": "gcp.rs:607"
+   "at": "gcp.rs:642"
   }
  ],
  "notes": [
   "表の目録は Firestore に無いので、code が渡すコレクション名（const と文字列）を git grep で洗った 25 個を行にした。サブコレクションは無い。CLI（gcp.rs の管理コマンド）だけが触る表は無い。",
-  "メモリの中だけの代わり（Firestore を使わない構成とテスト用）は行にしていない: MemoryStore（store.rs:173。interactions・sessions・コード・AT・RT・系列の札）、MemoryCibaStore（ciba.rs:439）、NonceStore::Memory（nonce.rs:43）、MemFidoStore（fido/mod.rs:81）。",
+  "メモリの中だけの代わり（gcp の feature 無しで build した binary とテスト用）は行にしていない。どれも同じコレクションの名と形をメモリに置く: MemoryDocumentStore（document_store.rs:59。DocumentStore の 14 操作）、MemoryStore（store.rs:187。interactions・sessions・コード・AT・RT・系列の札）、MemoryCibaStore（ciba.rs:439）、NonceStore::Memory（nonce.rs:43）、MemFidoStore（fido/mod.rs:78）。",
   "外の物 static_clients を D-026 として末尾に足した（abc 順の外）。FAPI 試験用に環境変数から積む client で、本番は空。clientId の参照は {clients|static_clients} と書いた。使う操作は見込み（m）に置いた。",
   "accounts の文書 id は email で、accountId は欄（@unique とみなした）。accountId を指す参照は via (..) to (accountId) で書いた。文書 id そのものが accountId の表（accountsByUuid・fcmTokens・profiles）は (docId) to (accountId) と書いた。",
-  "profiles の欄 email には accountId が入る（registration.rs:843 は引数 email をそのまま書き、呼び手はすべて accountId を渡す）。registration.rs:781,834 の注記「profiles/{email}」は古い。",
+  "profiles の欄 email には accountId が入る（registration.rs:870 は引数 email をそのまま書き、呼び手はすべて accountId を渡す）。registration.rs:808,861 の注記「profiles/{email}」は古い。",
   "日時の整数はすべて秒で、ミリ秒の整数は無い。Firestore の timestamp 型は記法で timestamp と書き、ms には入れなかった。",
   "横断にした表: auditLog（監査）、admins（認可の名簿）、nonces（DPoP・client_assertion・JAR の jti の単回化）。OPDM には出さず、DMOP の o には直に触る操作を、c には前置きだけで届く操作の数を入れた。",
   "共通の前置きとして数だけにしたもの: authenticate_client（web/mod.rs:714）が引く clients と nonces、authenticate_token（web/mod.rs:764）が引く accessTokens と nonces、session_account・check_admin（web/mod.rs:205、web/admin.rs:15）が引く sessions と admins、/account の me()（web/account.rs:38）が引く sessions。me() が引く accountsByUuid と accounts は画面の中身に使うので確かに入れた。",
-  "見込みは A-044 の credentials だけ: delete_passkeys → remove_all_credentials → remove_all_locked → delete_all_credentials と helper が 3 段になる（account_admin.rs:143、registration.rs:625、registration.rs:733）。",
+  "見込みは A-044 の credentials だけ: delete_passkeys → remove_all_credentials → remove_all_locked → delete_all_credentials と helper が 3 段になる（account_admin.rs:138、registration.rs:652、registration.rs:760）。",
   "表に触らない操作: A-001・A-002・A-060〜A-063・A-066。A-047・A-048 は前置きだけ、A-045・A-046・A-051 は横断の表（admins・auditLog）だけなので OPDM に行が無い。",
-  "FIDO 試験の表（fidoChallenges・fidoCredentials）は FIDO_CONFORMANCE_ENABLED のときだけ経路が出る（web/mod.rs:231）。本番では使わない。Firestore の project も本体と別に決める（fido/mod.rs:75）。",
+  "FIDO 試験の表（fidoChallenges・fidoCredentials）は FIDO_CONFORMANCE_ENABLED のときだけ経路が出る（web/mod.rs:231）。本番では使わない。Firestore の接続は本体と別に作るが、project は本体と同じ resolve_project で決める（fido/mod.rs:75）。",
   "webauthnChallenges.uid は kind で中身が変わるので関係にしなかった。cibaHistory は監査の性格だが CIBA の操作だけが使うので横断にしなかった。",
   "期限切れの文書の掃除は Firestore の TTL ポリシーを前提にしている（expiresAt・expireAt。ciba.rs:17）が、TTL の設定は repo に無いので pg は空。",
   "失敗の時だけ通る道（e）は、どの表でもその操作がほかの道でも触るので 0 にした（例: A-009 のコード再利用でのトークンの失効、A-034 の discard_credential）。",
-  "outside の署名鍵の ops は、鍵で署名する A-009 と、公開鍵を出す・検める A-002・A-014。鍵を書く操作は無い（起動時に読むだけ。gcp.rs:24-120）。CIBA_RP_SECRET は CLI だけが読むので ops は空。RESEND_API_KEY は外部システムの資格で業務の物でないので outside に入れていない。",
-  "A-067〜A-072（運用の道具だけの操作と内部のきっかけ）の記録する表は、データモデルの下請けの後に手で足した（src/gcp.rs:594-613、src/registration.rs:426-458、src/ciba.rs:418-432、src/fcm.rs:31-36、src/audit_log.rs:21-34）。"
+  "outside の署名鍵の ops は、鍵で署名する A-009 と、公開鍵を出す・検める A-002・A-014。鍵を書く操作は無い（起動時に読むだけ。gcp.rs:25-121）。CIBA_RP_SECRET は CLI だけが読むので ops は空。RESEND_API_KEY は外部システムの資格で業務の物でないので outside に入れていない。",
+  "A-067〜A-072（運用の道具だけの操作と内部のきっかけ）の記録する表は、データモデルの下請けの後に手で足した（src/gcp.rs:629-648、src/registration.rs:453-485、src/ciba.rs:418-432、src/fcm.rs:34-39、src/audit_log.rs:24-37）。"
  ]
 }

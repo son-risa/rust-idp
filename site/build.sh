@@ -11,3 +11,6 @@ rm -rf public
 # English first: its build cleans site_dir, which would remove public/ja/.
 zensical build --strict -f mkdocs.en.yml
 zensical build --strict -f mkdocs.ja.yml
+# The requirements page is one self-contained HTML file built outside Zensical; copy it after both builds.
+mkdir -p public/requirements
+cp requirements/index.html public/requirements/index.html

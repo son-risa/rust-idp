@@ -58,7 +58,7 @@
    "name": "登録の passkey を作る画面",
    "parent": "SC-001",
    "reach": "リンクで直接開く",
-   "file": "src/web/register.rs:207-305",
+   "file": "src/web/register.rs:207-313",
    "direct": "確かめのメールのリンク（/signup/verify、アプリからは /r を経る）",
    "ops": [
     "A-027",
@@ -73,7 +73,7 @@
    "name": "招待の passkey を作る画面",
    "parent": "SC-001",
    "reach": "リンクで直接開く",
-   "file": "src/web/register.rs:538-584",
+   "file": "src/web/register.rs:551-597",
    "direct": "RP が招待（A-039）で受け取ったリンクを利用者に渡す",
    "ops": [
     "A-040",
@@ -226,7 +226,7 @@
    "name": "CIBA の要求を承認する画面",
    "parent": null,
    "root": true,
-   "file": "src/web/ciba.rs:277-364",
+   "file": "src/web/ciba.rs:279-366",
    "ops": [
     "A-020",
     "A-023",
@@ -329,7 +329,7 @@
    "surface": "管理画面",
    "name": "IAT を発行する画面",
    "parent": "SC-016",
-   "file": "src/web/admin.rs:985-1138",
+   "file": "src/web/admin.rs:985-1139",
    "ops": [
     "A-057"
    ]
@@ -341,7 +341,7 @@
    "name": "発行した IAT を一度だけ見せる画面",
    "parent": "SC-016",
    "reach": "リンクで直接開く",
-   "file": "src/web/admin.rs:1140-1200",
+   "file": "src/web/admin.rs:1141-1211",
    "direct": "発行（A-057）の後に送られる。1 度見せたら消える",
    "ops": [
     "A-059"
@@ -650,9 +650,9 @@
    "dest": {
     "t": "移る",
     "what": "試しの RP の入口（未ログインのとき）",
-    "at": "src/web/ciba.rs:288"
+    "at": "src/web/ciba.rs:290"
    },
-   "file": "src/web/ciba.rs:288"
+   "file": "src/web/ciba.rs:290"
   }
  ],
  "CHECK": {

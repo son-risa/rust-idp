@@ -64,6 +64,6 @@ nav:
   - Get started: get-started.md
   - Verification: verification.md
   - Requirements:
-      - Requirements list: requirements/index.md
+      - Requirements (Japanese): requirements/
       - Rules for the list: requirements/rules.md
   - Design documents: design-docs.md

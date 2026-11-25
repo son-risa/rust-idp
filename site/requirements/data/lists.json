@@ -338,12 +338,12 @@
       "path": "/login/{uid}/passkey/options"
      },
      "auth": "無し",
-     "cond": "誰でも challenge を作れる。email を付けると、その人の passkey の id を allowCredentials で返す",
+     "cond": "誰でも challenge を作れる。本文は読まず、いつも allowCredentials を空で返す（登録の有無で応答が変わらない）。利用者は verify で assertion の userHandle から引く",
      "at": [
-      "src/web/login.rs:167-212"
+      "src/web/login.rs:161-184"
      ],
-     "why": "handler を読んだ",
-     "doubt": "email を送れば登録の有無と passkey の id が分かる（列挙できる）。意図の確かめが要る",
+     "why": "handler と試験（src/web/flow_tests.rs:307）を読んだ",
+     "doubt": "",
      "cells": [
       "可",
       "可",
@@ -393,9 +393,9 @@
      "cond": "passkey の署名が合い、アカウントが止まっておらず、interaction を始めたブラウザのとき。セッションを張って /authorize/resume へ送る",
      "rel": "自: passkey の持ち主。他: ほかの人の passkey は署名が合わない",
      "at": [
-      "src/web/login.rs:214-236",
-      "src/web/login.rs:139-165",
-      "src/web/login.rs:316-322"
+      "src/web/login.rs:186-208",
+      "src/web/login.rs:139-157",
+      "src/web/login.rs:288-294"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -502,14 +502,14 @@
       "path": "/introspect"
      },
      "auth": "client 認証（confidential に限る）",
-     "cond": "confidential な client なら、どの client に出た access token でも引ける。無効・不明・失効は active=false だけ返す",
-     "rel": "他: ほかの client に出た token も引ける（client で絞らない）",
+     "cond": "confidential な client が、自分に出た access token を引ける。INTROSPECTION_CLIENT_IDS に載った client は、ほかの client に出た token も引ける。それ以外と、無効・不明・失効の token には active=false だけ返す",
+     "rel": "自: token の client_id が呼び手と同じ。他: 呼び手が INTROSPECTION_CLIENT_IDS に載っているときだけ（may_inspect）",
      "at": [
-      "src/web/oidc.rs:508-535",
-      "src/web/oidc.rs:464-470"
+      "src/web/oidc.rs:515-542",
+      "src/web/oidc.rs:464-477"
      ],
-     "why": "handler を読んだ",
-     "doubt": "RS が自分宛ての token だけを引けるよう絞るかは決まっていない",
+     "why": "handler と試験（src/web/oidc.rs:1729）を読んだ",
+     "doubt": "",
      "cells": [
       "断",
       "該当しない",
@@ -521,7 +521,7 @@
       "該当しない"
      ],
      "show": [],
-     "deny": "断る",
+     "deny": "見えない",
      "showDeny": false
     }
    ],
@@ -535,7 +535,7 @@
     "条件つき",
     "該当しない"
    ],
-   "deny": "断る"
+   "deny": "見えない"
   },
   {
    "id": "A-011",
@@ -556,12 +556,13 @@
       "path": "/oauth/mandate/consume"
      },
      "auth": "client 認証（confidential に限る）",
-     "cond": "confidential な client なら呼べる。mandate を 1 度だけ使い切る（CAS）",
-     "rel": "他: mandate の token の宛先の client かは見ない",
+     "cond": "confidential な client が、自分に出た access token の mandate を 1 度だけ使い切る（CAS）。INTROSPECTION_CLIENT_IDS に載った client は、ほかの client に出た token のものも使い切れる。それ以外には consumed=false だけ返す",
+     "rel": "自: token の client_id が呼び手と同じ。他: 呼び手が INTROSPECTION_CLIENT_IDS に載っているときだけ（may_inspect）",
      "at": [
-      "src/web/oidc.rs:538-570"
+      "src/web/oidc.rs:545-587",
+      "src/web/oidc.rs:473-477"
      ],
-     "why": "handler を読んだ",
+     "why": "handler と試験（src/web/oidc.rs:1729）を読んだ",
      "cells": [
       "断",
       "該当しない",
@@ -573,7 +574,7 @@
       "該当しない"
      ],
      "show": [],
-     "deny": "断る",
+     "deny": "見えない",
      "showDeny": false,
      "doubt": ""
     }
@@ -588,7 +589,7 @@
     "条件つき",
     "該当しない"
    ],
-   "deny": "断る"
+   "deny": "見えない"
   },
   {
    "id": "A-012",
@@ -612,10 +613,10 @@
      "cond": "管理者が発行した IAT を持つこと。期限内で、使い捨ての IAT は 1 度で消える。IAT の制約（profile・redirect の host など）の内の client だけ作れる。使い捨ての IAT は IP ごとの回数の上限が掛かる",
      "rel": "呼ぶ時点では client が無いので、誰の列は匿名（IAT を持つ人）とした",
      "at": [
-      "src/web/oidc.rs:976-1080",
-      "src/web/oidc.rs:1032",
-      "src/web/oidc.rs:1053",
-      "src/web/oidc.rs:1062-1075"
+      "src/web/oidc.rs:993-1097",
+      "src/web/oidc.rs:1049",
+      "src/web/oidc.rs:1070",
+      "src/web/oidc.rs:1079-1092"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -668,7 +669,7 @@
      "cond": "自分に出た access token・refresh token だけを消す。ほかの client の token や不明な token でも 200 を返して何もしない",
      "rel": "自: token の client_id が呼んだ client と同じ",
      "at": [
-      "src/web/oidc.rs:573-608"
+      "src/web/oidc.rs:590-625"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -721,10 +722,10 @@
      "cond": "hint の署名・iss・aud が合い sub が今のセッションの本人なら、確かめずにセッションを消す。それ以外でセッションがあれば確かめの画面を出す。post_logout_redirect_uri は client の登録と合うときだけ戻す",
      "rel": "自: セッションの本人。RP の自: id_token_hint の aud が呼んだ client。他: hint の sub が別の人なら確かめの画面を出す",
      "at": [
-      "src/web/oidc.rs:668-675",
-      "src/web/oidc.rs:693-813"
+      "src/web/oidc.rs:685-692",
+      "src/web/oidc.rs:710-830"
      ],
-     "why": "handler と試験（src/web/oidc.rs:1252-1520）を読んだ",
+     "why": "handler と試験（src/web/oidc.rs:1269-1537）を読んだ",
      "cells": [
       "該当しない",
       "条件つき",
@@ -751,7 +752,7 @@
      "auth": "id_token_hint、または確かめの画面の form（自分の origin に限る）",
      "cond": "GET と同じ。confirm を付けた form の POST は、自分の origin から来たものだけ（違えば 403）",
      "at": [
-      "src/web/oidc.rs:679-691",
+      "src/web/oidc.rs:696-708",
       "src/web/mod.rs:398-405"
      ],
      "why": "handler を読んだ",
@@ -804,7 +805,7 @@
      "auth": "client 認証、DPoP（任意）",
      "cond": "client 認証が通ること。request_uri を含む要求は断る。request object があれば署名を確かめる。作った request_uri はその client だけが /authorize で使える",
      "at": [
-      "src/web/oidc.rs:815-880"
+      "src/web/oidc.rs:832-897"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -857,7 +858,7 @@
      "cond": "token の scope で許した claim だけ返す。DPoP に束縛した token は proof が要る",
      "rel": "RP の他: token を持てば通る（Bearer は持ち手を確かめない）",
      "at": [
-      "src/web/oidc.rs:882-898",
+      "src/web/oidc.rs:899-915",
       "src/web/mod.rs:764-826"
      ],
      "why": "handler を読んだ",
@@ -887,7 +888,7 @@
      "auth": "access token（body の access_token も可）",
      "cond": "GET と同じ",
      "at": [
-      "src/web/oidc.rs:958-965"
+      "src/web/oidc.rs:975-982"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -940,7 +941,7 @@
      "cond": "token の本人の、編集できる claim だけ返す",
      "rel": "RP の他: token を持てば通る（Bearer は持ち手を確かめない）",
      "at": [
-      "src/web/oidc.rs:913-925"
+      "src/web/oidc.rs:930-942"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -1002,8 +1003,8 @@
      "auth": "access token",
      "cond": "token の本人の profile を、編集できる claim だけ書き換える（送った欄だけ。検査は登録の画面と同じ）",
      "at": [
-      "src/web/oidc.rs:927-951",
-      "src/registration.rs:837-860"
+      "src/web/oidc.rs:944-968",
+      "src/registration.rs:864-887"
      ],
      "why": "handler を読んだ",
      "show": [
@@ -1084,7 +1085,7 @@
      "auth": "client 認証",
      "cond": "client が CIBA の grant を許されていること。private_key_jwt の client は署名した request object が要る。宛先が止まっているか居なければ、居ないのと同じに扱う。client と login_hint ごとの回数の上限",
      "at": [
-      "src/web/ciba.rs:95-275",
+      "src/web/ciba.rs:95-277",
       "src/web/ciba.rs:196-200",
       "src/web/ciba.rs:237-240"
      ],
@@ -1148,7 +1149,7 @@
      "auth": "cookie（sid）",
      "cond": "ログインしていなければ、サインインへの案内を出す。自分宛ての待っている要求だけ並べる",
      "at": [
-      "src/web/ciba.rs:277-364"
+      "src/web/ciba.rs:279-366"
      ],
      "why": "handler を読んだ",
      "deny": "断る",
@@ -1328,10 +1329,10 @@
      "cond": "要求の宛先の利用者だけ。名乗りが無ければ 401、cookie で他の origin から来れば 403、宛先が違うか期限切れなら 404",
      "rel": "自: 要求の宛先（account）が名乗った人",
      "at": [
-      "src/web/ciba.rs:399-456",
-      "src/web/ciba.rs:366-395"
+      "src/web/ciba.rs:401-458",
+      "src/web/ciba.rs:368-397"
      ],
-     "why": "handler と試験（src/web/ciba.rs:641-720）を読んだ",
+     "why": "handler と試験（src/web/ciba.rs:643-722）を読んだ",
      "cells": [
       "断",
       "条件つき",
@@ -1382,9 +1383,9 @@
      "cond": "challenge がこの要求のために出たもので、宛先の利用者の passkey の署名が合い、アカウントが止まっておらず、要求が待ちのとき",
      "rel": "他: ほかの人の passkey は宛先と合わない",
      "at": [
-      "src/web/ciba.rs:458-539"
+      "src/web/ciba.rs:460-541"
      ],
-     "why": "handler と試験（src/web/ciba.rs:641-662）を読んだ",
+     "why": "handler と試験（src/web/ciba.rs:643-664）を読んだ",
      "cells": [
       "条件つき",
       "条件つき",
@@ -1434,8 +1435,8 @@
      "auth": "cookie（sid、自分の origin から）か access token",
      "cond": "要求の宛先の利用者だけ。期限切れは 409 で拒否として確定させない",
      "at": [
-      "src/web/ciba.rs:541-575",
-      "src/web/ciba.rs:366-395"
+      "src/web/ciba.rs:543-577",
+      "src/web/ciba.rs:368-397"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -1598,7 +1599,7 @@
      "auth": "メールの token",
      "cond": "メールのリンクの着地。token が生きていれば passkey を作る画面を出す",
      "at": [
-      "src/web/register.rs:348-405"
+      "src/web/register.rs:361-418"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -1679,8 +1680,8 @@
      "auth": "メールの token",
      "cond": "生きた token を持ち、そのアドレスがまだ登録されていないとき",
      "at": [
-      "src/web/register.rs:610-710",
-      "src/web/register.rs:586-600"
+      "src/web/register.rs:623-723",
+      "src/web/register.rs:599-613"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -1732,7 +1733,7 @@
      "auth": "メールの token、passkey",
      "cond": "メールの token と登録の challenge を 1 度ずつ使い、passkey を付けてアカウントを作る",
      "at": [
-      "src/web/register.rs:712-800"
+      "src/web/register.rs:725-813"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -1890,7 +1891,7 @@
      "cond": "passkey の署名が合い、アカウントが止まっていないとき。前のセッションは消して新しく張る",
      "at": [
       "src/web/account.rs:331-350",
-      "src/web/login.rs:238-325"
+      "src/web/login.rs:210-297"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -2286,8 +2287,8 @@
      "auth": "client 認証（INVITE_CLIENT_IDS の client）",
      "cond": "confidential で INVITE_CLIENT_IDS に載った client だけ。止まったアカウント宛てには status=disabled を返す",
      "at": [
-      "src/web/register.rs:407-469",
-      "src/web/register.rs:471-490"
+      "src/web/register.rs:420-482",
+      "src/web/register.rs:484-503"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -2339,7 +2340,7 @@
      "auth": "招待の token",
      "cond": "生きた招待の token のとき、passkey を作る画面を出す",
      "at": [
-      "src/web/register.rs:538-584"
+      "src/web/register.rs:551-597"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -2401,9 +2402,9 @@
      "auth": "client 認証（INVITE_CLIENT_IDS の client）",
      "cond": "INVITE_CLIENT_IDS の confidential な client だけ。宛先が管理者なら 409（protected）。止めると、セッションと token を失効させる",
      "at": [
-      "src/web/register.rs:492-536",
-      "src/web/register.rs:471-490",
-      "src/account_admin.rs:43-60"
+      "src/web/register.rs:505-549",
+      "src/web/register.rs:484-503",
+      "src/account_admin.rs:38-55"
      ],
      "why": "handler を読んだ",
      "show": [
@@ -2456,7 +2457,7 @@
      "kind": "運用の道具（CLI）",
      "name": "disable-account",
      "at": [
-      "src/gcp.rs:454"
+      "src/gcp.rs:488"
      ],
      "why": "運用者が Firestore の資格情報で打つ。表の誰の列にも当たらない",
      "doubt": ""
@@ -2520,7 +2521,7 @@
      "kind": "運用の道具（CLI）",
      "name": "enable-account",
      "at": [
-      "src/gcp.rs:492"
+      "src/gcp.rs:527"
      ],
      "why": "運用者が打つ",
      "doubt": ""
@@ -2564,7 +2565,7 @@
       "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
       "src/web/admin.rs:456-495"
      ],
-     "why": "handler と試験（src/web/admin.rs:1358）を読んだ",
+     "why": "handler と試験（src/web/admin.rs:1369）を読んだ",
      "cells": [
       "断",
       "口無し",
@@ -2619,7 +2620,7 @@
       "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
       "src/web/admin.rs:424-454"
      ],
-     "why": "handler と試験（src/web/admin.rs:1439）を読んだ",
+     "why": "handler と試験（src/web/admin.rs:1454）を読んだ",
      "cells": [
       "断",
       "口無し",
@@ -2694,7 +2695,7 @@
      "kind": "運用の道具（CLI）",
      "name": "grant-admin",
      "at": [
-      "src/gcp.rs:372"
+      "src/gcp.rs:406"
      ],
      "why": "運用者が打つ。最初の管理者はこの道で作る",
      "doubt": ""
@@ -2739,7 +2740,7 @@
       "src/web/admin.rs:524-565",
       "src/web/admin.rs:552-557"
      ],
-     "why": "handler と試験（src/web/admin.rs:1308-1345）を読んだ",
+     "why": "handler と試験（src/web/admin.rs:1319-1356）を読んだ",
      "cells": [
       "断",
       "断",
@@ -2759,7 +2760,7 @@
      "kind": "運用の道具（CLI）",
      "name": "revoke-admin",
      "at": [
-      "src/gcp.rs:421"
+      "src/gcp.rs:455"
      ],
      "why": "運用者が打つ",
      "doubt": ""
@@ -3207,7 +3208,7 @@
      "kind": "運用の道具（CLI）",
      "name": "revoke-client",
      "at": [
-      "src/gcp.rs:325"
+      "src/gcp.rs:359"
      ],
      "why": "運用者が打つ",
      "doubt": ""
@@ -3423,8 +3424,8 @@
      "at": [
       "src/web/admin.rs:6-29（require_admin・check_admin: 未ログインはサインインへ、管理者でなければ 403）",
       "src/web/mod.rs:296-323（管理画面の道は admin_same_origin の門の内）",
-      "src/web/admin.rs:1022-1138",
-      "src/web/admin.rs:1112-1121"
+      "src/web/admin.rs:1022-1139",
+      "src/web/admin.rs:1112-1122"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -3446,7 +3447,7 @@
      "kind": "運用の道具（CLI）",
      "name": "mint",
      "at": [
-      "src/gcp.rs:170"
+      "src/gcp.rs:200"
      ],
      "why": "運用者が打つ。profile・TTL・使い回しを引数で決める",
      "doubt": ""
@@ -3538,26 +3539,26 @@
       "path": "/admin/iats/flash/{flash_id}"
      },
      "auth": "管理者",
-     "cond": "管理者で flash_id を知っていること。1 度見せたら消す。GET なので門は掛からない",
-     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）",
+     "cond": "管理者のうち、その IAT を発行した人（文書の minted_by）だけが見られる。1 度見せたら消す。ほかの管理者には「表示済み」と同じ画面を返し、文書は消さない。GET なので門は掛からない",
+     "rel": "admins/{account_id} に在るか（src/admin_store.rs の is_admin）。自: 文書の minted_by が自分の accountId",
      "at": [
-      "src/web/admin.rs:1140-1200",
-      "src/web/admin.rs:1158"
+      "src/web/admin.rs:1141-1211",
+      "src/web/admin.rs:1158-1167"
      ],
-     "why": "handler と試験（src/web/admin.rs:1411）を読んだ",
-     "doubt": "発行した管理者に限らず、どの管理者でも flash_id を知れば見られる",
+     "why": "handler と試験（src/web/admin.rs:1422、src/web/flow_tests.rs:491）を読んだ",
+     "doubt": "",
      "cells": [
       "断",
       "該当しない",
       "断",
-      "該当しない",
       "可",
+      "断",
       "該当しない",
       "該当しない",
       "該当しない"
      ],
      "show": [],
-     "deny": "断る",
+     "deny": "見えない",
      "showDeny": false
     }
    ],
@@ -3565,13 +3566,13 @@
     "断",
     "該当しない",
     "断",
-    "該当しない",
     "可",
+    "断",
     "該当しない",
     "該当しない",
     "該当しない"
    ],
-   "deny": "断る"
+   "deny": "見えない"
   },
   {
    "id": "A-060",
@@ -3757,7 +3758,7 @@
      "auth": "無し（token は先の画面へ渡すだけ）",
      "cond": "メールのリンクの着地。アプリが横取りしなければ画面へ送る",
      "at": [
-      "src/web/register.rs:322-331"
+      "src/web/register.rs:330-337"
      ],
      "why": "handler を読んだ",
      "cells": [
@@ -3807,19 +3808,19 @@
       "path": "/.well-known/apple-app-site-association"
      },
      "auth": "無し",
-     "cond": "iOS が読む。LEGACY_HOSTS でも送り返さない",
+     "cond": "iOS が読む。APP_NAME・APP_SCHEME・APP_ANDROID_PACKAGE・APPLE_APP_ID の 4 つが揃うときだけ返し、揃わなければ 404（Cloud Run の上では互換のため、揃わなくても前からのアプリで返す）。LEGACY_HOSTS でも送り返さない",
      "at": [
-      "src/web/register.rs:333-346"
+      "src/web/register.rs:339-352"
      ],
      "why": "handler を読んだ",
      "cells": [
-      "可",
+      "条件つき",
       "該当しない",
-      "可",
+      "条件つき",
       "該当しない",
-      "可",
+      "条件つき",
       "該当しない",
-      "可",
+      "条件つき",
       "該当しない"
      ],
      "show": [],
@@ -3829,13 +3830,13 @@
     }
    ],
    "cells": [
-    "可",
+    "条件つき",
     "該当しない",
-    "可",
+    "条件つき",
     "該当しない",
-    "可",
+    "条件つき",
     "該当しない",
-    "可",
+    "条件つき",
     "該当しない"
    ],
    "deny": ""
@@ -3861,7 +3862,7 @@
      "auth": "無し",
      "cond": "FIDO_CONFORMANCE_ENABLED=1 のときだけ道が在る（本番では置かない）",
      "at": [
-      "src/fido/mod.rs:143",
+      "src/fido/mod.rs:140",
       "src/web/mod.rs:212-220"
      ],
      "why": "router を読んだ",
@@ -3891,7 +3892,7 @@
      "auth": "無し",
      "cond": "同上",
      "at": [
-      "src/fido/mod.rs:144"
+      "src/fido/mod.rs:141"
      ],
      "why": "router を読んだ",
      "cells": [
@@ -3943,7 +3944,7 @@
      "auth": "無し",
      "cond": "FIDO_CONFORMANCE_ENABLED=1 のときだけ道が在る（本番では置かない）",
      "at": [
-      "src/fido/mod.rs:145",
+      "src/fido/mod.rs:142",
       "src/web/mod.rs:212-220"
      ],
      "why": "router を読んだ",
@@ -3973,7 +3974,7 @@
      "auth": "無し",
      "cond": "同上",
      "at": [
-      "src/fido/mod.rs:146"
+      "src/fido/mod.rs:143"
      ],
      "why": "router を読んだ",
      "cells": [
@@ -4025,7 +4026,7 @@
      "auth": "無し",
      "cond": "FIDO_CONFORMANCE_ENABLED=1 のときだけ道が在る（本番では置かない）",
      "at": [
-      "src/fido/mod.rs:148",
+      "src/fido/mod.rs:145",
       "src/web/mod.rs:212-220"
      ],
      "why": "router を読んだ",
@@ -4055,7 +4056,7 @@
      "auth": "無し",
      "cond": "同上",
      "at": [
-      "src/fido/mod.rs:149"
+      "src/fido/mod.rs:146"
      ],
      "why": "router を読んだ",
      "cells": [
@@ -4095,7 +4096,7 @@
      "kind": "運用の道具（CLI）",
      "name": "migrate-static-clients",
      "at": [
-      "src/gcp.rs:587"
+      "src/gcp.rs:622"
      ],
      "why": "運用者が打つ。コードに在る静的な client を Firestore の clients へ写す",
      "doubt": ""
@@ -4117,7 +4118,7 @@
      "kind": "運用の道具（CLI）",
      "name": "migrate-credentials",
      "at": [
-      "src/gcp.rs:643"
+      "src/gcp.rs:678"
      ],
      "why": "運用者が打つ。passkey の記録を新しい置き場へ移す",
      "doubt": ""
@@ -4141,7 +4142,7 @@
    "status": "内部のきっかけで動く",
    "note": "時間（定期の掃除）と、/ciba/pending・/ciba/history の中で動く",
    "at": [
-    "src/provider.rs:141-153",
+    "src/provider.rs:172-184",
     "src/web/ciba.rs:10",
     "src/web/ciba.rs:40"
    ],
@@ -4158,7 +4159,7 @@
    "status": "内部のきっかけで動く",
    "note": "CIBA の要求（A-019）の中で、宛先の利用者の端末へ送る",
    "at": [
-    "src/web/ciba.rs:250-262"
+    "src/web/ciba.rs:250-264"
    ],
    "children": []
   },
@@ -4171,7 +4172,7 @@
    "via": "親",
    "mid": "",
    "status": "内部のきっかけで動く",
-   "note": "登録（A-026）・復旧（A-036・A-038）の中で送る。招待（A-039）はリンクを返すだけでメールは送らない（src/web/register.rs:407-469）",
+   "note": "登録（A-026）・復旧（A-036・A-038）の中で送る。招待（A-039）はリンクを返すだけでメールは送らない（src/web/register.rs:420-482）",
    "at": [
     "src/web/register.rs:58-103",
     "src/web/recover.rs:217-251",
@@ -4190,7 +4191,7 @@
    "status": "内部のきっかけで動く",
    "note": "管理の操作と passkey の削除・アカウントを止める操作の中で書く",
    "at": [
-    "src/audit_log.rs:21"
+    "src/audit_log.rs:24"
    ],
    "children": []
   }
@@ -4254,7 +4255,7 @@
    "name": "登録の passkey を作る画面",
    "parent": "SC-001",
    "reach": "リンクで直接開く",
-   "file": "src/web/register.rs:207-305",
+   "file": "src/web/register.rs:207-313",
    "direct": "確かめのメールのリンク（/signup/verify、アプリからは /r を経る）",
    "ops": [
     "A-027",
@@ -4269,7 +4270,7 @@
    "name": "招待の passkey を作る画面",
    "parent": "SC-001",
    "reach": "リンクで直接開く",
-   "file": "src/web/register.rs:538-584",
+   "file": "src/web/register.rs:551-597",
    "direct": "RP が招待（A-039）で受け取ったリンクを利用者に渡す",
    "ops": [
     "A-040",
@@ -4422,7 +4423,7 @@
    "name": "CIBA の要求を承認する画面",
    "parent": null,
    "root": true,
-   "file": "src/web/ciba.rs:277-364",
+   "file": "src/web/ciba.rs:279-366",
    "ops": [
     "A-020",
     "A-023",
@@ -4525,7 +4526,7 @@
    "surface": "管理画面",
    "name": "IAT を発行する画面",
    "parent": "SC-016",
-   "file": "src/web/admin.rs:985-1138",
+   "file": "src/web/admin.rs:985-1139",
    "ops": [
     "A-057"
    ]
@@ -4537,7 +4538,7 @@
    "name": "発行した IAT を一度だけ見せる画面",
    "parent": "SC-016",
    "reach": "リンクで直接開く",
-   "file": "src/web/admin.rs:1140-1200",
+   "file": "src/web/admin.rs:1141-1211",
    "direct": "発行（A-057）の後に送られる。1 度見せたら消える",
    "ops": [
     "A-059"
@@ -4846,9 +4847,9 @@
    "dest": {
     "t": "移る",
     "what": "試しの RP の入口（未ログインのとき）",
-    "at": "src/web/ciba.rs:288"
+    "at": "src/web/ciba.rs:290"
    },
-   "file": "src/web/ciba.rs:288"
+   "file": "src/web/ciba.rs:290"
   }
  ],
  "CHECK": {
@@ -5060,11 +5061,63 @@
    "kind": "infra",
    "default": "読み口の行に無し（無ければ PORT、さらに無ければ \"8080\"）",
    "effect": "ローカル実行（K_SERVICE 無し）で待ち受ける port を、値の末尾の :port から決める。",
-   "reader": "src/main.rs:103",
+   "reader": "src/main.rs:96",
    "parent": null
   },
   {
    "id": "ST-002",
+   "name": "env:APPLE_APP_ID",
+   "kind": "core",
+   "default": "読み口の行に無し",
+   "effect": "AASA の appID（Team ID と bundle id）を決める。APP_NAME・APP_SCHEME・APP_ANDROID_PACKAGE・APPLE_APP_ID の 4 つが揃うときだけ、登録の passkey を作る画面にアプリで開く誘導を出し、AASA（/.well-known/apple-app-site-association）を返す。揃わなければモバイルでも Web で登録し、AASA は 404。Cloud Run の上では、揃わなければ互換のため前からのアプリに落とす（src/gcp.rs:155-163）。",
+   "reader": "src/main.rs:136",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "parent": null
+  },
+  {
+   "id": "ST-003",
+   "name": "env:APP_ANDROID_PACKAGE",
+   "kind": "core",
+   "default": "読み口の行に無し",
+   "effect": "Android でアプリを開く intent の package を決める。APP_NAME・APP_SCHEME・APP_ANDROID_PACKAGE・APPLE_APP_ID の 4 つが揃うときだけ、登録の passkey を作る画面にアプリで開く誘導を出し、AASA（/.well-known/apple-app-site-association）を返す。揃わなければモバイルでも Web で登録し、AASA は 404。Cloud Run の上では、揃わなければ互換のため前からのアプリに落とす（src/gcp.rs:155-163）。",
+   "reader": "src/main.rs:135",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "parent": null
+  },
+  {
+   "id": "ST-004",
+   "name": "env:APP_NAME",
+   "kind": "core",
+   "default": "読み口の行に無し",
+   "effect": "登録の画面に出すアプリの名を決める。APP_NAME・APP_SCHEME・APP_ANDROID_PACKAGE・APPLE_APP_ID の 4 つが揃うときだけ、登録の passkey を作る画面にアプリで開く誘導を出し、AASA（/.well-known/apple-app-site-association）を返す。揃わなければモバイルでも Web で登録し、AASA は 404。Cloud Run の上では、揃わなければ互換のため前からのアプリに落とす（src/gcp.rs:155-163）。",
+   "reader": "src/main.rs:133",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "parent": null
+  },
+  {
+   "id": "ST-005",
+   "name": "env:APP_SCHEME",
+   "kind": "core",
+   "default": "読み口の行に無し",
+   "effect": "アプリを開く custom scheme を決める。APP_NAME・APP_SCHEME・APP_ANDROID_PACKAGE・APPLE_APP_ID の 4 つが揃うときだけ、登録の passkey を作る画面にアプリで開く誘導を出し、AASA（/.well-known/apple-app-site-association）を返す。揃わなければモバイルでも Web で登録し、AASA は 404。Cloud Run の上では、揃わなければ互換のため前からのアプリに落とす（src/gcp.rs:155-163）。",
+   "reader": "src/main.rs:134",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "parent": null
+  },
+  {
+   "id": "ST-006",
    "name": "env:BASE_PATH",
    "place": "環境",
    "scope": "配備全体",
@@ -5073,11 +5126,11 @@
    "kind": "core",
    "default": "空（unwrap_or_default）",
    "effect": "issuer の path の接頭辞になり、全部の道をこの接頭辞の下に置く（issuer = ORIGIN + BASE_PATH）。",
-   "reader": "src/main.rs:49; src/gcp.rs:605",
+   "reader": "src/main.rs:37; src/gcp.rs:640",
    "parent": null
   },
   {
-   "id": "ST-003",
+   "id": "ST-007",
    "name": "env:CIBA_RP_SECRET",
    "place": "環境",
    "scope": "配備全体",
@@ -5086,11 +5139,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "管理コマンド migrate-static-clients --apply のとき、在れば Secret Manager の同じ名の値と一致を確かめ、食い違えば止まる（本体の起動では読まない）。",
-   "reader": "src/gcp.rs:547",
+   "reader": "src/gcp.rs:582",
    "parent": null
   },
   {
-   "id": "ST-004",
+   "id": "ST-008",
    "name": "env:CONFORMANCE_FAPI_CALLBACK",
    "place": "環境",
    "scope": "配備全体",
@@ -5099,11 +5152,11 @@
    "kind": "connect",
    "default": "OpenID 認定スイートの公開の callback の URL",
    "effect": "FAPI 認定用の静的 client（fapi-1・fapi-2）の redirect_uri を変える。",
-   "reader": "src/main.rs:133",
+   "reader": "src/main.rs:147",
    "parent": null
   },
   {
-   "id": "ST-005",
+   "id": "ST-009",
    "name": "env:FAPI1_KID",
    "place": "環境",
    "scope": "配備全体",
@@ -5112,11 +5165,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "FAPI 認定スイートの client fapi-1 の公開鍵（EC の kid）を与える。FAPI1_X・FAPI1_Y・FAPI1_KID の 3 つが揃うときだけ fapi-1 を静的に登録する。",
-   "reader": "src/main.rs:132",
+   "reader": "src/main.rs:146",
    "parent": null
   },
   {
-   "id": "ST-006",
+   "id": "ST-010",
    "name": "env:FAPI1_X",
    "place": "環境",
    "scope": "配備全体",
@@ -5125,11 +5178,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "FAPI 認定スイートの client fapi-1 の公開鍵（EC の x）を与える。FAPI1_X・FAPI1_Y・FAPI1_KID の 3 つが揃うときだけ fapi-1 を静的に登録する。",
-   "reader": "src/main.rs:130",
+   "reader": "src/main.rs:144",
    "parent": null
   },
   {
-   "id": "ST-007",
+   "id": "ST-011",
    "name": "env:FAPI1_Y",
    "place": "環境",
    "scope": "配備全体",
@@ -5138,11 +5191,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "FAPI 認定スイートの client fapi-1 の公開鍵（EC の y）を与える。FAPI1_X・FAPI1_Y・FAPI1_KID の 3 つが揃うときだけ fapi-1 を静的に登録する。",
-   "reader": "src/main.rs:131",
+   "reader": "src/main.rs:145",
    "parent": null
   },
   {
-   "id": "ST-008",
+   "id": "ST-012",
    "name": "env:FAPI2_KID",
    "place": "環境",
    "scope": "配備全体",
@@ -5151,11 +5204,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "FAPI 認定スイートの client fapi-2 の公開鍵（EC の kid）を与える。FAPI2_X・FAPI2_Y・FAPI2_KID の 3 つが揃うときだけ fapi-2 を静的に登録する。",
-   "reader": "src/main.rs:132",
+   "reader": "src/main.rs:146",
    "parent": null
   },
   {
-   "id": "ST-009",
+   "id": "ST-013",
    "name": "env:FAPI2_X",
    "place": "環境",
    "scope": "配備全体",
@@ -5164,11 +5217,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "FAPI 認定スイートの client fapi-2 の公開鍵（EC の x）を与える。FAPI2_X・FAPI2_Y・FAPI2_KID の 3 つが揃うときだけ fapi-2 を静的に登録する。",
-   "reader": "src/main.rs:130",
+   "reader": "src/main.rs:144",
    "parent": null
   },
   {
-   "id": "ST-010",
+   "id": "ST-014",
    "name": "env:FAPI2_Y",
    "place": "環境",
    "scope": "配備全体",
@@ -5177,11 +5230,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "FAPI 認定スイートの client fapi-2 の公開鍵（EC の y）を与える。FAPI2_X・FAPI2_Y・FAPI2_KID の 3 つが揃うときだけ fapi-2 を静的に登録する。",
-   "reader": "src/main.rs:131",
+   "reader": "src/main.rs:145",
    "parent": null
   },
   {
-   "id": "ST-011",
+   "id": "ST-015",
    "name": "env:FIDO_CONFORMANCE_ENABLED",
    "place": "環境",
    "scope": "配備全体",
@@ -5194,7 +5247,7 @@
    "parent": null
   },
   {
-   "id": "ST-012",
+   "id": "ST-016",
    "name": "env:FIDO_ORIGIN",
    "place": "環境",
    "scope": "配備全体",
@@ -5207,7 +5260,7 @@
    "parent": null
   },
   {
-   "id": "ST-013",
+   "id": "ST-017",
    "name": "env:FIDO_RP_ID",
    "place": "環境",
    "scope": "配備全体",
@@ -5220,7 +5273,7 @@
    "parent": null
   },
   {
-   "id": "ST-014",
+   "id": "ST-018",
    "name": "env:FIDO_RP_NAME",
    "place": "環境",
    "scope": "配備全体",
@@ -5233,20 +5286,20 @@
    "parent": null
   },
   {
-   "id": "ST-015",
+   "id": "ST-019",
    "name": "env:FIRESTORE_DATABASE_ID",
    "place": "環境",
    "scope": "配備全体",
    "who": "運用者",
    "entry": "無し（env を直して立て直す）",
    "kind": "connect",
-   "default": "\"(default)\"（空も未設定とみなす。src/firestore.rs:147）",
+   "default": "\"(default)\"（空も未設定とみなす。src/firestore.rs:149）",
    "effect": "つなぐ Firestore の database を変える。",
-   "reader": "src/firestore.rs:217",
+   "reader": "src/firestore.rs:213",
    "parent": null
   },
   {
-   "id": "ST-016",
+   "id": "ST-020",
    "name": "env:FIRESTORE_EMULATOR_HOST",
    "place": "環境",
    "scope": "配備全体",
@@ -5254,38 +5307,51 @@
    "entry": "無し（env を直して立て直す）",
    "kind": "connect",
    "default": "読み口の行に無し",
-   "effect": "Firestore の宛先を emulator に向け、K_SERVICE が無くても Firestore を使う配線を入れる（KMS・Secret Manager・Resend は入れない）。",
-   "reader": "src/gcp.rs:21; src/firestore.rs:221; src/main.rs:89",
+   "effect": "Firestore の宛先を emulator に向け、K_SERVICE が無くても Firestore を使う配線を入れる（KMS・Secret Manager は入れない。Resend は MAIL_FROM も在るときだけ）。",
+   "reader": "src/gcp.rs:22; src/firestore.rs:217; src/main.rs:76",
    "parent": null
   },
   {
-   "id": "ST-017",
+   "id": "ST-021",
    "name": "env:GCLOUD_PROJECT",
    "place": "環境",
    "scope": "配備全体",
    "who": "運用者",
    "entry": "無し（env を直して立て直す）",
    "kind": "connect",
-   "default": "（伏せる）",
-   "effect": "Firestore・Secret Manager・KMS へ出るときの GCP の project を決める（GOOGLE_CLOUD_PROJECT より先に見る）。",
-   "reader": "src/gcp.rs:314; src/fido/mod.rs:75",
+   "default": "無し（GOOGLE_CLOUD_PROJECT も無ければ、Firestore を使う配線と管理コマンドは止まる。exit 2）",
+   "effect": "Firestore・Secret Manager・KMS・FCM へ出るときの GCP の project を決める（GOOGLE_CLOUD_PROJECT より先に見る）。K_SERVICE か FIRESTORE_EMULATOR_HOST が在るとき（gcp の feature の binary）と管理コマンドでは、どちらかが要る。",
+   "reader": "src/gcp.rs:344",
    "parent": null
   },
   {
-   "id": "ST-018",
+   "id": "ST-022",
    "name": "env:GOOGLE_CLOUD_PROJECT",
    "place": "環境",
    "scope": "配備全体",
    "who": "運用者",
    "entry": "無し（env を直して立て直す）",
    "kind": "connect",
-   "default": "（伏せる）",
+   "default": "無し（GCLOUD_PROJECT も無ければ止まる）",
    "effect": "GCLOUD_PROJECT が無いときに、GCP の project を決める。",
-   "reader": "src/gcp.rs:315; src/fido/mod.rs:76",
+   "reader": "src/gcp.rs:344",
    "parent": null
   },
   {
-   "id": "ST-019",
+   "id": "ST-023",
+   "name": "env:INTROSPECTION_CLIENT_IDS",
+   "kind": "core",
+   "default": "空（unwrap_or_default。どの client も自分に出た token だけ）",
+   "effect": "/introspect と /oauth/mandate/consume で、ほかの client に出た access token も引ける・使い切れる client（RS）を、カンマ区切りの client id で名指す。",
+   "reader": "src/main.rs:49",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "parent": null
+  },
+  {
+   "id": "ST-024",
    "name": "env:INVITE_CLIENT_IDS",
    "place": "環境",
    "scope": "配備全体",
@@ -5294,11 +5360,11 @@
    "kind": "core",
    "default": "空（unwrap_or_default。どの client も許さない）",
    "effect": "招待（/invites）と凍結（/accounts/disable）を呼べる confidential client を、カンマ区切りの client id で名指す。",
-   "reader": "src/main.rs:59",
+   "reader": "src/main.rs:48",
    "parent": null
   },
   {
-   "id": "ST-020",
+   "id": "ST-025",
    "name": "env:KMS_ES256_KEY",
    "place": "環境",
    "scope": "配備全体",
@@ -5307,11 +5373,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "ES256 の署名を Cloud KMS の鍵で行う（無いか初期化に失敗すれば Secret Manager の鍵へ落ちる）。",
-   "reader": "src/gcp.rs:28",
+   "reader": "src/gcp.rs:29",
    "parent": null
   },
   {
-   "id": "ST-021",
+   "id": "ST-026",
    "name": "env:KMS_RS256_KEY",
    "place": "環境",
    "scope": "配備全体",
@@ -5320,11 +5386,11 @@
    "kind": "connect",
    "default": "読み口の行に無し",
    "effect": "RS256 の署名を Cloud KMS の鍵で行う（無いか初期化に失敗すれば Secret Manager の鍵へ落ちる）。",
-   "reader": "src/gcp.rs:75",
+   "reader": "src/gcp.rs:76",
    "parent": null
   },
   {
-   "id": "ST-022",
+   "id": "ST-027",
    "name": "env:K_SERVICE",
    "place": "環境",
    "scope": "配備全体",
@@ -5333,11 +5399,11 @@
    "kind": "infra",
    "default": "読み口の行に無し",
    "effect": "Cloud Run で動いていることを示し、構造化 JSON のログ・0.0.0.0:PORT の待ち受け・Firestore と KMS／Secret Manager の鍵と Resend の配線・正規の鍵が無ければ起動しない守りを入れる。",
-   "reader": "src/main.rs:28; src/main.rs:84; src/main.rs:94; src/gcp.rs:21; src/gcp.rs:24; src/fido/mod.rs:74",
+   "reader": "src/main.rs:16; src/main.rs:71; src/main.rs:87; src/gcp.rs:22; src/gcp.rs:25; src/fido/mod.rs:74",
    "parent": null
   },
   {
-   "id": "ST-023",
+   "id": "ST-028",
    "name": "env:LEGACY_HOSTS",
    "place": "環境",
    "scope": "配備全体",
@@ -5350,7 +5416,7 @@
    "parent": null
   },
   {
-   "id": "ST-024",
+   "id": "ST-029",
    "name": "env:LOG_PSEUDONYM_KEY",
    "place": "環境",
    "scope": "配備全体",
@@ -5363,20 +5429,33 @@
    "parent": null
   },
   {
-   "id": "ST-025",
+   "id": "ST-030",
+   "name": "env:MAIL_FROM",
+   "kind": "connect",
+   "default": "読み口の行に無し（Cloud Run の上では互換のため前からの差出人。手元では Resend を使わない）",
+   "effect": "Resend で送るメールの差出人を決める。RESEND_API_KEY が在って MAIL_FROM が無いとき、Cloud Run の上では前からの差出人に落とし、手元（エミュレータ）では Resend を使わずメールをログに出す。",
+   "reader": "src/gcp.rs:139",
+   "place": "環境",
+   "scope": "配備全体",
+   "who": "運用者",
+   "entry": "無し（env を直して立て直す）",
+   "parent": null
+  },
+  {
+   "id": "ST-031",
    "name": "env:ORIGIN",
    "place": "環境",
    "scope": "配備全体",
    "who": "運用者",
    "entry": "無し（env を直して立て直す）",
    "kind": "core",
-   "default": "\"http://localhost:8080\"（管理コマンドでは既定無しで止まる。src/gcp.rs:604）",
+   "default": "\"http://localhost:8080\"（管理コマンドでは既定無しで止まる。src/gcp.rs:639）",
    "effect": "issuer の scheme とホストを決め、LEGACY_HOSTS の転送先にもなる。",
-   "reader": "src/main.rs:48; src/gcp.rs:604",
+   "reader": "src/main.rs:36; src/gcp.rs:639",
    "parent": null
   },
   {
-   "id": "ST-026",
+   "id": "ST-032",
    "name": "env:PORT",
    "place": "環境",
    "scope": "配備全体",
@@ -5385,11 +5464,11 @@
    "kind": "infra",
    "default": "\"8080\"",
    "effect": "Cloud Run では 0.0.0.0 で待ち受ける port、ローカルでは ADDR が無いときの port を決める。",
-   "reader": "src/main.rs:96; src/main.rs:106",
+   "reader": "src/main.rs:89; src/main.rs:99",
    "parent": null
   },
   {
-   "id": "ST-027",
+   "id": "ST-033",
    "name": "env:RESEND_API_KEY",
    "place": "環境",
    "scope": "配備全体",
@@ -5397,25 +5476,25 @@
    "entry": "無し（env を直して立て直す）",
    "kind": "connect",
    "default": "読み口の行に無し",
-   "effect": "在ればメールを Resend で送り、無ければ送らずログに出す（Firestore の配線が入るときだけ読む）。",
-   "reader": "src/gcp.rs:135",
+   "effect": "在れば（MAIL_FROM と合わせて）メールを Resend で送り、無ければ送らずログに出す（Firestore の配線が入るときだけ読む）。",
+   "reader": "src/gcp.rs:136",
    "parent": null
   },
   {
-   "id": "ST-028",
+   "id": "ST-034",
    "name": "env:RUST_LOG",
    "place": "環境",
    "scope": "配備全体",
    "who": "運用者",
    "entry": "無し（env を直して立て直す）",
    "kind": "infra",
-   "default": "\"info\"（src/main.rs:27）",
+   "default": "\"info\"（src/main.rs:15）",
    "effect": "ログの出す深さ（filter）を変える。",
-   "reader": "src/main.rs:26",
+   "reader": "src/main.rs:14",
    "parent": null
   },
   {
-   "id": "ST-029",
+   "id": "ST-035",
    "name": "deploy:配備の形",
    "place": "配備",
    "scope": "配備全体",
@@ -5423,8 +5502,8 @@
    "entry": "無し（Dockerfile・rust-toolchain.toml・Cargo.toml を直して build し直し、配備し直す）",
    "kind": "infra",
    "default": "Dockerfile と rust-toolchain.toml の行どおり",
-   "effect": "実行の OS は Debian trixie-slim、言語は Rust 1.100.0（edition 2024）、枠組みは axum 0.8・tokio 1。gcp の feature で build した 1 本の binary を Cloud Run のコンテナとして PORT=8080 で動かし（README の gcloud run deploy --source）、台の数は repo で固定せず、保存先を Firestore に置いて台をまたぐ前提で動く。",
-   "reader": "Dockerfile:6; Dockerfile:14; Dockerfile:20; Dockerfile:24; rust-toolchain.toml:3; Cargo.toml:4; Cargo.toml:32; Cargo.toml:36; README.md:217; src/gcp.rs:130",
+   "effect": "実行の OS は Debian trixie-slim、言語は Rust 1.100.0（edition 2024）、枠組みは axum 0.8・tokio 1。gcp の feature で build した 1 本の binary を Cloud Run のコンテナとして PORT=8080 で動かし（scripts/lib_cloud_run.sh の gcloud run deploy --source）、台の数は repo で固定せず、保存先を Firestore に置いて台をまたぐ前提で動く。",
+   "reader": "Dockerfile:6; Dockerfile:16; Dockerfile:22; Dockerfile:26; rust-toolchain.toml:3; Cargo.toml:4; Cargo.toml:36; Cargo.toml:40; scripts/lib_cloud_run.sh:164; src/gcp.rs:131",
    "parent": null
   }
  ],
@@ -5434,23 +5513,31 @@
    "s": "確か"
   },
   "ST-002": {
-   "c": "④土台",
-   "s": "確か"
+   "c": "①入口",
+   "s": "確か",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "n": 1
   },
   "ST-003": {
-   "c": "③つなぎ先",
-   "s": "確か"
+   "c": "①入口",
+   "s": "確か",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "n": 1
   },
   "ST-004": {
-   "c": "③つなぎ先",
-   "s": "確か"
+   "c": "①入口",
+   "s": "確か",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "n": 1
   },
   "ST-005": {
-   "c": "③つなぎ先",
-   "s": "確か"
+   "c": "①入口",
+   "s": "確か",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "n": 1
   },
   "ST-006": {
-   "c": "③つなぎ先",
+   "c": "④土台",
    "s": "確か"
   },
   "ST-007": {
@@ -5470,47 +5557,45 @@
    "s": "確か"
   },
   "ST-011": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-012": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-013": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-014": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-015": {
    "c": "①入口",
    "s": "確か",
    "w": "\"1\" か \"true\" のとき /fido/* の 6 本の道が載り、未設定なら道が無く 404 になる",
    "n": 6
   },
-  "ST-012": {
+  "ST-016": {
    "c": "②結果",
    "s": "確か",
    "w": "FIDO_CONFORMANCE_ENABLED が有効なときだけ、/fido/* の検証で照らす origin が変わる"
   },
-  "ST-013": {
+  "ST-017": {
    "c": "②結果",
    "s": "確か",
    "w": "FIDO_CONFORMANCE_ENABLED が有効なときだけ、/fido/* の options に載る RP ID と検証の照合先が変わる"
   },
-  "ST-014": {
+  "ST-018": {
    "c": "②結果",
    "s": "確か",
    "w": "FIDO_CONFORMANCE_ENABLED が有効なときだけ、/fido/attestation/options が返す rp.name が変わる"
   },
-  "ST-015": {
-   "c": "③つなぎ先",
-   "s": "確か"
-  },
-  "ST-016": {
-   "c": "③つなぎ先",
-   "s": "確か"
-  },
-  "ST-017": {
-   "c": "③つなぎ先",
-   "s": "確か"
-  },
-  "ST-018": {
-   "c": "③つなぎ先",
-   "s": "確か"
-  },
   "ST-019": {
-   "c": "①入口",
-   "s": "確か",
-   "w": "名指した confidential client の要求だけが通り、ほかの client と public client は 403 になる",
-   "n": 2
+   "c": "③つなぎ先",
+   "s": "確か"
   },
   "ST-020": {
    "c": "③つなぎ先",
@@ -5521,59 +5606,134 @@
    "s": "確か"
   },
   "ST-022": {
-   "c": "④土台",
+   "c": "③つなぎ先",
    "s": "確か"
   },
   "ST-023": {
    "c": "①入口",
    "s": "確か",
+   "w": "名指した client だけが、ほかの client に出た token を引ける・使い切れる。名指さない client には active=false・consumed=false を返す",
+   "n": 2
+  },
+  "ST-024": {
+   "c": "①入口",
+   "s": "確か",
+   "w": "名指した confidential client の要求だけが通り、ほかの client と public client は 403 になる",
+   "n": 2
+  },
+  "ST-025": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-026": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-027": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-028": {
+   "c": "①入口",
+   "s": "確か",
    "w": "全部の道の手前にかかる門で、Host だけで決まり道を選ばないので、子の行には結ばない（AASA だけは転送しない）",
    "n": 0
   },
-  "ST-024": {
+  "ST-029": {
    "c": "②結果",
    "s": "確か",
    "w": "ログの sub の擬似化トークン（h: の値）が変わる。応答は変わらない"
   },
-  "ST-025": {
-   "c": "④土台",
-   "s": "確か"
-  },
-  "ST-026": {
-   "c": "④土台",
-   "s": "確か"
-  },
-  "ST-027": {
+  "ST-030": {
    "c": "③つなぎ先",
    "s": "確か"
   },
-  "ST-028": {
+  "ST-031": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-032": {
+   "c": "④土台",
+   "s": "確か"
+  },
+  "ST-033": {
+   "c": "③つなぎ先",
+   "s": "確か"
+  },
+  "ST-034": {
    "c": "④土台",
    "s": "見込み"
   },
-  "ST-029": {
+  "ST-035": {
    "c": "④土台",
    "s": "確か"
   }
  },
  "GN": {
-  "ST-011": {
+  "ST-002": {
+   "n": "env:APPLE_APP_ID",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "b": "404 → 200（4 つが揃うとき）",
+   "s": "確か",
+   "e": "src/main.rs:130-138; src/web/register.rs:342-345; src/gcp.rs:155-163"
+  },
+  "ST-003": {
+   "n": "env:APP_ANDROID_PACKAGE",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "b": "404 → 200（4 つが揃うとき）",
+   "s": "確か",
+   "e": "src/main.rs:130-138; src/web/register.rs:342-345; src/gcp.rs:155-163"
+  },
+  "ST-004": {
+   "n": "env:APP_NAME",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "b": "404 → 200（4 つが揃うとき）",
+   "s": "確か",
+   "e": "src/main.rs:130-138; src/web/register.rs:342-345; src/gcp.rs:155-163"
+  },
+  "ST-005": {
+   "n": "env:APP_SCHEME",
+   "w": "4 つが揃うときだけ AASA を返し、揃わなければ 404（Cloud Run の上では前からのアプリで返す）",
+   "b": "404 → 200（4 つが揃うとき）",
+   "s": "確か",
+   "e": "src/main.rs:130-138; src/web/register.rs:342-345; src/gcp.rs:155-163"
+  },
+  "ST-015": {
    "n": "env:FIDO_CONFORMANCE_ENABLED",
    "w": "\"1\" か \"true\" のとき /fido/* の 6 本の道が載り、未設定なら道が無く 404 になる",
    "b": "道が無い（404）→ 道が在る",
    "s": "確か",
-   "e": "src/web/mod.rs:215; src/web/mod.rs:231; src/web/mod.rs:342; src/fido/mod.rs:143"
+   "e": "src/web/mod.rs:215; src/web/mod.rs:231; src/web/mod.rs:342; src/fido/mod.rs:140"
   },
-  "ST-019": {
+  "ST-023": {
+   "n": "env:INTROSPECTION_CLIENT_IDS",
+   "w": "名指した client だけが、ほかの client に出た token を引ける・使い切れる。名指さない client には active=false・consumed=false を返す",
+   "b": "ほかの client に出た token は見えない（active=false・consumed=false）→ 名指した client には見える",
+   "s": "確か",
+   "e": "src/main.rs:49; src/web/oidc.rs:475-477; src/web/oidc.rs:535; src/web/oidc.rs:562"
+  },
+  "ST-024": {
    "n": "env:INVITE_CLIENT_IDS",
    "w": "名指した confidential client の要求だけが通り、ほかの client と public client は 403 になる",
    "b": "どの client も 403 → 名指した confidential client は通る",
    "s": "確か",
-   "e": "src/main.rs:59; src/web/register.rs:416; src/web/register.rs:478; src/web/register.rs:501"
+   "e": "src/main.rs:48; src/web/register.rs:429; src/web/register.rs:491; src/web/register.rs:514"
   }
  },
  "GPID": {
-  "ST-011": [
+  "ST-002": [
+   "A-063#1"
+  ],
+  "ST-003": [
+   "A-063#1"
+  ],
+  "ST-004": [
+   "A-063#1"
+  ],
+  "ST-005": [
+   "A-063#1"
+  ],
+  "ST-015": [
    "A-064#1",
    "A-064#2",
    "A-065#1",
@@ -5581,35 +5741,51 @@
    "A-066#1",
    "A-066#2"
   ],
-  "ST-019": [
+  "ST-023": [
+   "A-010#1",
+   "A-011#1"
+  ],
+  "ST-024": [
    "A-039#1",
    "A-041#1"
   ]
  },
  "GATE": {
   "A-064#1": [
-   "ST-011"
+   "ST-015"
   ],
   "A-064#2": [
-   "ST-011"
+   "ST-015"
   ],
   "A-065#1": [
-   "ST-011"
+   "ST-015"
   ],
   "A-065#2": [
-   "ST-011"
+   "ST-015"
   ],
   "A-066#1": [
-   "ST-011"
+   "ST-015"
   ],
   "A-066#2": [
-   "ST-011"
+   "ST-015"
   ],
   "A-039#1": [
-   "ST-019"
+   "ST-024"
   ],
   "A-041#1": [
-   "ST-019"
+   "ST-024"
+  ],
+  "A-010#1": [
+   "ST-023"
+  ],
+  "A-011#1": [
+   "ST-023"
+  ],
+  "A-063#1": [
+   "ST-002",
+   "ST-003",
+   "ST-004",
+   "ST-005"
   ]
  },
  "OV": [
@@ -5618,8 +5794,8 @@
     "env:GCLOUD_PROJECT",
     "env:GOOGLE_CLOUD_PROJECT"
    ],
-   "order": "GCLOUD_PROJECT が勝つ（どちらも無ければ既定の project）",
-   "how": "src/gcp.rs:314; src/gcp.rs:315; src/fido/mod.rs:75; src/fido/mod.rs:76"
+   "order": "GCLOUD_PROJECT が勝つ（どちらも無ければ止まる）",
+   "how": "src/gcp.rs:344; src/gcp.rs:347"
   },
   {
    "names": [
@@ -5627,7 +5803,7 @@
     "env:PORT"
    ],
    "order": "ローカルでは ADDR が勝つ（Cloud Run では PORT だけを見る）",
-   "how": "src/main.rs:103; src/main.rs:106; src/main.rs:96"
+   "how": "src/main.rs:96; src/main.rs:99; src/main.rs:89"
   },
   {
    "names": [
@@ -5635,7 +5811,7 @@
     "Dockerfile の ENV PORT"
    ],
    "order": "設定 file から作る（Dockerfile の ENV が env の PORT を作る）",
-   "how": "Dockerfile:24; src/main.rs:96"
+   "how": "Dockerfile:24; src/main.rs:89"
   },
   {
    "names": [
@@ -5643,7 +5819,7 @@
     "Secret Manager の oidc-signing-key-es256"
    ],
    "order": "環境が勝つ（KMS の鍵が無いか初期化に失敗すれば Secret Manager へ落ちる）",
-   "how": "src/gcp.rs:28; src/gcp.rs:45"
+   "how": "src/gcp.rs:29; src/gcp.rs:46"
   },
   {
    "names": [
@@ -5651,7 +5827,7 @@
     "Secret Manager の oidc-signing-key-rs256"
    ],
    "order": "環境が勝つ（KMS の鍵が無いか初期化に失敗すれば Secret Manager へ落ちる）",
-   "how": "src/gcp.rs:75; src/gcp.rs:92"
+   "how": "src/gcp.rs:76; src/gcp.rs:93"
   },
   {
    "names": [
@@ -5659,7 +5835,7 @@
     "Secret Manager の CIBA_RP_SECRET"
    ],
    "order": "Secret Manager が勝つ（env は在れば一致を確かめるだけで、食い違えば止まる）",
-   "how": "src/gcp.rs:536; src/gcp.rs:547; src/gcp.rs:607"
+   "how": "src/gcp.rs:571; src/gcp.rs:582; src/gcp.rs:642"
   }
  ],
  "SP": [],
@@ -5690,7 +5866,7 @@
    ],
    "fail": {
     "look": "黙って落ちる",
-    "what": "署名の呼び出しが誤りを返すと、記録だけ残して署名の欄が空の ID token を発行する（受け手の検証で落ちる）。HTTP の client に時間の上限が無く、応答が返らなければ待ち続ける。起動時の失敗は Secret Manager の鍵へ寄せる（src/gcp.rs:34-37）。握りつぶす所: src/kms.rs:139-145"
+    "what": "署名の呼び出しが誤りを返すと、記録だけ残して署名の欄が空の ID token を発行する（受け手の検証で落ちる）。HTTP の client に時間の上限が無く、応答が返らなければ待ち続ける。起動時の失敗は Secret Manager の鍵へ寄せる（src/gcp.rs:35-38）。握りつぶす所: src/kms.rs:139-145"
    },
    "exits": [
     {
@@ -5703,7 +5879,7 @@
     }
    ],
    "outside": [],
-   "note": "鍵の版は KMS_*_KEY の値に /cryptoKeyVersions/1 を足した固定の版（src/kms.rs:37）。/jwks（A-002）は起動時に取った公開鍵を返すだけで KMS を呼ばない（src/kms.rs:149-151）。配線は K_SERVICE の時だけ（src/gcp.rs:24-29, 75-76）。"
+   "note": "鍵の版は KMS_*_KEY の値に /cryptoKeyVersions/1 を足した固定の版（src/kms.rs:37）。/jwks（A-002）は起動時に取った公開鍵を返すだけで KMS を呼ばない（src/kms.rs:149-151）。配線は K_SERVICE の時だけ（src/gcp.rs:25-30, 76-77）。"
   },
   {
    "id": "X-02",
@@ -5732,16 +5908,16 @@
    ],
    "fail": {
     "look": "断",
-    "what": "起動時に正規の署名鍵を KMS からも Secret Manager からも読めなければ起動を止める（src/gcp.rs:67-72, 114-119）。秘密が無い・権限が無い（404・403）は「無い」として扱う（src/firestore.rs:657-661）。"
+    "what": "起動時に正規の署名鍵を KMS からも Secret Manager からも読めなければ起動を止める（src/gcp.rs:68-73, 115-120）。秘密が無い・権限が無い（404・403）は「無い」として扱う（src/firestore.rs:653-657）。"
    },
    "exits": [
     {
      "entry": "GET https://secretmanager.googleapis.com/v1/projects/{project}/secrets/{name}/versions/latest:access（Firestore::access_secret）",
-     "at": "src/firestore.rs:644-656"
+     "at": "src/firestore.rs:640-652"
     }
    ],
    "outside": [],
-   "note": "表の操作からは呼ばない。呼ぶのは起動時の配線（src/gcp.rs:45, 92）と、本体の binary の管理者用の副命令（src/gcp.rs:535-536）だけ。秘密の名は oidc-signing-key-es256・oidc-signing-key-rs256・CIBA_RP_SECRET でコードに固定。副命令は同名の環境変数 CIBA_RP_SECRET が在れば値の一致を確かめる（src/gcp.rs:547-554）。"
+   "note": "表の操作からは呼ばない。呼ぶのは起動時の配線（src/gcp.rs:46, 93）と、本体の binary の管理者用の副命令（src/gcp.rs:570-571）だけ。秘密の名は oidc-signing-key-es256・oidc-signing-key-rs256・CIBA_RP_SECRET でコードに固定。副命令は同名の環境変数 CIBA_RP_SECRET が在れば値の一致を確かめる（src/gcp.rs:582-589）。"
   },
   {
    "id": "X-03",
@@ -5842,32 +6018,32 @@
    ],
    "fail": {
     "look": "断",
-    "what": "1 回の要求を 10 秒で切り（src/firestore.rs:150-157）、誤りは呼び手へ返して 500・503・invalid などで断る。監査の記録の書き込みの失敗だけは記録して操作を続ける（src/audit_log.rs:37）。"
+    "what": "1 回の要求を 10 秒で切り（src/firestore.rs:152-159）、誤りは呼び手へ返して 500・503・invalid などで断る。監査の記録の書き込みの失敗だけは記録して操作を続ける（src/audit_log.rs:40）。"
    },
    "exits": [
     {
      "entry": "PATCH {base}/v1/projects/{p}/databases/{db}/documents/{col}/{id}（set_doc・update_field(s)・merge_fields）",
-     "at": "src/firestore.rs:304-313"
+     "at": "src/firestore.rs:300-309"
     },
     {
      "entry": "GET 同上（get_doc・get_doc_with_update_time）",
-     "at": "src/firestore.rs:371-380"
+     "at": "src/firestore.rs:367-376"
     },
     {
      "entry": "PATCH 同上に currentDocument の前提を付ける（set_doc_if_unchanged・create_if_absent）",
-     "at": "src/firestore.rs:420-455"
+     "at": "src/firestore.rs:416-451"
     },
     {
      "entry": "DELETE 同上（delete_doc・delete_doc_if_unchanged・take_doc）",
-     "at": "src/firestore.rs:675-683"
+     "at": "src/firestore.rs:671-679"
     },
     {
      "entry": "POST {base}/v1/projects/{p}/databases/{db}/documents:runQuery（query_eq・list_recent_ordered）",
-     "at": "src/firestore.rs:498-528"
+     "at": "src/firestore.rs:494-524"
     },
     {
      "entry": "GET {base}/.../documents/{col}（list_collection）",
-     "at": "src/firestore.rs:584-610"
+     "at": "src/firestore.rs:580-606"
     }
    ],
    "outside": [
@@ -5877,7 +6053,7 @@
      "at": "scripts/demo-dpop-mandate.mjs:241-250"
     }
    ],
-   "note": "横断に近い（表の 66 の操作のうち 60 が通る）。通らないのは A-001・A-002・A-060・A-061・A-063・A-066。FIRESTORE_EMULATOR_HOST が在ればエミュレータへ向き、認証は無い（src/firestore.rs:248-250, 282-287）。FIDO の適合試験の道は FidoState が別の Firestore を作る（src/fido/mod.rs:74-79）。本体の binary の管理者用の副命令（mint・grant-admin など、src/gcp.rs:143-156）も同じ出口を通るが、表の操作ではない。集まりごとの中身はデータモデルの一覧に任せる。"
+   "note": "横断に近い（表の 66 の操作のうち 60 が通る）。通らないのは A-001・A-002・A-060・A-061・A-063・A-066。FIRESTORE_EMULATOR_HOST が在ればエミュレータへ向き、認証は無い（src/firestore.rs:244-246, 278-283）。FIDO の適合試験の道は FidoState が別の Firestore の接続を作る（src/fido/mod.rs:74-76。project は本体と同じ）。gcp の feature 無しで build した binary は、同じ集まりをメモリ（MemoryDocumentStore、src/document_store.rs:59）に置き、Firestore へは出ない（src/main.rs:79-84）。本体の binary の管理者用の副命令（mint・grant-admin など、src/gcp.rs:169-186）も同じ出口を通るが、表の操作ではない。集まりごとの中身はデータモデルの一覧に任せる。"
   },
   {
    "id": "X-04",
@@ -5966,16 +6142,16 @@
    ],
    "fail": {
     "look": "断",
-    "what": "token を取れなければ、それを使う Firestore・KMS・FCM の呼び出しが誤りになり、呼び手の操作が断る（src/firestore.rs:259-267）。起動時なら署名鍵を読めず起動を止める。"
+    "what": "token を取れなければ、それを使う Firestore・KMS・FCM の呼び出しが誤りになり、呼び手の操作が断る（src/firestore.rs:255-263）。起動時なら署名鍵を読めず起動を止める。"
    },
    "exits": [
     {
      "entry": "GET http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token（Metadata-Flavor: Google を付ける。Firestore::token）",
-     "at": "src/firestore.rs:259-265"
+     "at": "src/firestore.rs:255-261"
     }
    ],
    "outside": [],
-   "note": "token は有効期限の 60 秒前までプロセスに持ち回すので、毎回は呼ばない（src/firestore.rs:251-258, 268-270）。FIRESTORE_EMULATOR_HOST が在れば呼ばない（src/firestore.rs:248-250）。parents は X-01・X-03・X-05 を呼ぶ操作の和で、X-03 と同じになる。"
+   "note": "token は有効期限の 60 秒前までプロセスに持ち回すので、毎回は呼ばない（src/firestore.rs:247-254, 264-266）。FIRESTORE_EMULATOR_HOST が在れば呼ばない（src/firestore.rs:244-246）。parents は X-01・X-03・X-05 を呼ぶ操作の和で、X-03 と同じになる。"
   },
   {
    "id": "X-05",
@@ -6003,16 +6179,16 @@
    ],
    "fail": {
     "look": "黙って落ちる",
-    "what": "送れなくても結果を捨てて CIBA の応答を返す（Web の承認に任せる）。端末の token が無ければ何もしない（src/fcm.rs:50-53）。HTTP の client に時間の上限が無い。握りつぶす所: src/web/ciba.rs:254"
+    "what": "送れなくても結果を捨てて CIBA の応答を返す（Web の承認に任せる）。端末の token が無ければ何もしない（src/fcm.rs:53-56）。HTTP の client に時間の上限が無い。握りつぶす所: src/web/ciba.rs:255"
    },
    "exits": [
     {
      "entry": "POST https://fcm.googleapis.com/v1/projects/{project}/messages:send（fcm::send）",
-     "at": "src/fcm.rs:78-91"
+     "at": "src/fcm.rs:81-94"
     }
    ],
    "outside": [],
-   "note": "端末の token の登録（A-022）は Firestore の fcmTokens に書くだけで FCM は呼ばない。project は Firestore と同じ値（src/fcm.rs:80-84）。gcp の feature で build した binary だけが送る。"
+   "note": "端末の token の登録（A-022）は Firestore の fcmTokens に書くだけで FCM は呼ばない。project は Firestore と同じ値（src/fcm.rs:83-87）。gcp の feature で build した binary だけが送る。"
   },
   {
    "id": "X-06",
@@ -6032,6 +6208,7 @@
    ],
    "settings": [
     "env:RESEND_API_KEY",
+    "env:MAIL_FROM",
     "env:K_SERVICE"
    ],
    "parents": [
@@ -6042,16 +6219,16 @@
    ],
    "fail": {
     "look": "黙って落ちる",
-    "what": "送れなくても記録だけ残し、画面には「送った」と返す。RESEND_API_KEY が無ければ送らずに宛先と URL を記録に出す LogMailer のまま動く（src/provider.rs:83, src/mailer.rs:167-193）。握りつぶす所: src/web/register.rs:82-84, src/web/register.rs:86, src/web/register.rs:97-99, src/web/recover.rs:367-368"
+    "what": "送れなくても記録だけ残し、画面には「送った」と返す。RESEND_API_KEY が無いか、Cloud Run の外で MAIL_FROM が無ければ送らずに宛先と URL を記録に出す LogMailer のまま動く（src/provider.rs:112, src/mailer.rs:168-194）。握りつぶす所: src/web/register.rs:82-84, src/web/register.rs:86, src/web/register.rs:97-99, src/web/recover.rs:367-368"
    },
    "exits": [
     {
      "entry": "POST https://api.resend.com/emails（ResendMailer::send）",
-     "at": "src/mailer.rs:121-129"
+     "at": "src/mailer.rs:122-130"
     }
    ],
    "outside": [],
-   "note": "配線は K_SERVICE か FIRESTORE_EMULATOR_HOST の時で、かつ RESEND_API_KEY が在る時（src/gcp.rs:135-137）。送り元の名と address はコードに固定（src/mailer.rs:116）。招待（A-039）はリンクを応答で返すだけでメールは送らない。"
+   "note": "配線は K_SERVICE か FIRESTORE_EMULATOR_HOST の時で、かつ RESEND_API_KEY が在る時（src/gcp.rs:136-153）。差出人は MAIL_FROM で決め（src/gcp.rs:139）、Cloud Run の上で MAIL_FROM が無ければ互換のため前からの差出人に落とす（src/gcp.rs:141-143）。招待（A-039）はリンクを応答で返すだけでメールは送らない。"
   },
   {
    "id": "X-07",
@@ -6114,12 +6291,12 @@
    ],
    "fail": {
     "look": "断",
-    "what": "BLOB を取れなければ誤りを応答で返す（src/fido/mod.rs:220-227）。CRL を取れなければその BLOB を飛ばし、飛ばしたことを応答に載せる（src/fido/mds.rs:324-329, src/fido/mod.rs:237-241）。"
+    "what": "BLOB を取れなければ誤りを応答で返す（src/fido/mod.rs:217-224）。CRL を取れなければその BLOB を飛ばし、飛ばしたことを応答に載せる（src/fido/mds.rs:324-329, src/fido/mod.rs:234-238）。"
    },
    "exits": [
     {
      "entry": "GET {要求の blobUrls の URL}（reqwest::get。mds_config）",
-     "at": "src/fido/mod.rs:220-221"
+     "at": "src/fido/mod.rs:217-218"
     },
     {
      "entry": "GET {証明書の CRL 配布点の URL}（reqwest::get。assert_not_revoked）",
@@ -6158,11 +6335,11 @@
    "exits": [
     {
      "entry": "0.0.0.0:{PORT} で待ち受ける（受け口。外へ出る出口ではない）",
-     "at": "src/main.rs:94-99"
+     "at": "src/main.rs:87-92"
     },
     {
      "entry": "K_SERVICE が在れば記録を JSON で標準出力へ出す",
-     "at": "src/main.rs:28-29"
+     "at": "src/main.rs:16-17"
     }
    ],
    "outside": [
@@ -6193,7 +6370,7 @@
    "object": "署名鍵の版（cryptoKeyVersion）",
    "verb": "署名する",
    "tool": "src/kms.rs:91（kms_sign）← src/grants.rs:92 ← POST /token（src/web/mod.rs:251）",
-   "gate": "A-009 で client 認証と grant の検査を通った時。K_SERVICE かつ KMS_ES256_KEY・KMS_RS256_KEY が在る時だけ KMS で、無ければ Secret Manager の鍵でプロセスの中で署名する。alg は client の id_token_signed_response_alg で選び、登録の無い alg は断る（src/provider.rs:209-215）",
+   "gate": "A-009 で client 認証と grant の検査を通った時。K_SERVICE かつ KMS_ES256_KEY・KMS_RS256_KEY が在る時だけ KMS で、無ければ Secret Manager の鍵でプロセスの中で署名する。alg は client の id_token_signed_response_alg で選び、登録の無い alg は断る（src/provider.rs:260-266）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に鍵の署名の役（cloudkms.signerVerifier 相当）が要る見込み",
    "destination": "入らない（署名は ID token として要求した client へ返し、本体の保存先には残さない）",
    "a_ops": [
@@ -6208,7 +6385,7 @@
    "system_name": "Cloud KMS（署名鍵）",
    "object": "署名鍵の版の公開鍵",
    "verb": "取得",
-   "tool": "src/kms.rs:36（KmsSigner::new）← src/gcp.rs:29, 76（起動時の配線）",
+   "tool": "src/kms.rs:36（KmsSigner::new）← src/gcp.rs:30, 77（起動時の配線）",
    "gate": "起動時、K_SERVICE かつ KMS_ES256_KEY・KMS_RS256_KEY が在る時。表の操作からは呼ばない",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に公開鍵を読む役（cloudkms.publicKeyViewer 相当）が要る見込み",
    "destination": "プロセスのメモリに JWK と kid として持ち、/jwks（A-002）で誰にでも返す",
@@ -6222,7 +6399,7 @@
    "system_name": "Secret Manager",
    "object": "署名鍵の秘密（oidc-signing-key-es256・oidc-signing-key-rs256）の最新版",
    "verb": "取得",
-   "tool": "src/firestore.rs:644（access_secret）← src/gcp.rs:45, 92（起動時の配線）",
+   "tool": "src/firestore.rs:640（access_secret）← src/gcp.rs:46, 93（起動時の配線）",
    "gate": "起動時、K_SERVICE で KMS の鍵の設定が無いか KMS の初期化に失敗した時。表の操作からは呼ばない",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に秘密を読む役（secretmanager.secretAccessor 相当）が要る見込み",
    "destination": "署名鍵としてプロセスのメモリに持つ（保存先には書かない）",
@@ -6235,7 +6412,7 @@
    "system_name": "Secret Manager",
    "object": "client の秘密（CIBA_RP_SECRET）の最新版",
    "verb": "取得",
-   "tool": "src/gcp.rs:535-536（secret_hash_from_manager_verified）← 副命令 migrate-static-clients --apply（src/gcp.rs:587-607）",
+   "tool": "src/gcp.rs:570-571（secret_hash_from_manager_verified）← 副命令 migrate-static-clients --apply（src/gcp.rs:622-642）",
    "gate": "本体の binary の管理者用の副命令で、--apply を付けた時だけ。HTTP の操作ではない",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に秘密を読む役が要る見込み",
    "destination": "hash にして Firestore の clients に書く（配備の全体）。生の値は残さない",
@@ -6250,10 +6427,10 @@
    "system_name": "GCP のメタデータサーバ",
    "object": "既定のサービスアカウントの access token",
    "verb": "取得",
-   "tool": "src/firestore.rs:245（Firestore::token）",
+   "tool": "src/firestore.rs:241（Firestore::token）",
    "gate": "Firestore・KMS・Secret Manager・FCM を呼ぶ前に毎回通るが、持っている token が有効なら外へ出ない。FIRESTORE_EMULATOR_HOST が在れば出ない",
    "external_gate": "認証なし。Metadata-Flavor: Google の見出しだけを付ける。Cloud Run のサービスアカウントに付いた役がそのまま token の権限になる",
-   "destination": "プロセスのメモリに有効期限の 60 秒前まで持つ（src/firestore.rs:268-270）。保存先には書かない",
+   "destination": "プロセスのメモリに有効期限の 60 秒前まで持つ（src/firestore.rs:264-266）。保存先には書かない",
    "a_ops": [
     "A-003",
     "A-004",
@@ -6329,7 +6506,7 @@
    "system_name": "Firestore",
    "object": "認可の途中の文書（interactions）",
    "verb": "追加",
-   "tool": "src/firestore_store.rs:107（save_interaction）← src/web/oidc.rs:196",
+   "tool": "src/firestore_store.rs:106（save_interaction）← src/web/oidc.rs:196",
    "gate": "A-003 で client・redirect_uri・PKCE などの検査を通り、ログインの画面へ回す時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6337,7 +6514,7 @@
     "A-003"
    ],
    "certainty": "確か",
-   "note": "src/web/login.rs:364, 432, 459, 540 からも書き直す（ログインの途中の状態）。"
+   "note": "src/web/login.rs:336, 404, 431, 512 からも書き直す（ログインの途中の状態）。"
   },
   {
    "id": "XO-007",
@@ -6345,7 +6522,7 @@
    "system_name": "Firestore",
    "object": "認可の途中の文書（interactions）",
    "verb": "取得",
-   "tool": "src/firestore_store.rs:125（get_interaction）← src/web/oidc.rs:231, 278, src/web/login.rs:26",
+   "tool": "src/firestore_store.rs:124（get_interaction）← src/web/oidc.rs:231, 278, src/web/login.rs:26",
    "gate": "uid を知る者なら誰でも引ける（uid は推測できない値）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6363,7 +6540,7 @@
    "system_name": "Firestore",
    "object": "認可の途中の文書（interactions）",
    "verb": "更新",
-   "tool": "src/firestore_store.rs:140, 153（complete_interaction・consume_interaction）← src/web/login.rs:151, src/web/oidc.rs:262",
+   "tool": "src/firestore_store.rs:139, 152（complete_interaction・consume_interaction）← src/web/login.rs:151, src/web/oidc.rs:262",
    "gate": "passkey の検証を通った時にログイン済みの印を付け、再開の時に 1 度だけ使い切る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6379,7 +6556,7 @@
    "system_name": "Firestore",
    "object": "SSO のセッションの文書（sessions）",
    "verb": "追加",
-   "tool": "src/firestore_store.rs:158（save_session）← src/web/mod.rs:190（start_session）",
+   "tool": "src/firestore_store.rs:157（save_session）← src/web/mod.rs:190（start_session）",
    "gate": "passkey でログイン・サインイン・登録・復旧の検証を通った時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）。持ち主は利用者本人で cookie の sid で引く",
@@ -6397,7 +6574,7 @@
    "system_name": "Firestore",
    "object": "SSO のセッションの文書（sessions）",
    "verb": "取得",
-   "tool": "src/firestore_store.rs:167（get_session）← src/web/oidc.rs:179, 749, src/web/account.rs:42, src/web/mod.rs:115, 207",
+   "tool": "src/firestore_store.rs:166（get_session）← src/web/oidc.rs:179, 766, src/web/account.rs:42, src/web/mod.rs:115, 207",
    "gate": "cookie の sid が在る時。管理画面はこの文書から account_id を引いて管理者かを見る（src/web/admin.rs:6-30）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6435,7 +6612,7 @@
    "system_name": "Firestore",
    "object": "SSO のセッションの文書（sessions）",
    "verb": "削除",
-   "tool": "src/firestore_store.rs:179（delete_session）← src/web/oidc.rs:784, src/web/account.rs:345, src/web/recover.rs:361, src/web/register.rs:791。src/account_admin.rs:164（revoke_other_sessions）",
+   "tool": "src/firestore_store.rs:178（delete_session）← src/web/oidc.rs:801, src/web/account.rs:345, src/web/recover.rs:361, src/web/register.rs:804。src/firestore_store.rs:476（Store::revoke_account）← src/account_admin.rs:47, 106, 137, src/web/account.rs:465, src/web/recover.rs:392",
    "gate": "ログアウト、別の人でのサインインの前、passkey を消した時と復旧の時の他の端末のセッション、アカウントを止める・消す時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6456,7 +6633,7 @@
    "system_name": "Firestore",
    "object": "認可の code の文書（authCodes）",
    "verb": "追加",
-   "tool": "src/firestore_store.rs:183（save_code）← src/web/oidc.rs:357（issue_code）",
+   "tool": "src/firestore_store.rs:182（save_code）← src/web/oidc.rs:357（issue_code）",
    "gate": "ログイン済みのセッションか、ログインの検証を通った後に code を出す時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6474,7 +6651,7 @@
    "system_name": "Firestore",
    "object": "認可の code の文書（authCodes）",
    "verb": "更新",
-   "tool": "src/firestore_store.rs:215（take_code）← src/grants.rs:239",
+   "tool": "src/firestore_store.rs:214（take_code）← src/grants.rs:239",
    "gate": "A-009 の authorization_code で、client 認証と redirect_uri・PKCE の検査の前後に 1 度だけ使い切る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6489,7 +6666,7 @@
    "system_name": "Firestore",
    "object": "access token の文書（accessTokens）",
    "verb": "追加",
-   "tool": "src/firestore_store.rs:272（save_access_token）← src/grants.rs:57",
+   "tool": "src/firestore_store.rs:271（save_access_token）← src/grants.rs:57",
    "gate": "A-009 で grant が通った時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6504,8 +6681,8 @@
    "system_name": "Firestore",
    "object": "access token の文書（accessTokens）",
    "verb": "取得",
-   "tool": "src/firestore_store.rs:300（get_access_token）← src/web/oidc.rs:527, 597, src/web/mod.rs:764（authenticate_token）",
-   "gate": "introspect・revoke は client 認証を通った時、userinfo・profile・CIBA の画面は access token（DPoP 束縛なら DPoP の証明）を出した時",
+   "tool": "src/firestore_store.rs:299（get_access_token）← src/web/oidc.rs:534, 561, 614, src/web/mod.rs:764（authenticate_token）",
+   "gate": "introspect・consume・revoke は client 認証を通った時（introspect と consume は、token が呼び手に出たものか、呼び手が INTROSPECTION_CLIENT_IDS に載っている時だけ中身を返す・使い切る）、userinfo・profile・CIBA の画面は access token（DPoP 束縛なら DPoP の証明）を出した時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
    "a_ops": [
@@ -6530,8 +6707,8 @@
    "system_name": "Firestore",
    "object": "access token の文書（accessTokens）",
    "verb": "更新",
-   "tool": "src/firestore_store.rs:334（consume_mandate_if_unused）← src/web/oidc.rs:554",
-   "gate": "A-011 で client 認証を通り、支払いの委任をまだ使っていない時に 1 度だけ使い切る",
+   "tool": "src/firestore_store.rs:333（consume_mandate_if_unused）← src/web/oidc.rs:571",
+   "gate": "A-011 で client 認証を通り、token が呼び手に出たものか、呼び手が INTROSPECTION_CLIENT_IDS に載っていて、支払いの委任をまだ使っていない時に 1 度だけ使い切る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
    "a_ops": [
@@ -6545,7 +6722,7 @@
    "system_name": "Firestore",
    "object": "access token の文書（accessTokens）",
    "verb": "削除",
-   "tool": "src/firestore_store.rs:326（revoke_access_token）← src/web/oidc.rs:600, src/grants.rs:152",
+   "tool": "src/firestore_store.rs:325（revoke_access_token）← src/web/oidc.rs:617, src/grants.rs:152",
    "gate": "A-013 で client 認証を通り token が自分の client の物の時。A-009 で発行を取り消す時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6561,7 +6738,7 @@
    "system_name": "Firestore",
    "object": "refresh token の文書（refreshTokens）",
    "verb": "追加",
-   "tool": "src/firestore_store.rs:355（save_refresh_token）← src/grants.rs:127, 402",
+   "tool": "src/firestore_store.rs:354（save_refresh_token）← src/grants.rs:127, 402",
    "gate": "A-009 で grant が通り、client に refresh_token の grant が許されている時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6576,7 +6753,7 @@
    "system_name": "Firestore",
    "object": "refresh token の文書（refreshTokens）",
    "verb": "更新",
-   "tool": "src/firestore_store.rs:395（mark_refresh_used）← src/grants.rs:431",
+   "tool": "src/firestore_store.rs:394（mark_refresh_used）← src/grants.rs:431",
    "gate": "A-009 の refresh_token で回転する時。前提条件付きで 1 度だけ通す",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6591,7 +6768,7 @@
    "system_name": "Firestore",
    "object": "refresh token の文書（refreshTokens）",
    "verb": "削除",
-   "tool": "src/firestore_store.rs:418, 464（revoke_refresh_family・revoke_refresh_token）← src/grants.rs:147, 372, src/web/oidc.rs:605",
+   "tool": "src/firestore_store.rs:417, 463（revoke_refresh_family・revoke_refresh_token）← src/grants.rs:147, 372, src/web/oidc.rs:622",
    "gate": "使い済みの refresh token が再び来た時に族ごと消す。A-013 で自分の client の token を失効させる時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6608,7 +6785,7 @@
    "system_name": "Firestore",
    "object": "PAR の預けの文書（parRequests）",
    "verb": "追加",
-   "tool": "src/par.rs:23（par::create）← src/web/oidc.rs:869",
+   "tool": "src/par.rs:26（par::create）← src/web/oidc.rs:886",
    "gate": "A-015 で client 認証と要求の検査を通った時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6623,7 +6800,7 @@
    "system_name": "Firestore",
    "object": "PAR の預けの文書（parRequests）",
    "verb": "取得",
-   "tool": "src/par.rs:43（par::peek）← src/web/oidc.rs:121",
+   "tool": "src/par.rs:46（par::peek）← src/web/oidc.rs:121",
    "gate": "A-003 で urn の request_uri が来た時。預けた client と一致するかを見る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6638,7 +6815,7 @@
    "system_name": "Firestore",
    "object": "PAR の預けの文書（parRequests）",
    "verb": "削除",
-   "tool": "src/par.rs:67（par::consume）← src/web/oidc.rs:343（issue_code）",
+   "tool": "src/par.rs:70（par::consume）← src/web/oidc.rs:343（issue_code）",
    "gate": "code を出す時に 1 度だけ使い切る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6656,7 +6833,7 @@
    "system_name": "Firestore",
    "object": "client の文書（clients）",
    "verb": "取得",
-   "tool": "src/dcr_store.rs:19（load_client）← src/provider.rs:167（resolve_client）← src/client_auth.rs:56, 88, 144, src/web/oidc.rs:105, 702, 723, src/web/admin.rs:647",
+   "tool": "src/dcr_store.rs:22（load_client）← src/provider.rs:198（resolve_client）← src/client_auth.rs:56, 88, 144, src/web/oidc.rs:105, 719, 740, src/web/admin.rs:647",
    "gate": "静的に登録した client に無い id の時だけ引く",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6682,7 +6859,7 @@
    "system_name": "Firestore",
    "object": "client の文書（clients）",
    "verb": "追加",
-   "tool": "src/dcr_store.rs:41（save_client）← src/web/oidc.rs:1079",
+   "tool": "src/dcr_store.rs:44（save_client）← src/web/oidc.rs:1096",
    "gate": "A-012 で登録の鍵（IAT）が有効で、redirect の host・grant が IAT の制約の内の時。既に在れば上書きしない",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6698,7 +6875,7 @@
    "system_name": "Firestore",
    "object": "client の文書（clients）",
    "verb": "一覧",
-   "tool": "src/dcr_store.rs:96（list_clients）← src/web/admin.rs:613",
+   "tool": "src/dcr_store.rs:99（list_clients）← src/web/admin.rs:613",
    "gate": "管理者だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6713,7 +6890,7 @@
    "system_name": "Firestore",
    "object": "client の文書（clients）",
    "verb": "更新",
-   "tool": "src/dcr_store.rs:79（put_client_if_unchanged）← src/web/admin.rs:789, 850",
+   "tool": "src/dcr_store.rs:82（put_client_if_unchanged）← src/web/admin.rs:789, 850",
    "gate": "管理者だけ。読んだ版から変わっていない時だけ書く",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6728,7 +6905,7 @@
    "system_name": "Firestore",
    "object": "client の文書（clients）",
    "verb": "削除",
-   "tool": "src/dcr_store.rs:215（revoke_client）← src/web/admin.rs:876",
+   "tool": "src/dcr_store.rs:218（revoke_client）← src/web/admin.rs:876",
    "gate": "管理者だけ（本体の副命令 revoke-client からも）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6743,7 +6920,7 @@
    "system_name": "Firestore",
    "object": "登録の鍵の文書（dcrTokens）",
    "verb": "追加",
-   "tool": "src/dcr_store.rs:128（put_iat）← src/web/admin.rs:1091",
+   "tool": "src/dcr_store.rs:131（put_iat）← src/web/admin.rs:1091",
    "gate": "管理者だけ（本体の副命令 mint からも）。文書には hash だけを置く",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6758,7 +6935,7 @@
    "system_name": "Firestore",
    "object": "登録の鍵の文書（dcrTokens）",
    "verb": "取得",
-   "tool": "src/dcr_store.rs:166（peek_iat）← src/web/oidc.rs:1005",
+   "tool": "src/dcr_store.rs:169（peek_iat）← src/web/oidc.rs:1022",
    "gate": "A-012 で Bearer の IAT が来た時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6773,7 +6950,7 @@
    "system_name": "Firestore",
    "object": "登録の鍵の文書（dcrTokens）",
    "verb": "削除",
-   "tool": "src/dcr_store.rs:176（consume_iat）← src/web/oidc.rs:1063, src/web/admin.rs:974",
+   "tool": "src/dcr_store.rs:179（consume_iat）← src/web/oidc.rs:1080, src/web/admin.rs:974",
    "gate": "A-012 で client を登録する時に使い切る（--reusable は残す）。管理者が失効させる時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6789,7 +6966,7 @@
    "system_name": "Firestore",
    "object": "登録の鍵の文書（dcrTokens）",
    "verb": "一覧",
-   "tool": "src/dcr_store.rs:193（list_pending_iats）← src/web/admin.rs:897",
+   "tool": "src/dcr_store.rs:196（list_pending_iats）← src/web/admin.rs:897",
    "gate": "管理者だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6805,7 +6982,7 @@
    "object": "登録の鍵の一度きりの表示の文書（adminIatFlash）",
    "verb": "追加",
    "tool": "src/web/admin.rs:1116（iat_mint_submit）",
-   "gate": "管理者だけ。IAT を作った直後",
+   "gate": "管理者だけ。IAT を作った直後。発行した管理者の accountId を minted_by に書く",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）。発行した管理者が一度だけ見る",
    "a_ops": [
@@ -6819,8 +6996,8 @@
    "system_name": "Firestore",
    "object": "登録の鍵の一度きりの表示の文書（adminIatFlash）",
    "verb": "削除",
-   "tool": "src/web/admin.rs:1158（take_doc。取り出して消す）",
-   "gate": "管理者だけ",
+   "tool": "src/web/admin.rs:1160-1165（get_doc_with_update_time で読み、minted_by が見る管理者と同じときだけ delete_doc_if_unchanged で消して取り出す）",
+   "gate": "その IAT を発行した管理者だけ（minted_by）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
    "a_ops": [
@@ -6834,7 +7011,7 @@
    "system_name": "Firestore",
    "object": "アカウントの文書（accounts・accountsByUuid）",
    "verb": "取得",
-   "tool": "src/registration.rs:330（get_account）、src/registration.rs:370（has_passkey）、src/registration.rs:768（find_email_by_account_id）",
+   "tool": "src/registration.rs:357（get_account）、src/registration.rs:397（has_passkey）、src/registration.rs:795（find_email_by_account_id）",
    "gate": "操作ごとの関門の後に引く。email か account_id を鍵にする",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6866,7 +7043,7 @@
    "system_name": "Firestore",
    "object": "アカウントの文書（accounts・accountsByUuid）",
    "verb": "追加",
-   "tool": "src/registration.rs:467（save_credential）← src/web/register.rs:775",
+   "tool": "src/registration.rs:494（save_credential）← src/web/register.rs:788",
    "gate": "A-029 でメールの確かめの token を使い切り、passkey の検証を通った時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6881,8 +7058,8 @@
    "system_name": "Firestore",
    "object": "アカウントの文書（accounts・accountsByUuid）",
    "verb": "更新",
-   "tool": "src/registration.rs:749（set_disabled）← src/account_admin.rs:50, 80。src/registration.rs:755（mark_recovered）",
-   "gate": "止める・戻すは管理者か、招待を許した client（A-041 の RP の道）。管理者は止められない（src/web/register.rs:506）。復旧の印は A-038 で検証を通った時",
+   "tool": "src/registration.rs:776（set_disabled）← src/account_admin.rs:45, 75。src/registration.rs:782（mark_recovered）",
+   "gate": "止める・戻すは管理者か、招待を許した client（A-041 の RP の道）。管理者は止められない（src/web/register.rs:519）。復旧の印は A-038 で検証を通った時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
    "a_ops": [
@@ -6899,7 +7076,7 @@
    "system_name": "Firestore",
    "object": "アカウントの文書（accounts・accountsByUuid）",
    "verb": "削除",
-   "tool": "src/account_admin.rs:103（delete_account）← src/web/admin.rs:483",
+   "tool": "src/account_admin.rs:98（delete_account）← src/web/admin.rs:483",
    "gate": "管理者だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6914,7 +7091,7 @@
    "system_name": "Firestore",
    "object": "アカウントの文書（accounts・accountsByUuid）",
    "verb": "一覧",
-   "tool": "src/registration.rs:701（list_accounts）← src/web/admin.rs:173",
+   "tool": "src/registration.rs:728（list_accounts）← src/web/admin.rs:173",
    "gate": "管理者だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6929,7 +7106,7 @@
    "system_name": "Firestore",
    "object": "passkey の文書（credentials）",
    "verb": "追加",
-   "tool": "src/registration.rs:467（save_credential）← src/web/register.rs:775, src/web/account.rs:418, src/web/recover.rs:391",
+   "tool": "src/registration.rs:494（save_credential）← src/web/register.rs:788, src/web/account.rs:418, src/web/recover.rs:391",
    "gate": "登録・足す・復旧で WebAuthn の検証を通った時。足すのはサインイン中の本人だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）。持ち主は利用者本人",
@@ -6947,7 +7124,7 @@
    "system_name": "Firestore",
    "object": "passkey の文書（credentials）",
    "verb": "取得",
-   "tool": "src/registration.rs:334, 353（list_credentials・find_credential）",
+   "tool": "src/registration.rs:361, 380（list_credentials・find_credential）",
    "gate": "ログイン・サインイン・CIBA の承認の検証と、本人と管理者の一覧",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6967,7 +7144,7 @@
    "system_name": "Firestore",
    "object": "passkey の文書（credentials）",
    "verb": "更新",
-   "tool": "src/registration.rs:676（record_use）← src/web/login.rs:307, src/web/ciba.rs:511",
+   "tool": "src/registration.rs:703（record_use）← src/web/login.rs:279, src/web/ciba.rs:513",
    "gate": "WebAuthn の検証を通った時に使った回数を書く",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -6976,7 +7153,7 @@
     "A-024"
    ],
    "certainty": "見込み",
-   "note": "src/web/login.rs:307 がどの道から呼ばれるかは辿り切っていない（A-032 も通る見込み）。"
+   "note": "src/web/login.rs:279 がどの道から呼ばれるかは辿り切っていない（A-032 も通る見込み）。"
   },
   {
    "id": "XO-043",
@@ -6984,7 +7161,7 @@
    "system_name": "Firestore",
    "object": "passkey の文書（credentials）",
    "verb": "削除",
-   "tool": "src/registration.rs:558（remove_credential）← src/web/account.rs:463。src/account_admin.rs:134（delete_passkeys）、src/account_admin.rs:103（delete_account）",
+   "tool": "src/registration.rs:585（remove_credential）← src/web/account.rs:463。src/account_admin.rs:129（delete_passkeys）、src/account_admin.rs:98（delete_account）",
    "gate": "本人がサインイン中に消す（最後の 1 本は残す）か、管理者が消す",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7001,7 +7178,7 @@
    "system_name": "Firestore",
    "object": "WebAuthn の challenge の文書（webauthnChallenges）",
    "verb": "追加",
-   "tool": "src/registration.rs:213（create_webauthn_challenge）← src/web/login.rs:197, src/web/register.rs:653, src/web/account.rs:316, 366, src/web/recover.rs:278, src/web/ciba.rs:433",
+   "tool": "src/registration.rs:216（create_webauthn_challenge）← src/web/login.rs:169, src/web/register.rs:666, src/web/account.rs:316, 366, src/web/recover.rs:278, src/web/ciba.rs:435",
    "gate": "options の道ごとの関門（認可の途中・メールの token・サインイン・access token）を通った時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7021,7 +7198,7 @@
    "system_name": "Firestore",
    "object": "WebAuthn の challenge の文書（webauthnChallenges）",
    "verb": "削除",
-   "tool": "src/registration.rs:238（consume_webauthn_challenge。取り出して消す）← src/web/login.rs:248, src/web/register.rs:751, src/web/account.rs:392, src/web/recover.rs:312, src/web/ciba.rs:473",
+   "tool": "src/registration.rs:241（consume_webauthn_challenge。取り出して消す）← src/web/login.rs:220, src/web/register.rs:764, src/web/account.rs:392, src/web/recover.rs:312, src/web/ciba.rs:475",
    "gate": "verify の道で 1 度だけ使い切る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7041,7 +7218,7 @@
    "system_name": "Firestore",
    "object": "メールの確かめの文書（emailChallenges）",
    "verb": "追加",
-   "tool": "src/registration.rs:65, 131, 92（create_email_challenge_from・create_recovery_challenge_from・create_invite_challenge）← src/web/register.rs:80, 90, 451",
+   "tool": "src/registration.rs:68, 134, 95（create_email_challenge_from・create_recovery_challenge_from・create_invite_challenge）← src/web/register.rs:80, 90, 464",
    "gate": "登録・復旧は IP と address ごとの速さの制限を通った時（src/web/register.rs:72-76）。招待は招待を許した client だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7058,7 +7235,7 @@
    "system_name": "Firestore",
    "object": "メールの確かめの文書（emailChallenges）",
    "verb": "取得",
-   "tool": "src/registration.rs:168, 177, 108（peek_email_challenge・peek_recovery・peek_invite）← src/web/register.rs:364, 555, src/web/recover.rs:119, 258, 303",
+   "tool": "src/registration.rs:171, 180, 111（peek_email_challenge・peek_recovery・peek_invite）← src/web/register.rs:377, 568, src/web/recover.rs:119, 258, 303",
    "gate": "token を知る者なら引ける（token はメールか招待の応答でだけ渡る）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7078,7 +7255,7 @@
    "system_name": "Firestore",
    "object": "メールの確かめの文書（emailChallenges）",
    "verb": "削除",
-   "tool": "src/registration.rs:173, 181（consume_email_challenge・consume_recovery）← src/web/register.rs:739, src/web/recover.rs:344",
+   "tool": "src/registration.rs:176, 184（consume_email_challenge・consume_recovery）← src/web/register.rs:752, src/web/recover.rs:344",
    "gate": "passkey の検証を通った時に 1 度だけ使い切る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7094,7 +7271,7 @@
    "system_name": "Firestore",
    "object": "profile の文書（profiles）",
    "verb": "取得",
-   "tool": "src/registration.rs:782（get_profile）← src/web/oidc.rs:919, 947, src/web/account.rs:161",
+   "tool": "src/registration.rs:809（get_profile）← src/web/oidc.rs:936, 964, src/web/account.rs:161",
    "gate": "access token か、サインイン中の本人",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）。持ち主は利用者本人で、scope に応じて client へ渡す",
@@ -7105,7 +7282,7 @@
     "A-030"
    ],
    "certainty": "見込み",
-   "note": "userinfo（A-016）が profiles を読むのは src/firestore_store.rs:471（find_account）からの見込み。"
+   "note": "userinfo（A-016）が profiles を読むのは src/firestore_store.rs:470（find_account）からの見込み。"
   },
   {
    "id": "XO-050",
@@ -7113,7 +7290,7 @@
    "system_name": "Firestore",
    "object": "profile の文書（profiles）",
    "verb": "更新",
-   "tool": "src/registration.rs:837（save_profile）← src/web/oidc.rs:940, src/web/account.rs:502, src/web/register.rs:781",
+   "tool": "src/registration.rs:864（save_profile）← src/web/oidc.rs:957, src/web/account.rs:502, src/web/register.rs:794",
    "gate": "access token かサインイン中の本人。登録の時は名を添えた時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7129,7 +7306,7 @@
    "system_name": "Firestore",
    "object": "管理者の名簿の文書（admins）",
    "verb": "取得",
-   "tool": "src/admin_store.rs:60（is_admin）← src/web/admin.rs:21（check_admin）, src/web/register.rs:506, src/web/recover.rs:40",
+   "tool": "src/admin_store.rs:63（is_admin）← src/web/admin.rs:21（check_admin）, src/web/register.rs:519, src/web/recover.rs:40",
    "gate": "管理画面のすべての道の入口で見る。復旧と RP からの凍結では管理者を除くために見る",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7164,7 +7341,7 @@
    "system_name": "Firestore",
    "object": "管理者の名簿の文書（admins）",
    "verb": "追加",
-   "tool": "src/admin_store.rs:80（grant_admin）← src/web/admin.rs:507",
+   "tool": "src/admin_store.rs:83（grant_admin）← src/web/admin.rs:507",
    "gate": "管理者だけ（本体の副命令 grant-admin からも）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7179,7 +7356,7 @@
    "system_name": "Firestore",
    "object": "管理者の名簿の文書（admins）",
    "verb": "削除",
-   "tool": "src/admin_store.rs:125（revoke_admin）← src/web/admin.rs:534",
+   "tool": "src/admin_store.rs:128（revoke_admin）← src/web/admin.rs:534",
    "gate": "管理者だけ。最後の 1 人は消せない",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7209,7 +7386,7 @@
    "system_name": "Firestore",
    "object": "CIBA の要求の文書（cibaRequests）",
    "verb": "取得",
-   "tool": "src/ciba.rs:351, 394（get・list_pending）← src/web/ciba.rs:11, 296, 389, 486, src/grants.rs:491",
+   "tool": "src/ciba.rs:351, 394（get・list_pending）← src/web/ciba.rs:11, 298, 391, 488, src/grants.rs:491",
    "gate": "本人の access token か、token を取りに来た client",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7228,7 +7405,7 @@
    "system_name": "Firestore",
    "object": "CIBA の要求の文書（cibaRequests）",
    "verb": "更新",
-   "tool": "src/ciba.rs:361（transition_if_pending）← src/web/ciba.rs:526, 559",
+   "tool": "src/ciba.rs:361（transition_if_pending）← src/web/ciba.rs:528, 561",
    "gate": "本人の access token。承認は passkey の検証も要る。保留の時だけ変える",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7261,7 +7438,7 @@
    "system_name": "Firestore",
    "object": "CIBA の履歴の文書（cibaHistory）",
    "verb": "追加",
-   "tool": "src/ciba.rs:403（record_history）← src/web/ciba.rs:530, 563",
+   "tool": "src/ciba.rs:403（record_history）← src/web/ciba.rs:532, 565",
    "gate": "承認・拒否が通った後",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7271,7 +7448,7 @@
     "A-069"
    ],
    "certainty": "確か",
-   "note": "書き込みの失敗は捨てる（src/web/ciba.rs:530, 563 の let _）。"
+   "note": "書き込みの失敗は捨てる（src/web/ciba.rs:532, 565 の let _）。"
   },
   {
    "id": "XO-059",
@@ -7294,7 +7471,7 @@
    "system_name": "Firestore",
    "object": "端末の通知先の文書（fcmTokens）",
    "verb": "追加",
-   "tool": "src/fcm.rs:17（save_token）← src/web/ciba.rs:83",
+   "tool": "src/fcm.rs:20（save_token）← src/web/ciba.rs:83",
    "gate": "本人の access token。account_id ごとに 1 つで、上書きする",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7309,7 +7486,7 @@
    "system_name": "Firestore",
    "object": "端末の通知先の文書（fcmTokens）",
    "verb": "取得",
-   "tool": "src/fcm.rs:31（get_token）← src/fcm.rs:50",
+   "tool": "src/fcm.rs:34（get_token）← src/fcm.rs:53",
    "gate": "A-019 で CIBA の要求を作れた時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7325,7 +7502,7 @@
    "system_name": "Firestore",
    "object": "端末の通知先の文書（fcmTokens）",
    "verb": "削除",
-   "tool": "src/account_admin.rs:103（delete_account）",
+   "tool": "src/account_admin.rs:98（delete_account）",
    "gate": "管理者がアカウントを消す時",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7372,7 +7549,7 @@
    "system_name": "Firestore",
    "object": "監査の記録の文書（auditLog）",
    "verb": "追加",
-   "tool": "src/audit_log.rs:21（record）← src/web/admin.rs:509, 536, 791, 852, 878, 976, 1094, src/web/account.rs:429, 466, src/web/recover.rs:396, src/account_admin.rs:53, 82, 117, 144",
+   "tool": "src/audit_log.rs:24（record）← src/web/admin.rs:509, 536, 791, 852, 878, 976, 1094, src/web/account.rs:429, 466, src/web/recover.rs:396, src/account_admin.rs:48, 77, 112, 139",
    "gate": "記録する操作が通った後",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）。読むのは管理者だけ",
@@ -7393,7 +7570,7 @@
     "A-072"
    ],
    "certainty": "確か",
-   "note": "書き込みの失敗は記録して捨てる（src/audit_log.rs:37）。"
+   "note": "書き込みの失敗は記録して捨てる（src/audit_log.rs:40）。"
   },
   {
    "id": "XO-065",
@@ -7401,7 +7578,7 @@
    "system_name": "Firestore",
    "object": "監査の記録の文書（auditLog）",
    "verb": "一覧",
-   "tool": "src/audit_log.rs:61, 68（list_recent・list_for_target）← src/web/admin.rs:576, 232",
+   "tool": "src/audit_log.rs:64, 71（list_recent・list_for_target）← src/web/admin.rs:576, 232",
    "gate": "管理者だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7417,7 +7594,7 @@
    "system_name": "Firestore",
    "object": "FIDO の適合試験の challenge と passkey の文書（fidoChallenges・fidoCredentials）",
    "verb": "追加",
-   "tool": "src/fido/store.rs:154（FirestoreFidoStore）← src/fido/mod.rs:345, 551（options）, 542（result）",
+   "tool": "src/fido/store.rs:154（FirestoreFidoStore）← src/fido/mod.rs:342, 548（options）, 542（result）",
    "gate": "FIDO_CONFORMANCE_ENABLED が在り、K_SERVICE の時だけ Firestore に書く（それ以外はメモリ）",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）。試験の道からだけ読む",
@@ -7433,7 +7610,7 @@
    "system_name": "Firestore",
    "object": "FIDO の適合試験の challenge と passkey の文書（fidoChallenges・fidoCredentials）",
    "verb": "取得",
-   "tool": "src/fido/store.rs:154（FirestoreFidoStore）← src/fido/mod.rs:428, 603（result）",
+   "tool": "src/fido/store.rs:154（FirestoreFidoStore）← src/fido/mod.rs:425, 600（result）",
    "gate": "FIDO_CONFORMANCE_ENABLED が在り、K_SERVICE の時だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に Firestore の読み書きの役（datastore.user 相当）が要る見込み",
    "destination": "Firestore のこの文書そのものが本体の保存先。読むのは本体だけで、範囲は配備の全体（FIRESTORE_DATABASE_ID で本番と検証を分ける）",
@@ -7449,7 +7626,7 @@
    "system_name": "Firebase Cloud Messaging（FCM）",
    "object": "端末への通知の message",
    "verb": "送る",
-   "tool": "src/fcm.rs:41（send_ciba_request）← src/web/ciba.rs:254 ← POST /backchannel-authentication（src/web/mod.rs:261）",
+   "tool": "src/fcm.rs:44（send_ciba_request）← src/web/ciba.rs:255 ← POST /backchannel-authentication（src/web/mod.rs:261）",
    "gate": "A-019 で client 認証・login_hint の解決・速さの制限を通り、CIBA の要求を作れた時。宛先の端末の token が fcmTokens に在る時だけ。gcp の feature の binary だけ",
    "external_gate": "Cloud Run の既定のサービスアカウントの access token（X-04 メタデータサーバから取る）で呼ぶ。外部側に FCM の送信の役（firebase の messaging 相当）が要る見込み",
    "destination": "入らない（通知は利用者の端末へ届き、本体には残らない）。通知の本文には client_id・scope・binding_message・authorization_details が入る",
@@ -7466,7 +7643,7 @@
    "system_name": "Resend（メールの送り手）",
    "object": "確かめのメール（登録のリンク）",
    "verb": "送る",
-   "tool": "src/mailer.rs:141（send_verification）← src/web/register.rs:97 ← issue_register_email（src/web/register.rs:58）",
+   "tool": "src/mailer.rs:142（send_verification）← src/web/register.rs:97 ← issue_register_email（src/web/register.rs:58）",
    "gate": "address の形と、IP と address ごとの速さの制限を通り、その address に passkey がまだ無い時",
    "external_gate": "配備の API の鍵（RESEND_API_KEY）を Bearer で付ける。外部側で送り元のドメインの確かめが要る見込み",
    "destination": "入らない（メールは宛先の本人へ。本体には challenge の文書だけが残る）",
@@ -7484,7 +7661,7 @@
    "system_name": "Resend（メールの送り手）",
    "object": "復旧のリンクか、登録済みの案内のメール",
    "verb": "送る",
-   "tool": "src/mailer.rs:156, 151（send_recovery・send_already_registered）← src/web/register.rs:82, 86",
+   "tool": "src/mailer.rs:157, 152（send_recovery・send_already_registered）← src/web/register.rs:82, 86",
    "gate": "速さの制限を通り、その address に passkey が在る時。復旧が許される（管理者でない・止められていない）なら復旧のリンク、そうでなければ案内だけ（src/web/recover.rs:30）",
    "external_gate": "配備の API の鍵（RESEND_API_KEY）を Bearer で付ける",
    "destination": "入らない（メールは宛先の本人へ）",
@@ -7501,7 +7678,7 @@
    "system_name": "Resend（メールの送り手）",
    "object": "passkey が足された知らせのメール",
    "verb": "送る",
-   "tool": "src/mailer.rs:161（send_passkey_added）← src/web/recover.rs:367",
+   "tool": "src/mailer.rs:162（send_passkey_added）← src/web/recover.rs:367",
    "gate": "A-038 で復旧の token を使い切り、passkey の検証を通って足した後",
    "external_gate": "配備の API の鍵（RESEND_API_KEY）を Bearer で付ける",
    "destination": "入らない（メールは宛先の本人へ）",
@@ -7539,7 +7716,7 @@
    "system_name": "FIDO の MDS の BLOB と CRL の置き場",
    "object": "MDS の BLOB",
    "verb": "取得",
-   "tool": "src/fido/mod.rs:197（mds_config）← POST /fido/mds/config（src/fido/mod.rs:149）",
+   "tool": "src/fido/mod.rs:194（mds_config）← POST /fido/mds/config（src/fido/mod.rs:146）",
    "gate": "FIDO_CONFORMANCE_ENABLED が 1 か true の時だけ道が在る。それ以外の関門は無く、要求の blobUrls の URL をそのまま取る",
    "external_gate": "認証なし",
    "destination": "プロセスのメモリの MDS のキャッシュ（FidoState。1 台の中だけで、試験の道からだけ使う）",
@@ -7554,7 +7731,7 @@
    "system_name": "FIDO の MDS の BLOB と CRL の置き場",
    "object": "MDS の証明書の CRL",
    "verb": "取得",
-   "tool": "src/fido/mds.rs:318（assert_not_revoked）← src/fido/mds.rs:353（load_blob）← src/fido/mod.rs:176, 238",
+   "tool": "src/fido/mds.rs:318（assert_not_revoked）← src/fido/mds.rs:353（load_blob）← src/fido/mod.rs:173, 235",
    "gate": "FIDO_CONFORMANCE_ENABLED の時だけ。BLOB の証明書に CRL 配布点が在る時",
    "external_gate": "認証なし",
    "destination": "入らない（失効の判定にだけ使い、BLOB を載せるか飛ばすかが決まる）",
@@ -7865,7 +8042,7 @@
     "why": "PAR の urn でない request_uri は取りに行かずに断るので、出口は無い。"
    },
    {
-    "at": "src/gcp.rs:143-156",
+    "at": "src/gcp.rs:169-186",
     "entry": "運用の道具（CLI）の副命令",
     "why": "本体の binary の管理者用の副命令は X-03・X-02・X-04 と同じ出口を通る。表では、操作の運用の道具（CLI）の子の行（A-041・A-042・A-045・A-046・A-054・A-057）と、CLI だけの操作 A-067・A-068 に当たる。A-067・A-068 は parents に結んだ"
    }
@@ -7877,7 +8054,7 @@
     "what": "宛先は DCR で登録した client の jwks_uri で決まる。設定の名は無い。"
    },
    {
-    "at": "src/fido/mod.rs:220-221",
+    "at": "src/fido/mod.rs:217-218",
     "system": "X-08",
     "what": "宛先は POST /fido/mds/config の要求の blobUrls で決まる。"
    },
@@ -7887,12 +8064,12 @@
     "what": "宛先は MDS の証明書の CRL 配布点の拡張で決まる。"
    },
    {
-    "at": "src/mailer.rs:121-129",
+    "at": "src/mailer.rs:122-130",
     "system": "X-06",
     "what": "宛先の address は利用者が入れた値（登録・復旧の form）で決まる。送り先の API は固定。"
    },
    {
-    "at": "src/fcm.rs:78-91",
+    "at": "src/fcm.rs:81-94",
     "system": "X-05",
     "what": "宛先の端末は fcmTokens に登録された token で決まる。URL の project は env:GCLOUD_PROJECT・env:GOOGLE_CLOUD_PROJECT で決まる。"
    },
@@ -7902,12 +8079,12 @@
     "what": "鍵の resource path は env:KMS_ES256_KEY・env:KMS_RS256_KEY で決まる。"
    },
    {
-    "at": "src/firestore.rs:292-301",
+    "at": "src/firestore.rs:288-297",
     "system": "X-03",
     "what": "宛先の host は env:FIRESTORE_EMULATOR_HOST、project は env:GCLOUD_PROJECT・env:GOOGLE_CLOUD_PROJECT、database は env:FIRESTORE_DATABASE_ID で決まる。"
    },
    {
-    "at": "src/firestore.rs:644-656",
+    "at": "src/firestore.rs:640-652",
     "system": "X-02",
     "what": "project は env:GCLOUD_PROJECT・env:GOOGLE_CLOUD_PROJECT で決まり、秘密の名はコードに固定。"
    }
@@ -7938,14 +8115,14 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:205,226（凍結・削除で accounts の accountId を鍵に accessTokens を引いて消す）"
+     "why": "firestore_store.rs:479,483（Store::revoke_account。凍結・削除・passkey の削除・復旧で、accounts の accountId を鍵に accessTokens を引いて消す）"
     },
     {
      "sym": "~>",
      "to": "clients|static_clients",
      "via": "clientId",
      "cf": "code",
-     "why": "web/oidc.rs:598（revoke で認証した client と clientId を突き合わせる）"
+     "why": "web/oidc.rs:615（revoke で認証した client と clientId を突き合わせる）"
     }
    ],
    "skip": [
@@ -7969,7 +8146,7 @@
    "ms": [],
    "rels": [],
    "skip": [
-    "文書 id（email）: 鍵の名に email を使うだけで、accounts を引かない（registration.rs:660）"
+    "文書 id（email）: 鍵の名に email を使うだけで、accounts を引かない（registration.rs:687）"
    ],
    "src": [
     "accountLocks: [{email:string @pk, expiresAt:timestamp}]"
@@ -7992,7 +8169,7 @@
      "to": "credentials",
      "via": "credentialId",
      "cf": "code",
-     "why": "registration.rs:411-412,580（古い形の 1 本。credentials の id と突き合わせる）"
+     "why": "registration.rs:438-439,607（古い形の 1 本。credentials の id と突き合わせる）"
     },
     {
      "sym": "~>",
@@ -8003,11 +8180,11 @@
     }
    ],
    "skip": [
-    "email: 文書 id と同じ値を欄にも持つ（registration.rs:508 で credential_fields を写す）"
+    "email: 文書 id と同じ値を欄にも持つ（registration.rs:535 で credential_fields を写す）"
    ],
    "src": [
     "accounts: [{email:string @pk, accountId:string @unique, disabled:bool, verified:bool, credentialsMigrated:bool, createdAt:timestamp, recoveredAt:timestamp?, recoveredWith:string?, credentialId:string, pubX:string, pubY:string, signCount:int, aaguid:string}]",
-    "// credentialId・pubX・pubY・signCount・aaguid は前の版が読む古い形の passkey 1 本（registration.rs:261-270）"
+    "// credentialId・pubX・pubY・signCount・aaguid は前の版が読む古い形の passkey 1 本（registration.rs:264-273）"
    ],
    "pg": [],
    "gap": []
@@ -8027,14 +8204,14 @@
      "to": "accounts",
      "via": "email",
      "cf": "code",
-     "why": "registration.rs:768-777 と web/login.rs:272,282（accountId から email を引き、その email で accounts を引く）"
+     "why": "registration.rs:795-804 と web/login.rs:244,254（accountId から email を引き、その email で accounts を引く）"
     },
     {
      "sym": "~>",
      "to": "accounts",
      "via": "(docId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:115（accounts の accountId で消す）"
+     "why": "account_admin.rs:110（accounts の accountId で消す）"
     }
    ],
    "skip": [],
@@ -8048,19 +8225,27 @@
    "id": "adminIatFlash",
    "did": "D-005",
    "kind": "コレクション",
-   "ncol": 2,
+   "ncol": 3,
    "pk": [
     "flash_id"
    ],
    "ms": [
     "expires_at(秒)"
    ],
-   "rels": [],
+   "rels": [
+    {
+     "sym": "~>",
+     "to": "accounts",
+     "via": "(minted_by) to (accountId)",
+     "cf": "code",
+     "why": "web/admin.rs:1121（発行した管理者の accountId を書く）、web/admin.rs:1162（見る管理者と突き合わせ、発行した人にだけ見せる）"
+    }
+   ],
    "skip": [
-    "raw_token: 生の IAT。hash を取れば dcrTokens の id になるが、ここでは引かない（web/admin.rs:1158）"
+    "raw_token: 生の IAT。hash を取れば dcrTokens の id になるが、ここでは引かない（web/admin.rs:1160）"
    ],
    "src": [
-    "adminIatFlash: [{flash_id:string @pk, raw_token:string, expires_at:datetime(秒)}]"
+    "adminIatFlash: [{flash_id:string @pk, raw_token:string, expires_at:datetime(秒), minted_by:string}]"
    ],
    "pg": [],
    "gap": []
@@ -8082,7 +8267,7 @@
      "to": "accounts",
      "via": "(entries.account_id) to (accountId)",
      "cf": "code",
-     "why": "web/admin.rs:195（accounts の accountId と突き合わせて管理者の印を出す）、web/register.rs:506"
+     "why": "web/admin.rs:195（accounts の accountId と突き合わせて管理者の印を出す）、web/register.rs:519"
     }
    ],
    "skip": [
@@ -8093,7 +8278,7 @@
    ],
    "pg": [],
    "gap": [
-    "entries は Firestore の配列でなく JSON の文字列 1 つ（admin_store.rs:53-56）"
+    "entries は Firestore の配列でなく JSON の文字列 1 つ（admin_store.rs:56-59）"
    ]
   },
   {
@@ -8147,14 +8332,14 @@
      "to": "accessTokens",
      "via": "issuedAccessToken",
      "cf": "code",
-     "why": "firestore_store.rs:254-255（再利用のとき、この id で accessTokens を消す）"
+     "why": "firestore_store.rs:253-254（再利用のとき、この id で accessTokens を消す）"
     },
     {
      "sym": "~>",
      "to": "refreshTokens",
      "via": "issuedRefreshToken",
      "cf": "code",
-     "why": "firestore_store.rs:259-260（再利用のとき、この id から refreshTokens の系列を消す）"
+     "why": "firestore_store.rs:258-259（再利用のとき、この id から refreshTokens の系列を消す）"
     }
    ],
    "skip": [
@@ -8254,7 +8439,7 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "registration.rs:363（引いた passkey の accountId をアカウントと突き合わせる）、registration.rs:342"
+     "why": "registration.rs:390（引いた passkey の accountId をアカウントと突き合わせる）、registration.rs:369"
     }
    ],
    "skip": [
@@ -8300,14 +8485,14 @@
      "to": "accounts",
      "via": "email",
      "cf": "code",
-     "why": "web/register.rs:186-187→registration.rs:370,330（覗いた email で accounts を引く）"
+     "why": "web/register.rs:186-187→registration.rs:397,333（覗いた email で accounts を引く）"
     },
     {
      "sym": "~>",
      "to": "interactions",
      "via": "uid",
      "cf": "code",
-     "why": "registration.rs:82→web/mod.rs:149（uid で interactions を引いてログインを済ませる）"
+     "why": "registration.rs:85→web/mod.rs:149（uid で interactions を引いてログインを済ませる）"
     }
    ],
    "skip": [
@@ -8335,7 +8520,7 @@
      "to": "accounts",
      "via": "(docId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:113（accounts の accountId で消す）、fcm.rs:32"
+     "why": "account_admin.rs:108（accounts の accountId で消す）、fcm.rs:35"
     }
    ],
    "skip": [
@@ -8404,14 +8589,14 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "web/login.rs:228,151（accounts から引いたアカウントの accountId を書く）"
+     "why": "web/login.rs:200,151（accounts から引いたアカウントの accountId を書く）"
     },
     {
      "sym": "~>",
      "to": "parRequests",
      "via": "requestUri",
      "cf": "code",
-     "why": "web/oidc.rs:250,343→par.rs:67-71（urn の接頭辞を外した値が parRequests の id）"
+     "why": "web/oidc.rs:250,343→par.rs:70-74（urn の接頭辞を外した値が parRequests の id）"
     }
    ],
    "skip": [
@@ -8482,11 +8667,11 @@
      "to": "accounts",
      "via": "(docId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:114（accounts の accountId で消す）、web/account.rs:161"
+     "why": "account_admin.rs:109（accounts の accountId で消す）、web/account.rs:161"
     }
    ],
    "skip": [
-    "email: 名は email だが中身は accountId（registration.rs:843 は引数をそのまま書き、呼び手は accountId を渡す）。読む所が無い"
+    "email: 名は email だが中身は accountId（registration.rs:870 は引数をそのまま書き、呼び手は accountId を渡す）。読む所が無い"
    ],
    "src": [
     "profiles: [{accountId:string @pk, email:string, name:string?, nickname:string?, birthdate:string?, gender:string?, zoneinfo:string?, locale:string?}]"
@@ -8528,7 +8713,7 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:212,226、grants.rs:380→163-169"
+     "why": "firestore_store.rs:480,483（Store::revoke_account）、grants.rs:380→163-169"
     },
     {
      "sym": "~>",
@@ -8542,14 +8727,14 @@
      "to": "refreshFamilyRevocations",
      "via": "familyId",
      "cf": "code",
-     "why": "grants.rs:358→firestore_store.rs:415（系列の札を引く）"
+     "why": "grants.rs:358→firestore_store.rs:414（系列の札を引く）"
     },
     {
      "sym": "~>",
      "to": "refreshTokens",
      "via": "replacedBy",
      "cf": "code",
-     "why": "firestore_store.rs:90（失効のとき replacedBy を辿る）"
+     "why": "firestore_store.rs:89（失効のとき replacedBy を辿る）"
     }
    ],
    "skip": [
@@ -8578,7 +8763,7 @@
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "account_admin.rs:166,198→226（accounts の accountId で引いて消す）"
+     "why": "firestore_store.rs:478,483（Store::revoke_account。accounts の accountId で引いて消す）"
     }
    ],
    "skip": [],
@@ -8603,14 +8788,14 @@
      "to": "accounts",
      "via": "email",
      "cf": "code",
-     "why": "web/login.rs:248,282（消費した challenge の email で accounts を引く）"
+     "why": "web/login.rs:220,254（消費した challenge の email で accounts を引く）"
     },
     {
      "sym": "~>",
      "to": "accounts",
      "via": "(accountId) to (accountId)",
      "cf": "code",
-     "why": "registration.rs:487（登録で、在るアカウントの accountId と突き合わせる）"
+     "why": "registration.rs:514（登録で、在るアカウントの accountId と突き合わせる）"
     }
    ],
    "skip": [
@@ -8634,7 +8819,7 @@
    "rels": [],
    "skip": [],
    "src": [
-    "static_clients: 起動時に環境変数（FAPI1_*・FAPI2_*）から Provider.clients に積む Client。resolve_client が clients より先に見る（provider.rs:162-168、main.rs:68-73）"
+    "static_clients: 起動時に環境変数（FAPI1_*・FAPI2_*）から Provider.clients に積む Client。resolve_client が clients より先に見る（provider.rs:193-199、main.rs:55-60）"
    ],
    "pg": [],
    "gap": [
@@ -8737,16 +8922,6 @@
    ]
   ],
   "A-007": [
-   [
-    "D-003",
-    "accounts",
-    1
-   ],
-   [
-    "D-012",
-    "credentials",
-    1
-   ],
    [
     "D-025",
     "webauthnChallenges",
@@ -9791,7 +9966,6 @@
   },
   "accounts": {
    "o": [
-    "A-007",
     "A-008",
     "A-009",
     "A-018",
@@ -9975,7 +10149,6 @@
   },
   "credentials": {
    "o": [
-    "A-007",
     "A-008",
     "A-019",
     "A-023",
