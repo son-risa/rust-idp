@@ -502,109 +502,11 @@ mod tests {
         }
     }
 
-    // B-4: mark_refresh_used は単回消費（CAS）。最初の 1 回だけ true、replaced_by は初回値が残る。
-    #[tokio::test]
-    async fn mark_refresh_used_is_single_use() {
-        let s = MemoryStore::default();
-        s.save_refresh_token(rtok("RT1", None, false)).await.unwrap();
-        assert!(s.mark_refresh_used("RT1", Some("RT2")).await.unwrap()); // 初回成功
-        for _ in 0..5 {
-            assert!(!s.mark_refresh_used("RT1", Some("RTx")).await.unwrap()); // 以降は負け
-        }
-        let rt = s.get_refresh_token("RT1").await.unwrap().unwrap();
-        assert!(rt.used);
-        assert_eq!(rt.replaced_by.as_deref(), Some("RT2")); // 初回の連結が保たれる
-        assert!(!s.mark_refresh_used("UNKNOWN", None).await.unwrap()); // 未存在も false
+    async fn memory() -> MemoryStore {
+        MemoryStore::default()
     }
 
-    // B-4: revoke_refresh_family は replaced_by 連鎖を辿り family 全体を削除する（任意長）。
-    #[tokio::test]
-    async fn revoke_family_deletes_entire_chain() {
-        for n in 1..=8usize {
-            let s = MemoryStore::default();
-            for i in 1..=n {
-                let rb = if i < n { Some(format!("RT{}", i + 1)) } else { None };
-                s.save_refresh_token(rtok(&format!("RT{i}"), rb.as_deref(), i < n)).await.unwrap();
-            }
-            s.revoke_refresh_family("fam", "RT1").await;
-            for i in 1..=n {
-                assert!(s.get_refresh_token(&format!("RT{i}")).await.unwrap().is_none(), "n={n} RT{i} 残存");
-            }
-        }
-    }
-
-    // B-4: replaced_by が循環していても停止する（無限ループ・ハングしない）。
-    #[tokio::test]
-    async fn revoke_family_cyclic_chain_terminates() {
-        let s = MemoryStore::default();
-        s.save_refresh_token(rtok("RT1", Some("RT2"), true)).await.unwrap();
-        s.save_refresh_token(rtok("RT2", Some("RT1"), true)).await.unwrap(); // RT1<->RT2 循環
-        s.revoke_refresh_family("fam", "RT1").await; // 停止すること自体が検証点
-        assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
-        assert!(s.get_refresh_token("RT2").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn consume_mandate_is_single_use() {
-        let s = MemoryStore::default();
-        s.save_access_token(at("AT1")).await.unwrap();
-        // 初回成功、2 回目以降は失敗（先勝ち）。
-        assert!(s.consume_mandate_if_unused("AT1").await.unwrap());
-        assert!(!s.consume_mandate_if_unused("AT1").await.unwrap());
-        // 未知トークンも false。
-        assert!(!s.consume_mandate_if_unused("UNKNOWN").await.unwrap());
-        // 消費フラグが永続化されている。
-        assert!(s.get_access_token("AT1").await.unwrap().unwrap().mandate_consumed);
-    }
-
-    #[tokio::test]
-    async fn code_reuse_revokes_issued_tokens() {
-        let s = MemoryStore::default();
-        s.save_code(code("C1")).await.unwrap();
-        s.save_access_token(at("AT1")).await.unwrap();
-        s.save_refresh_token(RefreshToken { token: "RT1".into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), resource: None, jkt: None, acr: None, auth_time: None, family_id: "fam1".into(), used: false, replaced_by: None }).await.unwrap();
-        s.link_issued_tokens("C1", "AT1", Some("RT1")).await.unwrap();
-
-        // 初回消費は成功し、発行トークンは生きている。
-        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Fresh(_)));
-        assert!(s.get_access_token("AT1").await.unwrap().is_some());
-
-        // 再利用は Reused と分かるだけで、失効は revoke_code_tokens を呼んだときに起きる。
-        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Reused(_)));
-        assert!(s.get_access_token("AT1").await.unwrap().is_some());
-        s.revoke_code_tokens("C1").await;
-        assert!(s.get_access_token("AT1").await.unwrap().is_none());
-        assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn unknown_code_returns_none() {
-        let s = MemoryStore::default();
-        assert!(matches!(s.take_code("nope").await.unwrap(), CodeTake::Unknown));
-    }
-
-    #[tokio::test]
-    async fn revoke_access_token_removes_it() {
-        let s = MemoryStore::default();
-        s.save_access_token(at("AT1")).await.unwrap();
-        assert!(s.get_access_token("AT1").await.unwrap().is_some());
-        s.revoke_access_token("AT1").await.unwrap();
-        assert!(s.get_access_token("AT1").await.unwrap().is_none());
-        // 未知トークンの失効は no-op（パニックしない）。
-        s.revoke_access_token("nope").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn get_refresh_token_peeks_without_consuming() {
-        let s = MemoryStore::default();
-        s.save_refresh_token(RefreshToken { token: "RT1".into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), resource: None, jkt: None, acr: None, auth_time: None, family_id: "fam1".into(), used: false, replaced_by: None }).await.unwrap();
-        // peek は消費しない。
-        assert!(s.get_refresh_token("RT1").await.unwrap().is_some());
-        assert!(s.get_refresh_token("RT1").await.unwrap().is_some());
-        // revoke で消える。
-        s.revoke_refresh_token("RT1").await.unwrap();
-        assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
-    }
+    crate::store_contract::store_contract_tests!(memory);
 
     // 保持期間はレコード種別ごとに異なる。DEFAULT 一律にすると session が 15 分で
     // 切れる/refresh が仕様より長生きする、といった不一致が起きるので固定する。
@@ -707,20 +609,4 @@ mod tests {
         assert!(!s.consume_interaction("U_OLD").await);
     }
 
-    #[tokio::test]
-    async fn consume_interaction_is_single_use() {
-        let s = MemoryStore::default();
-        s.save_interaction(Interaction {
-            uid: "U1".into(),
-            raw_query: String::new(),
-            account_id: Some("a".into()),
-            auth_time: None,
-            request_uri: None,
-            browser_binding: String::new(),
-        })
-        .await;
-        assert!(s.consume_interaction("U1").await); // 初回: 消費成功
-        assert!(!s.consume_interaction("U1").await); // 2回目: 既に無い（リプレイ拒否）
-        assert!(!s.consume_interaction("nope").await); // 未知も false
-    }
 }

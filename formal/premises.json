@@ -3,9 +3,9 @@
     "id": "P-SINGLEUSE",
     "model": "oauth_code_pkce.spthy",
     "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
-    "assurance": "store の code 消費（単回）。回帰テスト `store::code_reuse_revokes_issued_tokens`",
+    "assurance": "store の code 消費（単回）。`Store` の契約の試験 `code_reuse_revokes_issued_tokens`（メモリと Firestore の両方に当てる）",
     "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
-    "tests": ["store::tests::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::code_is_taken_once"]
+    "tests": ["store::tests::contract::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::contract::code_reuse_revokes_issued_tokens"]
   },
   {
     "id": "P-CODEFRESH",
@@ -97,8 +97,8 @@
     "model": "ciba_rar.spthy",
     "premise": "マンデート(auth_req_id) は**単回消費**",
     "assurance": "`mandate_consumed` CAS（/oauth/mandate/consume）+ CIBA store の単回",
-    "guard": ["src/ciba.rs: MemoryCibaStore::consume_if_approved", "src/ciba.rs: FirestoreCibaStore::consume_if_approved", "src/store.rs: MemoryStore::consume_mandate_if_unused"],
-    "tests": ["ciba::tests::memory_store_consume_is_single_use", "store::tests::consume_mandate_is_single_use", "grants::tests::ciba_approved_issues_tokens_once_then_rejects_reuse", "ciba::tests::firestore_store_consume_is_single_use"]
+    "guard": ["src/ciba.rs: MemoryCibaStore::consume_if_approved", "src/ciba.rs: FirestoreCibaStore::consume_if_approved", "src/store.rs: MemoryStore::consume_mandate_if_unused", "src/firestore_store.rs: FirestoreStore::consume_mandate_if_unused"],
+    "tests": ["ciba::tests::memory_store_consume_is_single_use", "store::tests::contract::consume_mandate_is_single_use", "firestore_store::tests::contract::consume_mandate_is_single_use", "grants::tests::ciba_approved_issues_tokens_once_then_rejects_reuse", "ciba::tests::firestore_store_consume_is_single_use"]
   },
   {
     "id": "P-CAUTH",
@@ -223,7 +223,7 @@
     "premise": "RT の使用済み化は**原子的に単回**（`Fresh` が linear）",
     "assurance": "`mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS）",
     "guard": ["src/store.rs: MemoryStore::mark_refresh_used", "src/firestore_store.rs: FirestoreStore::mark_refresh_used"],
-    "tests": ["store::tests::mark_refresh_used_is_single_use", "grants::tests::refresh_rotates_and_reuse_rejected"]
+    "tests": ["store::tests::contract::mark_refresh_used_is_single_use", "firestore_store::tests::contract::mark_refresh_used_is_single_use", "grants::tests::refresh_rotates_and_reuse_rejected"]
   },
   {
     "id": "P-RFAMILY",
@@ -231,7 +231,7 @@
     "premise": "使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない",
     "assurance": "系列の失効の札（#75）: `RefreshTokenGrant::handle` の `pre.used` 分岐で `revoke_refresh_family` が `refreshFamilyRevocations/{familyId}` に札を書き、ローテーションは読んだ時と書き込みの後に `refresh_family_revoked` で札を見て断る（札を引けなければ断る）。鎖を辿って消すのは後片付けで、消し漏れがあっても札が使わせない。モデルの `Family(F, 'revoked')` が札に当たる。familyId を持たない古い RT はローテーションさせない。札が入る前の版は鎖を辿って消すだけで、上限 64・周の打ち切り・読みの誤り・書き込みの間の失効で使える RT が残った",
     "guard": ["src/grants.rs: RefreshTokenGrant::handle", "src/store.rs: MemoryStore::revoke_refresh_family", "src/firestore_store.rs: FirestoreStore::revoke_refresh_family"],
-    "tests": ["grants::tests::refresh_reuse_detected_revokes_family", "grants::tests::refresh_reuse_revokes_family_any_length", "store::tests::revoke_family_deletes_entire_chain"],
+    "tests": ["grants::tests::refresh_reuse_detected_revokes_family", "grants::tests::refresh_reuse_revokes_family_any_length", "store::tests::contract::revoke_family_deletes_entire_chain", "firestore_store::tests::contract::revoke_family_deletes_entire_chain"],
     "kani": ["refresh_family_walk_terminates"]
   },
   {

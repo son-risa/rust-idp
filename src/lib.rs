@@ -67,6 +67,8 @@ mod response_mode;
 mod sig;
 mod step_up;
 mod store;
+#[cfg(test)]
+mod store_contract;
 mod web;
 mod webauthn;
 

@@ -626,31 +626,6 @@ mod tests {
     use super::*;
     use crate::firestore::fake_firestore;
 
-    #[tokio::test]
-    async fn code_is_taken_once() {
-        let (host, _state) = fake_firestore::spawn().await;
-        let s = FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host)));
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        s.save_code(AuthorizationCode {
-            code: "C1".into(),
-            client_id: "cl".into(),
-            account_id: "a".into(),
-            redirect_uri: "https://rp/cb".into(),
-            scope: "openid".into(),
-            nonce: None,
-            code_challenge: None,
-            code_challenge_method: None,
-            auth_time: 0,
-            acr: None,
-            dpop_jkt: None,
-            resource: None,
-            expires_at: now + 600,
-        })
-        .await.unwrap();
-        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Fresh(c) if c.client_id == "cl"));
-        assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Reused(_)));
-    }
-
     async fn store() -> FirestoreStore {
         store_and_fake().await.0
     }
@@ -659,6 +634,8 @@ mod tests {
         let (host, state) = fake_firestore::spawn().await;
         (FirestoreStore::new(Arc::new(Firestore::new_for_test("proj", host))), state)
     }
+
+    crate::store_contract::store_contract_tests!(store);
 
     fn rt(token: &str, family: &str, replaced_by: Option<&str>) -> RefreshToken {
         RefreshToken {
@@ -674,59 +651,6 @@ mod tests {
             used: replaced_by.is_some(),
             replaced_by: replaced_by.map(str::to_string),
         }
-    }
-
-    #[tokio::test]
-    async fn a_refresh_token_is_rotated_once() {
-        let s = store().await;
-        s.save_refresh_token(rt("R1", "F", None)).await.unwrap();
-        assert!(s.mark_refresh_used("R1", Some("R2")).await.unwrap());
-        assert!(!s.mark_refresh_used("R1", Some("R3")).await.unwrap(), "使用済みの RT は 2 度目のローテーションに使えない");
-        assert_eq!(s.get_refresh_token("R1").await.unwrap().unwrap().replaced_by.as_deref(), Some("R2"));
-    }
-
-    #[tokio::test]
-    async fn two_concurrent_rotations_of_one_refresh_token_let_only_one_through() {
-        let s = store().await;
-        s.save_refresh_token(rt("R1", "F", None)).await.unwrap();
-        let (a, b) = tokio::join!(s.mark_refresh_used("R1", Some("Ra")), s.mark_refresh_used("R1", Some("Rb")));
-        assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|w| **w).count(), 1);
-    }
-
-    #[tokio::test]
-    async fn revoking_a_family_deletes_the_whole_chain_and_nothing_else() {
-        let s = store().await;
-        s.save_refresh_token(rt("R1", "F", Some("R2"))).await.unwrap();
-        s.save_refresh_token(rt("R2", "F", Some("R3"))).await.unwrap();
-        s.save_refresh_token(rt("R3", "F", None)).await.unwrap();
-        s.save_refresh_token(rt("X1", "G", None)).await.unwrap();
-        s.revoke_refresh_family("F", "R1").await;
-        for t in ["R1", "R2", "R3"] {
-            assert!(s.get_refresh_token(t).await.unwrap().is_none(), "{t} が残っている");
-        }
-        assert!(s.get_refresh_token("X1").await.unwrap().is_some());
-    }
-
-    /// 循環した鎖でも止まる。止めているのは辿った RT の集合（seen）で、REVOKE_MAX_RTS の上限ではない。
-    /// 集合つきの walk が止まり取りこぼさないことは、Kani の refresh_family_walk_terminates が抽象化したモデルで見ている。
-    #[tokio::test]
-    async fn revoking_a_cyclic_family_stops_because_deleted_links_are_gone() {
-        let s = store().await;
-        s.save_refresh_token(rt("C1", "F", Some("C2"))).await.unwrap();
-        s.save_refresh_token(rt("C2", "F", Some("C1"))).await.unwrap();
-        s.revoke_refresh_family("F", "C1").await;
-        assert!(s.get_refresh_token("C1").await.unwrap().is_none());
-        assert!(s.get_refresh_token("C2").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn an_interaction_is_consumed_once_even_when_two_resumes_race() {
-        let s = store().await;
-        let i = Interaction { uid: "U1".into(), raw_query: String::new(), account_id: None, auth_time: None, request_uri: None, browser_binding: String::new() };
-        s.save_interaction(i).await;
-        let (a, b) = tokio::join!(s.consume_interaction("U1"), s.consume_interaction("U1"));
-        assert_eq!([a, b].iter().filter(|w| **w).count(), 1);
-        assert!(!s.consume_interaction("U1").await);
     }
 
     /// Firestore が ID として受け付けない値は、引かずに「無い」とする（400 を 5xx にしない）。
@@ -749,12 +673,6 @@ mod tests {
             fake.clear_failures();
         }
         assert!(issued_shape(&uuid::Uuid::new_v4().simple().to_string()));
-    }
-
-    #[tokio::test]
-    async fn rotation_of_an_unknown_refresh_token_fails() {
-        let s = store().await;
-        assert!(!s.mark_refresh_used("NOPE", Some("R2")).await.unwrap());
     }
 
     #[tokio::test]
