@@ -30,7 +30,7 @@ PROJECT="${PROJECT:-fido2-8b943}"
 REGION="${REGION:-asia-northeast1}"
 PROD_SERVICE="${PROD_SERVICE:-rust-idp}"
 STAGING_SERVICE="${STAGING_SERVICE:-rust-idp-staging}"
-PROD_URL="${PROD_URL:-https://oidc.sonrisa.co.jp}"
+PROD_URL="${PROD_URL:-https://id.amate.ai}"
 STAGING_URL="${STAGING_URL:-https://test.sonrisa.co.jp}"
 
 APPLY=0

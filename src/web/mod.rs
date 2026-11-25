@@ -218,6 +218,12 @@ fn fido_conformance_enabled() -> bool {
 }
 
 pub fn router(provider: Provider) -> Router {
+    router_with_legacy_hosts(provider, &std::env::var("LEGACY_HOSTS").unwrap_or_default())
+}
+
+/// `legacy_hosts` は LEGACY_HOSTS の値（カンマ区切りのホスト名）。
+fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
+    let legacy = LegacyHosts::new(legacy_hosts, provider.origin());
     let base_path = provider.base_path.clone();
     // FIDO2 Conformance 用エンドポイントは base_path に依らずトップレベル /fido/* に置く。
     // テスト専用面（本番の実 passkey フローは /signup・/login・/ciba 側）なので、
@@ -354,9 +360,14 @@ pub fn router(provider: Provider) -> Router {
             .merge(magic)
             .fallback(log_unmatched)
     };
+    let app = app.layer(axum::middleware::from_fn(localize_rejections));
+    // 経路より前で転送するので、表に無い path も新しいホストへ送る。転送にも HSTS を付け、request_trace に残す。
+    let app = match legacy {
+        Some(l) => app.layer(axum::middleware::from_fn_with_state(Arc::new(l), redirect_legacy_host)),
+        None => app,
+    };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
-    app.layer(axum::middleware::from_fn(localize_rejections))
-        .layer(axum::middleware::from_fn(security_headers))
+    app.layer(axum::middleware::from_fn(security_headers))
         .layer(axum::middleware::from_fn(drop_encoded_cookie_names))
         .layer(axum::middleware::from_fn(request_trace))
 }
@@ -386,6 +397,60 @@ fn from_own_origin(h: &HeaderMap, origin: &str) -> bool {
     h.get(header::REFERER)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|r| r == origin || r.strip_prefix(origin).is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// 移す前のホスト（LEGACY_HOSTS）と、転送先の ORIGIN（scheme とホスト）。
+struct LegacyHosts {
+    hosts: Vec<String>,
+    origin: String,
+}
+
+impl LegacyHosts {
+    /// 転送するホストが 1 つも無ければ None（層を置かない）。
+    fn new(list: &str, origin: String) -> Option<Self> {
+        let own = origin.split("://").nth(1).and_then(host_of);
+        let mut hosts = Vec::new();
+        for h in list.split(',').map(str::trim).filter(|h| !h.is_empty()) {
+            match host_of(h) {
+                // ORIGIN 自身を入れると、自分へ転送し続ける。
+                Some(h) if Some(&h) == own.as_ref() => {
+                    tracing::warn!(event = "legacy_host_is_origin", host = %h, "LEGACY_HOSTS の ORIGIN のホストは転送しない");
+                }
+                Some(h) => hosts.push(h),
+                None => tracing::warn!(event = "legacy_host_unparsable", host = %h, "LEGACY_HOSTS の読めない値を捨てる"),
+            }
+        }
+        (!hosts.is_empty()).then_some(Self { hosts, origin })
+    }
+}
+
+/// `Host` の値（`host[:port]`）から、比べるためのホスト名を取り出す。port を落とし、小文字にし、末尾の `.` を落とす。
+fn host_of(authority: &str) -> Option<String> {
+    let a: axum::http::uri::Authority = authority.parse().ok()?;
+    Some(a.host().trim_end_matches('.').to_ascii_lowercase())
+}
+
+/// 要求の Host が LEGACY_HOSTS のどれかなら、ORIGIN の同じ path と query へ 308 で送る（308 は POST の body も保つ）。
+/// AASA だけは転送しない。Apple は転送された AASA を読まないので、古いホストの Universal Link と
+/// webcredentials が切れる。
+async fn redirect_legacy_host(
+    State(l): State<Arc<LegacyHosts>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    // HTTP/2 では :authority が URI に入り、Host の見出しが無いことがある。
+    let host = req
+        .uri()
+        .authority()
+        .map(|a| a.as_str().to_string())
+        .or_else(|| req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).map(str::to_string))
+        .and_then(|h| host_of(&h));
+    let is_legacy = host.as_ref().is_some_and(|h| l.hosts.contains(h));
+    if !is_legacy || req.uri().path() == "/.well-known/apple-app-site-association" {
+        return next.run(req).await;
+    }
+    let pq = req.uri().path_and_query().map_or("/", |pq| pq.as_str());
+    Redirect::permanent(&format!("{}{pq}", l.origin)).into_response()
 }
 
 /// 全応答に HSTS を付ける。includeSubDomains は付けない（同じ親ドメインの他の host に効かせない）。
@@ -951,6 +1016,103 @@ mod obs_tests {
         assert_ne!(a, c, "異なる sub は異なる");
         assert!(!a.contains("david3080") && !a.contains('@'), "生メールを含まない: {a}");
         assert!(a.starts_with("h:"), "擬似化マーカー h: 付き: {a}");
+    }
+}
+
+#[cfg(test)]
+mod legacy_host_tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    fn app(legacy: &str) -> Router {
+        router_with_legacy_hosts(Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"), legacy)
+    }
+
+    async fn send(app: Router, method: &str, uri: &str, host: Option<&str>) -> Response {
+        let mut req = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(h) = host {
+            req = req.header(header::HOST, h);
+        }
+        app.oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap()
+    }
+
+    fn location(r: &Response) -> &str {
+        r.headers().get(header::LOCATION).unwrap().to_str().unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_on_a_legacy_host_goes_to_the_origin_with_the_same_path_and_query() {
+        let r = send(app("old.example"), "GET", "/oidc/authorize?client_id=a&state=x%20y", Some("old.example")).await;
+        assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&r), "https://new.example/oidc/authorize?client_id=a&state=x%20y");
+        assert!(r.headers().contains_key(header::STRICT_TRANSPORT_SECURITY));
+    }
+
+    /// 308 なので、RP の POST（token の交換など）は body ごと送り直される。
+    #[tokio::test]
+    async fn post_on_a_legacy_host_is_redirected_with_308() {
+        let r = send(app("old.example"), "POST", "/oidc/token?x=1", Some("old.example")).await;
+        assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&r), "https://new.example/oidc/token?x=1");
+    }
+
+    #[tokio::test]
+    async fn host_is_compared_without_case_port_or_trailing_dot() {
+        for host in ["OLD.Example", "old.example:443", "old.example."] {
+            let r = send(app(" Old.Example , other.example"), "GET", "/oidc/jwks", Some(host)).await;
+            assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT, "{host}");
+            assert_eq!(location(&r), "https://new.example/oidc/jwks", "{host}");
+        }
+        let r = send(app("old.example,other.example"), "GET", "/oidc/jwks", Some("other.example")).await;
+        assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
+    }
+
+    /// HTTP/2 では Host の見出しが無く、URI の authority にホストが入る。
+    #[tokio::test]
+    async fn the_authority_of_the_uri_is_used_when_there_is_no_host_header() {
+        let r = send(app("old.example"), "GET", "https://old.example/oidc/jwks?a=1", None).await;
+        assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&r), "https://new.example/oidc/jwks?a=1");
+    }
+
+    /// 表に無い path も、経路より前で転送する。
+    #[tokio::test]
+    async fn unknown_paths_on_a_legacy_host_are_redirected_too() {
+        let r = send(app("old.example"), "GET", "/no/such/path", Some("old.example")).await;
+        assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(location(&r), "https://new.example/no/such/path");
+    }
+
+    #[tokio::test]
+    async fn aasa_is_served_on_a_legacy_host_without_redirect() {
+        let r = send(app("old.example"), "GET", "/.well-known/apple-app-site-association", Some("old.example")).await;
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_redirected_when_legacy_hosts_is_empty() {
+        for legacy in ["", " , "] {
+            let r = send(app(legacy), "GET", "/oidc/.well-known/openid-configuration", Some("old.example")).await;
+            assert_eq!(r.status(), StatusCode::OK, "{legacy:?}");
+            let r = send(app(legacy), "POST", "/oidc/token", Some("old.example")).await;
+            assert_ne!(r.status(), StatusCode::PERMANENT_REDIRECT, "{legacy:?}");
+        }
+    }
+
+    /// run.app など、ORIGIN でも LEGACY_HOSTS でもないホストは今までどおり。
+    #[tokio::test]
+    async fn other_hosts_pass_through() {
+        for host in [Some("rust-idp-xyz-an.a.run.app"), Some("new.example"), Some("sub.old.example"), None] {
+            let r = send(app("old.example"), "GET", "/oidc/.well-known/openid-configuration", host).await;
+            assert_eq!(r.status(), StatusCode::OK, "{host:?}");
+        }
+    }
+
+    /// ORIGIN のホストを LEGACY_HOSTS に入れても、自分へ転送し続けない。
+    #[tokio::test]
+    async fn the_origin_host_in_legacy_hosts_is_ignored() {
+        let r = send(app("NEW.example"), "GET", "/oidc/.well-known/openid-configuration", Some("new.example")).await;
+        assert_eq!(r.status(), StatusCode::OK);
     }
 }
 
