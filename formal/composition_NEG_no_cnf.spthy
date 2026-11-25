@@ -3,7 +3,7 @@ begin
 
 /*
   ロードマップ #6: 合成（#1 認可コード+PKCE+クライアント認証 × #2 DPoP × #4 ユーザ同意）
-  rust-op の FAPI2 ログイン（confidential client = private_key_jwt = DCR/FAPI）。
+  rust-idp の FAPI2 ログイン（confidential client = private_key_jwt = DCR/FAPI）。
 
   ★ この合成は一筋縄ではいかなかった（合成は別物）。Tamarin が2度 falsify を返し、
     “抽象化で落としていた前提”を炙り出した:

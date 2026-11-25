@@ -2,7 +2,7 @@
 //!
 //! リソースサーバ(RS)が「この操作にはより強い/新しいユーザー認証が必要」と判断したとき、
 //! 401 とともに返す `WWW-Authenticate` チャレンジを組み立てる primitive。
-//! OP 側(rust-op)はこのチャレンジを発行しない（acr_values/max_age を受けて authorize で
+//! OP 側(rust-idp)はこのチャレンジを発行しない（acr_values/max_age を受けて authorize で
 //! 再認証を行う側）。分離 RS がこの値を使ってクライアントに step-up を要求する。
 //!
 //! 例:

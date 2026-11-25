@@ -1,6 +1,6 @@
 # Credits / Acknowledgements
 
-rust-op は独立した Rust 実装です。**他プロジェクトのソースコードを複製してはいません。**
+rust-idp は独立した Rust 実装です。**他プロジェクトのソースコードを複製してはいません。**
 ただし、アーキテクチャの着想元・挙動の検証オラクル・参照実装として以下のオープンソース
 プロジェクトに依拠しています。著作権法上の義務の有無にかかわらず、敬意と透明性のために謝辞を記します。
 
@@ -11,7 +11,7 @@ rust-op は独立した Rust 実装です。**他プロジェクトのソース�
 
 ## node-oidc-provider — 設計（アーキテクチャ）の着想元
 
-rust-op の Provider レジストリ設計は、node-oidc-provider の内部分解
+rust-idp の Provider レジストリ設計は、node-oidc-provider の内部分解
 （`actions` / `grants` / `client_auth` / `response_modes` / `adapters`）を**概念トレイト + 実装群**へ
 写したものです（命名・コードはすべて独立した Rust 実装。ソースの逐語複製ではありません）。
 コード中の「〜相当」というコメントはこの対応関係を示します。
@@ -37,7 +37,7 @@ all copies or substantial portions of the Software.
 
 ## SimpleWebAuthn (@simplewebauthn/server) — WebAuthn / MDS3 の挙動オラクル・参照
 
-rust-op の前身となった TypeScript 実装で用いており、FIDO2 Server Conformance / MDS3 対応の
+rust-idp の前身となった TypeScript 実装で用いており、FIDO2 Server Conformance / MDS3 対応の
 **挙動オラクル（期待結果の確認）**として参照しました。ソースの複製はしていません。
 
 - Project: https://github.com/MasterKale/SimpleWebAuthn
@@ -46,19 +46,19 @@ rust-op の前身となった TypeScript 実装で用いており、FIDO2 Server
 
 ## webauthn-rs / webauthn-rs-core (Kanidm) — WebAuthn 検証の参照・オラクル
 
-rust-op は WebAuthn 検証を RustCrypto でピュア Rust 自作する方針のため**採用していません**が、
+rust-idp は WebAuthn 検証を RustCrypto でピュア Rust 自作する方針のため**採用していません**が、
 設計比較および検証オラクルとして参照しました。ソースの複製はしていません。
 
 - Project: https://github.com/kanidm/webauthn-rs
 - License: MPL-2.0
 - 注: MPL-2.0 のファイル単位コピーレフトは「当該 MPL ソースを改変して再配布する場合」に発生します。
-  rust-op は webauthn-rs のソースを取り込んでいないため、本参照によって MPL-2.0 上の義務は生じません。
+  rust-idp は webauthn-rs のソースを取り込んでいないため、本参照によって MPL-2.0 上の義務は生じません。
 
 ---
 
 ## 暗号・依存ライブラリ
 
-rust-op は暗号プリミティブを **RustCrypto 系のクレート**に委譲する（OpenSSL/ring 非依存, `openssl = 0`）。
+rust-idp は暗号プリミティブを **RustCrypto 系のクレート**に委譲する（OpenSSL/ring 非依存, `openssl = 0`）。
 主要な暗号ライブラリと SPDX ライセンス:
 
 | ライブラリ | 用途 | License |
@@ -73,7 +73,7 @@ rust-op は暗号プリミティブを **RustCrypto 系のクレート**に委�
 | subtle | 定数時間比較 | BSD-3-Clause |
 | base64 / zeroize | エンコード / ゼロ化 | MIT OR Apache-2.0 |
 
-いずれもパーミッシブ（コピーレフト無し）で rust-op の MIT と互換。**実行時依存 全 crate** の完全な
+いずれもパーミッシブ（コピーレフト無し）で rust-idp の MIT と互換。**実行時依存 全 crate** の完全な
 一覧と SPDX ライセンスは [`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md) を参照
 （バイナリを第三者配布する場合は `cargo about` 等でライセンス全文・NOTICE まで含めて生成すること）。
 

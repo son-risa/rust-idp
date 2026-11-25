@@ -1,12 +1,12 @@
 # Zero Trust 自己評価 ＋ 前提台帳（Phase0）
 
-rust-op を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-trust-for-ai-agents)」（2026-05, 全36ページ）の枠組みに突き合わせた**自己評価**と、rust-op が安全のために前提としている **load-bearing な条件の台帳**。
+rust-idp を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-trust-for-ai-agents)」（2026-05, 全36ページ）の枠組みに突き合わせた**自己評価**と、rust-idp が安全のために前提としている **load-bearing な条件の台帳**。
 
 二つの目的を1つにまとめる:
-1. **前提の明示**（本プロジェクトの本来ゴール）= rust-op の安全性が「何が成り立てば」保証されるのかを表に出し、そこから**必要な運用要件を導出**する。
-2. **Zero Trust 自己評価** = 枠組みの各 control に対し rust-op がどこまで、どの検証層で担保しているかを正直に並べる。
+1. **前提の明示**（本プロジェクトの本来ゴール）= rust-idp の安全性が「何が成り立てば」保証されるのかを表に出し、そこから**必要な運用要件を導出**する。
+2. **Zero Trust 自己評価** = 枠組みの各 control に対し rust-idp がどこまで、どの検証層で担保しているかを正直に並べる。
 
-> **これは自己評価であって第三者保証ではない。** 下表の ✓ は「**その層で**検証済み」を意味し、「rust-op のコード全体が正しいと証明された」を意味**しない**。とくに L1（Tamarin）は*モデル*を、L3（Kani）は*ごく少数の純粋述語*を検証するに留まる。広範なコード↔モデルのギャップは**未検証**である（[GAP の節](#gap-検証していないこと)を必ず参照）。
+> **これは自己評価であって第三者保証ではない。** 下表の ✓ は「**その層で**検証済み」を意味し、「rust-idp のコード全体が正しいと証明された」を意味**しない**。とくに L1（Tamarin）は*モデル*を、L3（Kani）は*ごく少数の純粋述語*を検証するに留まる。広範なコード↔モデルのギャップは**未検証**である（[GAP の節](#gap-検証していないこと)を必ず参照）。
 
 > **更新 (2026-06-12): Phase0 以降の進捗。** 本 Phase0 評価の後、脆弱性修正・本番反映・検知配線を実施した。
 > - **#41 DPoP refresh 束縛**: refresh token を DPoP 鍵に束縛（盗難 RT の別鍵付け替えを阻止、RFC 9449 §5）。本番反映済。
@@ -15,7 +15,7 @@ rust-op を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-
 > - **B-6 jwks_uri**: private_key_jwt の鍵ローテーション対応（`JwksResolver`、SSRF は https-only）。
 > - **デプロイ移行**: 本番 OP は Cloud Run サービス **`rust-op`**（旧 `api` 関数は削除。2026-11 に `rust-idp` へ改名）。リソースサーバ **frog-crud-api**（api.sonrisa.co.jp）が DCR 登録の private_key_jwt クライアントで introspection + mandate 消費。詳細はメモリ project-rust-op-deployment。
 > - **検知の修復**: ログメトリクス/アラート 5 本が移行で `service_name="api"` のまま壊れていたのを `rust-op` に修正し、refresh_reuse アラートを追加。
-> - **最小権限**: frog-crud-api を広域 default SA → 専用 SA（`frog-crud-api-runtime`、datastore.user + 当該 secret のみ）。rust-op は `rust-op-runtime`。RS 秘密鍵は Secret Manager 管理。
+> - **最小権限**: frog-crud-api を広域 default SA → 専用 SA（`frog-crud-api-runtime`、datastore.user + 当該 secret のみ）。rust-idp は `rust-op-runtime`。RS 秘密鍵は Secret Manager 管理。
 > - **不採用**: mTLS / 証明書束縛トークン (RFC 8705) はインフラ追加コストのため見送り（sender-binding は DPoP で担保）。
 
 ---
@@ -25,7 +25,7 @@ rust-op を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-
 | 層 | 何を検証/担保するか | 限界（✓ が意味しないこと） |
 |---|---|---|
 | **L1 Tamarin** | プロトコル**モデル**が、明示した前提の下で Dolev-Yao 攻撃者に耐える | 実 Rust コードがモデルに一致することは示さない |
-| **L2 暗号/ライブラリ** | 署名・ハッシュ・base64・定数時間比較を**正しいと仮定**（p256/sha2/base64/subtle） | この層は rust-op では**証明していない**（CryptoVerif/EasyCrypt の範囲） |
+| **L2 暗号/ライブラリ** | 署名・ハッシュ・base64・定数時間比較を**正しいと仮定**（p256/sha2/base64/subtle） | この層は rust-idp では**証明していない**（CryptoVerif/EasyCrypt の範囲） |
 | **L3 Kani** | 実コードの**ごく少数の純粋述語**を全入力で機械検証（panic/オーバーフロー/論理） | 約11k 行のうち橋を架けた数述語のみ。残りは未検証 |
 | **L4 運用** | 分散原子性・鍵秘匿・TLS など**運用で担保**する前提 | コードの外。運用が崩れれば上位層の前提が崩れる |
 
@@ -33,7 +33,7 @@ rust-op を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-
 
 ---
 
-## 1. rust-op の load-bearing 前提台帳（本評価の核心）
+## 1. rust-idp の load-bearing 前提台帳（本評価の核心）
 
 「これが破れると安全性が崩れる」条件と、そこから**導出される運用要件**。各前提は、対応する Tamarin lemma の**成立前提**でもある（＝モデルが「この条件下で」と置いたもの）。
 
@@ -95,11 +95,11 @@ L7 の帯域・接続レートによる DoS はアプリ層の範囲外で、リ
 
 ---
 
-## 2. Zero Trust Part III（6制御領域）× rust-op × 層
+## 2. Zero Trust Part III（6制御領域）× rust-idp × 層
 
-枠組みの層は **Foundation / Enterprise / Advanced**。rust-op は OAuth/OIDC **認可サーバ**＝枠組みが Foundation で必須とする「**identity provider / 短命資格情報基盤**」そのもの（原文 Part III Service authentication / Phase 5–6 が名指し）。
+枠組みの層は **Foundation / Enterprise / Advanced**。rust-idp は OAuth/OIDC **認可サーバ**＝枠組みが Foundation で必須とする「**identity provider / 短命資格情報基盤**」そのもの（原文 Part III Service authentication / Phase 5–6 が名指し）。
 
-| ZT 領域 | rust-op の充足 | 層タグ | 検証アーティファクト | 依存前提 | 評価 |
+| ZT 領域 | rust-idp の充足 | 層タグ | 検証アーティファクト | 依存前提 | 評価 |
 |---|---|---|---|---|---|
 | **1. Identity & authentication** | OAuth IdP として短命トークン発行（F 直撃）。private_key_jwt+JWKS で暗号クライアント ID（E 相当）。DPoP で sender-bound。passkey で人間認証 F バー。KMS で鍵非展開 | L1＋L3＋L2 | Tamarin #1/#4/#5、Kani `pkce_method_no_downgrade`/`redirect_uri_match_is_exact`/`exp_in_window` | A2,A4 | **F 完全＋E 相当をモデル/述語で裏打ち**（コード全体ではない） |
 | **2. Access control / least agency** | RAR mandate scoping、scope/aud 制限、DPoP cnf（鍵保持者のみ）、redirect 完全一致、単回コード、step_up | L1＋L3 | Tamarin #2/#3、Kani `redirect_uri_match_is_exact` | A1,A4 | **資格情報側の scoping を裏打ち**。実行時 sandbox/網分離は管轄外 |
@@ -112,15 +112,15 @@ L7 の帯域・接続レートによる DoS はアプリ層の範囲外で、リ
 
 ## 3. Zero Trust Part IV（8フェーズ）対応（要約）
 
-| フェーズ | rust-op との関係 | 状態 |
+| フェーズ | rust-idp との関係 | 状態 |
 |---|---|---|
 | 1. Identify requirements | **本ドキュメント（前提台帳）がこれ** | 着手（本書） |
 | 2. Manage supply chain | cargo-deny SHA ピン CI。AI-BOM/Scorecard/reachability 無 | 部分 |
-| 3. Define agent boundaries | rust-op は agent でない。agent を縛る scoped 資格情報を**発行する側** | N/A（供給側） |
+| 3. Define agent boundaries | rust-idp は agent でない。agent を縛る scoped 資格情報を**発行する側** | N/A（供給側） |
 | 4. Defend prompt injection | LLM 層。別スコープ | 管轄外 |
 | 5. Secure tool access | 「agent identity に束縛した短命トークン」＝**DPoP を供給** | **直撃**（L1 #2） |
 | 6. Protect agent credentials | 短命 IdP 発行・per-client ID・埋め込み無し・失効（DCR register/revoke-client） | **直撃**（L1 #1, A2） |
-| 7. Safeguard memory | agent memory は別。rust-op 自身の状態リプレイ防止＝単回 CAS（A1） | 管轄外（※A1 が類似機構） |
+| 7. Safeguard memory | agent memory は別。rust-idp 自身の状態リプレイ防止＝単回 CAS（A1） | 管轄外（※A1 が類似機構） |
 | 8. Measure what matters | Request-ID 相関の土台あり（`web::request_trace`）。dwell time/異常検知は未 | Foundation 着手 |
 
 ---
@@ -130,10 +130,10 @@ L7 の帯域・接続レートによる DoS はアプリ層の範囲外で、リ
 **最重要の節。** ✓ の裏で**何が未検証か**を明示する。枠組み自身が「不確かなら foundational controls はまだ work が要る」と言う姿勢に従う。
 
 - **広範なコード↔モデルのギャップ**: L3（Kani）は5述語のみ橋を架けた。残る約11k 行は Kani 未検証。L1 が証明するのは*モデル*であって実コードではない。
-- **L2 暗号は仮定**（A4, [`docs/crypto-assumptions.md`](./crypto-assumptions.md) で3分解）。**(a) 設計安全性は文献で確立・引用可**だが、**(b) クレートの実装正しさ**（深掘りは hax/Aeneas）と **(c) 定数時間**（subtle 依拠）は残余。rust-op 内で機械証明はしていない。
+- **L2 暗号は仮定**（A4, [`docs/crypto-assumptions.md`](./crypto-assumptions.md) で3分解）。**(a) 設計安全性は文献で確立・引用可**だが、**(b) クレートの実装正しさ**（深掘りは hax/Aeneas）と **(c) 定数時間**（subtle 依拠）は残余。rust-idp 内で機械証明はしていない。
 - **検知・対応層**: 領域3 Observability は **Foundation（Request-ID 連鎖）実装済**。領域4 Behavioral monitoring は **Foundation 達成済へ更新**: ログメトリクス 6 本（token_issued/client_auth_failed/login_failed/kms_sign_failed/dcr_registered/**refresh_reuse**）＋**アラートポリシー実適用済**（5xx・auth failure・signing key・KMS・DCR spike・**refresh token reuse**）。**残**（Enterprise/Advanced・Part V）: 不変監査ログ（append-only + 完全性検証）・統計的異常検知（ベースライン学習）・自動応答/agentic SOAR・automated first-pass triage。
-- **agent 固有領域**（prompt injection・tool access・memory poisoning）= rust-op の管轄外。ただし rust-op の scoped・sender-bound・単回な資格情報は、これらが起きても**blast radius を封じ込める**。
-- **最小権限 / 最小 agency**: rust-op=`rust-op-runtime`、frog-crud-api=`frog-crud-api-runtime`（datastore.user + 当該 secret のみ）に分離済。**残**: frog-crud-api の Firestore アクセス（datastore.user）は E2E 未検証（secret アクセスは確認済）。
+- **agent 固有領域**（prompt injection・tool access・memory poisoning）= rust-idp の管轄外。ただし rust-idp の scoped・sender-bound・単回な資格情報は、これらが起きても**blast radius を封じ込める**。
+- **最小権限 / 最小 agency**: rust-idp=`rust-op-runtime`、frog-crud-api=`frog-crud-api-runtime`（datastore.user + 当該 secret のみ）に分離済。**残**: frog-crud-api の Firestore アクセス（datastore.user）は E2E 未検証（secret アクセスは確認済）。
 - **config integrity / 署名済みデプロイ**（領域6 Enterprise）未着手: Cloud Run の Binary Authorization（署名イメージのみデプロイ可）は未導入。現状は `gcloud run deploy --source` で署名検証なし。
 - **AI-BOM / attestation / self-healing**（領域6 Advanced）未着手。
 - **新規コードの検証カバレッジ**: #41/B-4/B-5/B-6 はユニットテスト済だが Tamarin/Kani 未カバー。とくに **B-4 の系列失効 chain-walk + mark_refresh_used の CAS 単回性**、**jwks_uri の SSRF guard** は性質検証（Kani/property test）の価値が高い。
@@ -151,7 +151,7 @@ L7 の帯域・接続レートによる DoS はアプリ層の範囲外で、リ
 - **Step3 ✓ 完了**（L4 ランタイムモニタ Foundation, `web::request_trace`）→ §2 領域3・§3 フェーズ8 の「Observability gap」を **Request-ID 連鎖（Foundation tier）covered** に flip 済。全リクエストに request_id を付与し、span でハンドラを囲んで既存ドメインログ（`event=token_issued` 等）に request_id を継承、応答に method/path/status/latency を1行記録、応答ヘッダにも返す。**秘密非ログを厳守**: query を含めず path のみ、ヘッダ/ボディ/Authorization/DPoP proof/トークンは一切記録しない。**閾値アラート（threshold/異常検知）と SOAR は対象外（Enterprise/Advanced）**。将来そこを足すなら `event=http_request` の status/latency_ms と `token_issued` 等を集計点（dwell time/coverage）として hook する。
   - **span 継承は単体テストで確認済**（`web::obs_tests`、本番と同じ `fmt().json()` 構成で span の request_id がドメインログに出ることを検証）。型検査では分からない核心挙動なので明示テスト。デプロイ時は実 `/token` で `http_request` と `token_issued` の両行に同一 request_id が出ることをスモークで確認すること。
   - **path パラメータ（`/login/{uid}`・`/ciba/{auth_req_id}/...` の uid/auth_req_id）は意図的にログする**＝識別子であって資格情報ではない（CIBA の auth_req_id はハンドル）。秘密が乗る query は除外済。誤記載でなく観測のための判断。
-  - **未対応（follow-up・本 PR では広げない）**: Cloud Run/Firebase は `X-Cloud-Trace-Context`（W3C `traceparent`）を出すが本実装は `X-Request-Id` のみ踏襲＝本番ではほぼ毎回 uuid 採番でプラットフォーム側ログと ID が揃わない。内部相関（rust-op 自身のログ）は成立。プラットフォーム相関が要るならトレースヘッダ読取りを追加。
+  - **未対応（follow-up・本 PR では広げない）**: Cloud Run/Firebase は `X-Cloud-Trace-Context`（W3C `traceparent`）を出すが本実装は `X-Request-Id` のみ踏襲＝本番ではほぼ毎回 uuid 採番でプラットフォーム側ログと ID が揃わない。内部相関（rust-idp 自身のログ）は成立。プラットフォーム相関が要るならトレースヘッダ読取りを追加。
 
 ---
 

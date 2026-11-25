@@ -10,7 +10,7 @@ on:
 # 上書きし、レビュアーが確認したものと違うビルドが昇格されうる。キューイングして
 # 常に1本ずつ処理する（実行中のものを kill はしない）。
 concurrency:
-  group: rust-op-deploy
+  group: rust-idp-deploy
   cancel-in-progress: false
 
 permissions:

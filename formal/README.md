@@ -1,8 +1,8 @@
-# formal/ — rust-op のプロトコルを Tamarin で検証する
+# formal/ — rust-idp のプロトコルを Tamarin で検証する
 
 [`docs/security-ladder.md`](../docs/security-ladder.md) の「検証アーキテクチャ」の実体。
 **プロトコル論理層**を記号的（Dolev-Yao 攻撃者）に検証し、各性質を支える**前提を表に出す**。
-前提（抽象）→ rust-op の担保（具体）への対応づけが、この層の成果物。
+前提（抽象）→ rust-idp の担保（具体）への対応づけが、この層の成果物。
 
 ## 実行
 
@@ -34,7 +34,7 @@ formal/check.sh      # 手元で Tamarin の期待表を照合
 formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 ```
 
-下の各節の「表に出た前提 → rust-op の担保」の表は、[`premises.json`](./premises.json)（担保のコード・試験・Kani ハーネス、
+下の各節の「表に出た前提 → rust-idp の担保」の表は、[`premises.json`](./premises.json)（担保のコード・試験・Kani ハーネス、
 または試験にできない理由を持つ台帳）から作る。`<!-- premises: {model} -->` と `<!-- /premises -->` の間は手で書かず、
 `UPDATE_PREMISE_TABLES=1 cargo test formal_ledger` で作り直す。前提の表は範囲の中だけに置き、範囲の外に前提の表を書かない（範囲の外の行は照合しない）。`cargo test` の `formal_ledger_tests` が、その範囲が台帳から
 作った表とバイト一致すること、台帳の ID の形と (id, model) の重なり、台帳が指すモデル・関数が在ること、Kani ハーネスが
@@ -78,15 +78,15 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
   - **public client**（none = demo-rp / mobile-rp）: **PKCE が単独で必要**（外すと code 横取りが成立）。
   - **単回消費**（P-SINGLEUSE）は両者で必要。
 
-## 表に出た前提 → rust-op の担保（本層の成果物）
+## 表に出た前提 → rust-idp の担保（本層の成果物）
 
 <!-- premises: oauth_code_pkce.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-SINGLEUSE | 認可コードは**原子的に単回消費**される（`AS_Code` が linear） | store の code 消費（単回）。回帰テスト `store::code_reuse_revokes_issued_tokens` |
 | P-CODEFRESH | 認可コードは**推測不能**（CSPRNG = Fr） | code 生成（乱数） |
 | P-VERIFIER | PKCE の verifier は**秘密**で、`h(verifier)=challenge` を AS が検査 | `CheckPkce`（S256 のみ受理、`auth_checks.rs`） |
-| P-CKEY | クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる） | private_key_jwt（`client_auth.rs`）。rust-op は**公開鍵のみ保持** |
+| P-CKEY | クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる） | private_key_jwt（`client_auth.rs`）。rust-idp は**公開鍵のみ保持** |
 | P-REG | クライアントは**事前登録**され AS が公開鍵を知る | `with_client` / DCR（`clients` 登録、`resolve_client`） |
 | P-TLS | トークン配送路は**機密**で正しいクライアントへ届く（モデルでは鍵への暗号化で抽象化） | TLS（Firebase Hosting / Cloud Run）＋ token endpoint |
 <!-- /premises -->
@@ -112,7 +112,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 ロードマップ（[`docs/security-ladder.md`](../docs/security-ladder.md) の「Tamarin モデリング・ロードマップ」）:
 **#1 認可コード+PKCE（本ファイル）→ #2 DPoP 送り主束縛 → #3 CIBA+RAR マンデート → #4 WebAuthn → #5 ID token → #6 合成**。
-各モデルが「防げる攻撃＋必要前提」を1セット産み、積むほど rust-op の前提集合が埋まる。
+各モデルが「防げる攻撃＋必要前提」を1セット産み、積むほど rust-idp の前提集合が埋まる。
 
 ---
 
@@ -130,11 +130,11 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 - 必要性の実験 `dpop_NEG_no_cnf.spthy`（cnf.jkt 検査を外す）→ `dpop_sender_constraining` **falsified（攻撃トレース発見）**。
   = **cnf.jkt 束縛検査は必要**。外すと攻撃者が盗んだ token に**自分の鍵の proof** を付けて RS を通せる。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 <!-- premises: dpop_binding.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
-| P-DKEY | DPoP 秘密鍵は秘匿（漏れると束縛が無効） | クライアント側保持。rust-op は proof を検証するだけで**鍵を持たない** |
+| P-DKEY | DPoP 秘密鍵は秘匿（漏れると束縛が無効） | クライアント側保持。rust-idp は proof を検証するだけで**鍵を持たない** |
 | P-CNF | RS は「proof の鍵 thumbprint = token の cnf.jkt」を検査 | `authenticate_token`（`at.jkt` と proof の jkt 一致）。introspection が cnf.jkt 公開 |
 | P-PROOFSIG | DPoP proof の署名検証（ES256） | `Es256Dpop`（`dpop.rs`） |
 | P-JTI | DPoP proof の jti 単回（リプレイ防止） | jti 単回ストア（`NonceStore` / Firestore 分散） |
@@ -150,7 +150,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 ## モデル #3: CIBA（切り離し承認）+ RAR マンデート
 
-`ciba_rar.spthy` — rust-op 固有・学術的にも手薄。中心の脅威は**「ユーザが見たものと違う要求を承認させられる」**。
+`ciba_rar.spthy` — rust-idp 固有・学術的にも手薄。中心の脅威は**「ユーザが見たものと違う要求を承認させられる」**。
 登場人物: クライアント（消費デバイス = ciba-rp）/ AS / ユーザ（認証デバイス, passkey）。
 攻撃者は**ユーザへの通知チャネルを操作できる**（表示すり替えの脅威）。
 
@@ -167,9 +167,9 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 → **束縛検査が必要**（外すとユーザが承認した mandate と発行 mandate が食い違う＝CIBA 中心の脅威）。
 → **マンデート単回が必要**（外すと同一 auth_req_id から複数トークン）。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 <!-- premises: ciba_rar.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-BIND | ユーザ承認は**具体的 mandate に commit** し、AS は承認された mandate のみ発行 | binding_message + authorization_details を auth_req_id に紐付け表示・承認、token に approved mandate |
 | P-UREAD | **ユーザが binding_message を読む**（モデル外の人間前提） | UI で binding_message/mandate を提示（"見たものに commit" を前提） |
@@ -184,7 +184,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 ### 限界
 - 「ユーザが読む」は記号的に捉えられない人間前提（P-UREAD）。モデルは「ユーザは見た m に commit する」までを表現。
-- 反スパム（量的）は Tamarin の対象外（rust-op は `ciba_rate` で対処）。
+- 反スパム（量的）は Tamarin の対象外（rust-idp は `ciba_rate` で対処）。
 
 ---
 
@@ -205,11 +205,11 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 → **オリジン束縛が必要**（外すと偽オリジンのアサーションを本物 RP が受理＝フィッシング）。
 → **challenge 単回が必要**（外すとアサーション再送）。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 <!-- premises: webauthn.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
-| P-AKEY | 認証器 credential 鍵は秘匿 | secure enclave。rust-op は**公開鍵のみ保持** |
+| P-AKEY | 認証器 credential 鍵は秘匿 | secure enclave。rust-idp は**公開鍵のみ保持** |
 | P-ORIGIN | RP は origin/rpId == 自分 を検査 | `webauthn::verify_authentication`（origin + rpIdHash） |
 | P-CHAL | challenge 新鮮 + 単回 | `create/consume_webauthn_challenge`（単回。updateTime の CAS 削除 `Firestore::take_doc` で、並行した 2 つの要求の片方だけが通る） |
 | P-SIG | 登録公開鍵で署名検証 | `webauthn::verify_authentication` |
@@ -241,9 +241,9 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 → **aud 束縛が必要**（外すと RP1 宛 token を RP2 が受理）／**nonce 新鮮が必要**（外すと古い token 再送）。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 <!-- premises: id_token.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-OPKEY | OP 署名鍵は秘匿 | ES256 / Cloud KMS（鍵をプロセスに展開しない） |
 | P-AUD | RP は aud == 自分の client_id を検査 | OP 側: token に aud=client_id。RP 側(fido2demo/oidc): aud 検証 |
@@ -262,7 +262,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 ## モデル #6: 合成（#1 認可コード+PKCE+クライアント認証 × #2 DPoP × #4 ユーザ同意）
 
-`composition_code_dpop.spthy` — rust-op の FAPI2 ログイン（confidential client = DCR/FAPI）。
+`composition_code_dpop.spthy` — rust-idp の FAPI2 ログイン（confidential client = DCR/FAPI）。
 **エンドツーエンドのリソース秘匿**: 正規ユーザの保護リソースは、DPoP 鍵もユーザ鍵も漏れない限り攻撃者に漏れない。
 
 ### ★ 合成は一筋縄ではいかなかった（formal verification が隠れた前提を炙り出した）
@@ -300,7 +300,7 @@ formal/check-kani.sh # 手元で Kani の全ハーネスを一覧と照合
 
 ## モデル #7: 合成（#3 CIBA 切り離し承認 × #3 RAR マンデート × #2 DPoP 送り主束縛）
 
-`composition_ciba_dpop_rar.spthy`。rust-op の CIBA ログイン（confidential client、トークンは DPoP 束縛、
+`composition_ciba_dpop_rar.spthy`。rust-idp の CIBA ログイン（confidential client、トークンは DPoP 束縛、
 authorization_details = mandate）の end-to-end。#6（認可コード系の合成）と対になる **CIBA 系の合成**。
 
 ### 検証する性質（lemma）
@@ -317,8 +317,8 @@ authorization_details = mandate）の end-to-end。#6（認可コード系の合
   - `composition_ciba_NEG_no_binding.spthy`: AS の「承認 mandate = 保存 mandate」検査を外す → `binding_integrity`
     **falsified**（通知すり替えで承認 m′ ≠ 発行 m）＝**CIBA/RAR の mandate 束縛が必要**。
 
-### 表に出た前提 → rust-op の担保
-| 前提（抽象） | rust-op の担保（具体） |
+### 表に出た前提 → rust-idp の担保
+| 前提（抽象） | rust-idp の担保（具体） |
 |---|---|
 | ユーザは**見た mandate に commit**して承認（passkey 署名） | CIBA 承認時の passkey 署名（`ciba.rs` / `webauthn.rs`） |
 | AS は **承認 mandate = backchannel 要求の mandate** を検査 | CIBA token endpoint の mandate 束縛（`ciba.rs`、authorization_details 照合） |
@@ -337,7 +337,7 @@ mandate 束縛（すり替え無効化）が**重なって初めて** end-to-end
 
 ## モデル #8: 合成（public client 認可コード × redirect_uri 完全一致 × PKCE × #2 DPoP × ユーザ同意）
 
-`composition_public_pkce_dpop.spthy` — rust-op の **public client**（`token_endpoint_auth_method="none"`、
+`composition_public_pkce_dpop.spthy` — rust-idp の **public client**（`token_endpoint_auth_method="none"`、
 demo-rp / mobile-rp 型）の end-to-end。#6（confidential = private_key_jwt の合成）と対になる **public 版**。
 クライアント認証が無い分、**何がその穴を埋めているか**を炙り出すのが主眼。
 
@@ -377,8 +377,8 @@ PKCE は素通り）。これを止める唯一の防御が **redirect_uri 完�
 これで「L1 の前提＝L3 の証明義務」が redirect_uri について両側から閉じる（#6 で「redirect_uri 束縛が public で
 load-bearing」と気づいた所を、#8 が記号モデルで明示し、Kani が実コードで固めた）。
 
-### 表に出た前提 → rust-op の担保
-| 前提（抽象） | rust-op の担保（具体） |
+### 表に出た前提 → rust-idp の担保
+| 前提（抽象） | rust-idp の担保（具体） |
 |---|---|
 | code は**登録エンドポイントにだけ**配送（redirect_uri 完全一致） | `auth_checks::redirect_uri_registered`（バイト完全一致、Kani `redirect_uri_match_is_exact` でロック） |
 | トークンは **cnf.jkt で送り主束縛**（盗まれても無効） | DPoP（`dpop.rs`、grants の `dpop_jkt` 一致） |
@@ -419,9 +419,9 @@ AS の登録は 2 段に分けてある。先に「E がまだ登録済みでな
 （同じ要求の再送や、漏れたリンクを持つ攻撃者の要求）も、確認を通ってしまう。NEG の攻撃の跡はこの競合になっている。
 → 単回の役割は「1 token 1 登録」に限られる。鍵の持ち主の束縛（`invite_binding`）は、単回が無くても崩れない。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 <!-- premises: invite.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-ICLIENT | 招待を頼めるのは、招待を許した confidential client だけ（クライアント認証） | `authorize_invite_client`（`web/register.rs`、許可リストと public client の拒否） |
 | P-ITOKEN | token は推測不能（Fr） | `random_token`（OsRng の 32 バイト） |
@@ -477,9 +477,9 @@ DPoP 束縛・クライアント認証・期限は外してある（DPoP 束縛�
 そのものになる。その表し方が正しいことは、`refresh_NEG_no_family_revoke` の反例の跡（Issue → 先に持った側の Rotate → 古い RT の
 Present → 新しい RT での Rotate の続き）が示している。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 <!-- premises: refresh.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-RSINGLE | RT の使用済み化は**原子的に単回**（`Fresh` が linear） | `mark_refresh_used`（`store.rs` の Mutex、`firestore_store.rs` の updateTime CAS） |
 | P-RFAMILY | 使用済みの RT が出されたら、系列を**丸ごと失効**させ、以後その系列のどの RT も受け付けない | 系列の失効の札（#75）: `RefreshTokenGrant::handle` の `pre.used` 分岐で `revoke_refresh_family` が `refreshFamilyRevocations/{familyId}` に札を書き、ローテーションは読んだ時と書き込みの後に `refresh_family_revoked` で札を見て断る（札を引けなければ断る）。鎖を辿って消すのは後片付けで、消し漏れがあっても札が使わせない。モデルの `Family(F, 'revoked')` が札に当たる。familyId を持たない古い RT はローテーションさせない。札が入る前の版は鎖を辿って消すだけで、上限 64・周の打ち切り・読みの誤り・書き込みの間の失効で使える RT が残った |
@@ -572,11 +572,11 @@ PKCE が個別に効く場面がはっきりする。
 → **Bearer は盗まれれば使える**。これは仕様どおりで、防ぐのは DPoP（#6）の役目。この形では、access token の寿命（900 秒）と、
 RP の側の保管が守りになる。
 
-### 表に出た前提 → rust-op の担保
+### 表に出た前提 → rust-idp の担保
 
 client_secret_basic の変種:
 <!-- premises: composition_code_bearer_secret.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-VERIFIER | PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない） | `CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる） |
 | P-TLS | token endpoint と RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵） | TLS（Cloud Run のドメインのマッピング）。HSTS |
@@ -589,7 +589,7 @@ client_secret_basic の変種:
 
 private_key_jwt の変種:
 <!-- premises: composition_code_bearer_pkjwt.spthy -->
-| ID | 前提（抽象） | rust-op の担保 |
+| ID | 前提（抽象） | rust-idp の担保 |
 |---|---|---|
 | P-VERIFIER | PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない） | `CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる） |
 | P-TLS | token endpoint と RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵） | TLS（Cloud Run のドメインのマッピング）。HSTS |
@@ -620,7 +620,7 @@ private_key_jwt の変種:
 
 ## ロードマップ達成状況
 **#1 ✅ #2 ✅ #3 ✅ #4 ✅ #5 ✅ #6 ✅ #7 ✅ #8 ✅** — 全モデルが Tamarin 1.12.0 で verified、各前提の必要性も
-NEG 変種の falsify で実証。各モデルが「防げる攻撃 ＋ 必要前提（→ rust-op の運用要件）」を1セット産んだ。
+NEG 変種の falsify で実証。各モデルが「防げる攻撃 ＋ 必要前提（→ rust-idp の運用要件）」を1セット産んだ。
 合成 #6（confidential 認可コード系）・#7（CIBA 系）・#8（public 認可コード系）は、複数防御が**重なって初めて**
 end-to-end の安全性が出ることを示す。#6 と #8 は形式検証が隠れた前提（consent 束縛・redirect_uri 完全一致）を
 炙り出した実例でもある（#8 は redirect 束縛の load-bearing 性を記号モデルで明示し、L3 Kani の redirect ロックと層対応が閉じた）。

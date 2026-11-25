@@ -1,5 +1,5 @@
 //! Kani 証明ハーネス。`#[cfg(kani)]` で通常ビルド・テストからは完全に除外され、
-//! `cargo kani` でのみ検証される。Tamarin（プロトコル層 L1）の前提が rust-op の実コードで
+//! `cargo kani` でのみ検証される。Tamarin（プロトコル層 L1）の前提が rust-idp の実コードで
 //! どの述語によって担保されているかを、コード層 L3 で機械検証する橋。
 //!
 //! 橋の対象は `client_auth::exp_in_window`。Tamarin #1（認可コード+PKCE+クライアント認証）の

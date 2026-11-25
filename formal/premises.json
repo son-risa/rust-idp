@@ -28,8 +28,8 @@
     "id": "P-CKEY",
     "model": "oauth_code_pkce.spthy",
     "premise": "クライアント秘密鍵は**秘匿**（漏れると token_secrecy が破れる）",
-    "assurance": "private_key_jwt（`client_auth.rs`）。rust-op は**公開鍵のみ保持**",
-    "outside": "鍵はクライアントが持つ。rust-op は公開鍵だけを持つ"
+    "assurance": "private_key_jwt（`client_auth.rs`）。rust-idp は**公開鍵のみ保持**",
+    "outside": "鍵はクライアントが持つ。rust-idp は公開鍵だけを持つ"
   },
   {
     "id": "P-REG",
@@ -50,8 +50,8 @@
     "id": "P-DKEY",
     "model": "dpop_binding.spthy",
     "premise": "DPoP 秘密鍵は秘匿（漏れると束縛が無効）",
-    "assurance": "クライアント側保持。rust-op は proof を検証するだけで**鍵を持たない**",
-    "outside": "鍵はクライアントが持つ。rust-op は proof を検証するだけで鍵を持たない"
+    "assurance": "クライアント側保持。rust-idp は proof を検証するだけで**鍵を持たない**",
+    "outside": "鍵はクライアントが持つ。rust-idp は proof を検証するだけで鍵を持たない"
   },
   {
     "id": "P-CNF",
@@ -120,8 +120,8 @@
     "id": "P-AKEY",
     "model": "webauthn.spthy",
     "premise": "認証器 credential 鍵は秘匿",
-    "assurance": "secure enclave。rust-op は**公開鍵のみ保持**",
-    "outside": "鍵は認証器（secure enclave）が持つ。rust-op は公開鍵だけを持つ"
+    "assurance": "secure enclave。rust-idp は**公開鍵のみ保持**",
+    "outside": "鍵は認証器（secure enclave）が持つ。rust-idp は公開鍵だけを持つ"
   },
   {
     "id": "P-ORIGIN",

@@ -3,7 +3,7 @@ begin
 
 /*
   backlog #2: 合成（#3 CIBA 切り離し承認 × #3 RAR マンデート × #2 DPoP 送り主束縛）
-  rust-op の CIBA ログイン（confidential client = private_key_jwt、トークンは DPoP 束縛、
+  rust-idp の CIBA ログイン（confidential client = private_key_jwt、トークンは DPoP 束縛、
   authorization_details = mandate）。「切り離し承認 + 送り主束縛 + マンデート束縛」の end-to-end。
 
   検証する性質（エンドツーエンドのリソース秘匿）:
