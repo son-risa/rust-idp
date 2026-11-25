@@ -356,20 +356,60 @@ setInterval(()=>{if(!window.__busy)location.reload();},4000);
     .into_response()
 }
 
+/// reject と passkey-options を呼べるのは、その要求の宛先の利用者だけ。auth_req_id は path に載ってログに残るので、
+/// 知っているだけでは足りないようにする。名乗り方は approve の呼び手に合わせて 2 つ。
+/// - ブラウザ（`/ciba` の画面）: cookie（sid）。`__Host-sid` は兄弟のサブドメインからの POST にも付くので、
+///   管理画面の門と同じく自分の origin から来た要求に限る。
+/// - アプリ（承認インボックス）: `/ciba/pending` と同じ access token。
+///
+/// 無い要求と他人の要求は、どちらも 404 にして見分けさせない。期限切れは呼び手が扱う。
+async fn own_request(
+    p: &Provider,
+    headers: &HeaderMap,
+    jar: &CookieJar,
+    auth_req_id: &str,
+    action: &str,
+) -> Result<crate::ciba::BackchannelAuthRequest, Response> {
+    let account = if headers.contains_key(header::AUTHORIZATION) {
+        authenticate_token(p, headers, "POST", &format!("/ciba/{auth_req_id}/{action}"), None).await?.account_id
+    } else {
+        match session_account(p, jar).await {
+            Some(a) if from_own_origin(headers, &p.origin()) => a,
+            Some(_) => {
+                tracing::warn!(event = "ciba_cross_origin_rejected", action);
+                return Err((StatusCode::FORBIDDEN, "forbidden").into_response());
+            }
+            None => return Err((StatusCode::UNAUTHORIZED, "sign-in required").into_response()),
+        }
+    };
+    match p.ciba.get(auth_req_id).await {
+        Ok(Some(r)) if r.account == account => Ok(r),
+        Ok(_) => Err((StatusCode::NOT_FOUND, "request not found").into_response()),
+        Err(e) => {
+            tracing::error!("ciba get: {e}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response())
+        }
+    }
+}
+
 pub(super) async fn ciba_approve_options(
     State(p): State<Arc<Provider>>,
     Path(auth_req_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
 ) -> Response {
     let fs = match &p.firestore {
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    // 承認主体は CIBA 要求の account（account_id/UUID）から決まる。アプリへの
-    // ログインは不要で、パスキー assertion（UV 必須）が本人性を証明する。
+    // 承認主体は CIBA 要求の account（account_id/UUID）から決まる。approve 自体はログイン不要で、
+    // パスキー assertion（UV 必須）が本人性を証明する。ここは credential ID の一覧を返し challenge を保存するので、
+    // 宛先の利用者が名乗った要求だけを受ける（own_request）。
     // passkey の資格情報は accounts/{email} 側にあるため、account_id → email を逆引きしてから引く。
-    let req = match p.ciba.get(&auth_req_id).await {
-        Ok(Some(r)) if !r.expired() => r,
-        _ => return (StatusCode::NOT_FOUND, "request not found").into_response(),
+    let req = match own_request(&p, &headers, &jar, &auth_req_id, "passkey-options").await {
+        Ok(r) if !r.expired() => r,
+        Ok(_) => return (StatusCode::NOT_FOUND, "request not found").into_response(),
+        Err(r) => return r,
     };
     let email = match crate::registration::find_email_by_account_id(fs, &req.account).await {
         Ok(Some(e)) => e,
@@ -497,26 +537,29 @@ pub(super) async fn ciba_approve(
 pub(super) async fn ciba_reject(
     State(p): State<Arc<Provider>>,
     Path(auth_req_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
 ) -> Response {
-    // 拒否はログイン不要。auth_req_id を知る当事者（ユーザー端末/開始側）の fail-safe 操作。
-    // 先勝ち: Pending のときだけ Denied へ。既に処理済みなら何もしない（冪等に 204）。
-    // 履歴記録のため要求を読んでおく。
-    let req = p.ciba.get(&auth_req_id).await.ok().flatten();
+    // 拒否は宛先の利用者だけができる（own_request）。auth_req_id を知る第三者が拒否すると、RP に
+    // access_denied が届き、履歴にも denied と残る。passkey は要らない（拒否は安全な側に倒れる操作）。
+    // 先勝ち: Pending のときだけ Denied へ。履歴記録のため要求を読んでおく。
+    let req = match own_request(&p, &headers, &jar, &auth_req_id, "reject").await {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
     // 期限切れは「拒否」で確定させない（denied と誤記録しない）。スイープが expired として
     // 履歴に確定する。クライアントが UI を区別できるよう 409（偽の成功 204 を返さない）。
-    if req.as_ref().map(|r| r.expired()).unwrap_or(false) {
+    if req.expired() {
         return (StatusCode::CONFLICT, "expired").into_response();
     }
     match p.ciba.transition_if_pending(&auth_req_id, crate::ciba::CibaStatus::Denied).await {
         // 拒否成立。
         Ok(true) => {
-            if let Some(r) = &req {
-                let entry = crate::ciba::CibaHistoryEntry::from_request(r, "denied", now_secs());
-                let _ = p.ciba.record_history(&entry).await;
-            }
+            let entry = crate::ciba::CibaHistoryEntry::from_request(&req, "denied", now_secs());
+            let _ = p.ciba.record_history(&entry).await;
             StatusCode::NO_CONTENT.into_response()
         }
-        // 既に承認/拒否済み（または存在しない）。偽成功にせず 409 で区別させる。
+        // 既に承認/拒否済み。偽成功にせず 409 で区別させる。
         Ok(false) => (StatusCode::CONFLICT, "already handled").into_response(),
         Err(e) => {
             tracing::error!("transition: {e}");
@@ -611,5 +654,103 @@ mod tests {
 
         assert_eq!(approve_with_challenge_for(&p, &id, other.as_str(), &owner).await, StatusCode::BAD_REQUEST);
         assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Pending);
+    }
+
+    /// ブラウザの名乗り: sid の cookie と、自分の origin の Origin。
+    async fn browser_of(p: &Provider, account: &str, origin: Option<&str>) -> (HeaderMap, CookieJar) {
+        let sid = format!("sid-{account}");
+        p.store.save_session(Session { sid: sid.clone(), account_id: account.into(), auth_time: 0 }).await;
+        let mut c = HeaderMap::new();
+        c.insert(header::COOKIE, format!("{SID_COOKIE}={sid}").parse().unwrap());
+        let mut h = HeaderMap::new();
+        if let Some(o) = origin {
+            h.insert(header::ORIGIN, o.parse().unwrap());
+        }
+        (h, CookieJar::from_headers(&c))
+    }
+
+    /// アプリの名乗り: access token（Bearer）。
+    async fn app_of(p: &Provider, account: &str) -> (HeaderMap, CookieJar) {
+        let token = format!("at-{account}");
+        p.store
+            .save_access_token(crate::model::AccessToken {
+                token: token.clone(),
+                client_id: "app".into(),
+                account_id: account.into(),
+                scope: "openid".into(),
+                jkt: None,
+                aud: None,
+                acr: None,
+                auth_time: None,
+                authorization_details: None,
+                mandate_consumed: false,
+            })
+            .await
+            .unwrap();
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        (h, CookieJar::default())
+    }
+
+    async fn reject_as(p: &Arc<Provider>, id: &str, who: (HeaderMap, CookieJar)) -> StatusCode {
+        ciba_reject(State(p.clone()), Path(id.to_string()), who.0, who.1).await.status()
+    }
+
+    async fn options_as(p: &Arc<Provider>, id: &str, who: (HeaderMap, CookieJar)) -> Response {
+        ciba_approve_options(State(p.clone()), Path(id.to_string()), who.0, who.1).await
+    }
+
+    /// auth_req_id を知っているだけでは拒否できない。宛先の利用者が、ブラウザ（自分の origin）かアプリで名乗ったときだけ。
+    #[tokio::test]
+    async fn only_the_addressed_user_can_reject() {
+        let owner = SigningKey::generate();
+        let (p, ciba, id) = seeded(&owner).await;
+        let pending = || async { ciba.get(&id).await.unwrap().unwrap().status == CibaStatus::Pending };
+
+        assert_eq!(reject_as(&p, &id, (HeaderMap::new(), CookieJar::default())).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(reject_as(&p, &id, browser_of(&p, "acct-2", Some("https://idp.example")).await).await, StatusCode::NOT_FOUND);
+        assert_eq!(reject_as(&p, &id, app_of(&p, "acct-2").await).await, StatusCode::NOT_FOUND);
+        for origin in [Some("https://evil.idp.example"), Some("null"), None] {
+            assert_eq!(reject_as(&p, &id, browser_of(&p, ACCOUNT, origin).await).await, StatusCode::FORBIDDEN, "{origin:?}");
+        }
+        let mut bad = app_of(&p, ACCOUNT).await;
+        bad.0.insert(header::AUTHORIZATION, "Bearer nope".parse().unwrap());
+        assert_eq!(reject_as(&p, &id, bad).await, StatusCode::UNAUTHORIZED);
+        assert!(pending().await);
+        assert_eq!(reject_as(&p, "no-such-id", app_of(&p, ACCOUNT).await).await, StatusCode::NOT_FOUND);
+
+        assert_eq!(reject_as(&p, &id, app_of(&p, ACCOUNT).await).await, StatusCode::NO_CONTENT);
+        assert_eq!(ciba.get(&id).await.unwrap().unwrap().status, CibaStatus::Denied);
+        assert_eq!(reject_as(&p, &id, app_of(&p, ACCOUNT).await).await, StatusCode::CONFLICT);
+
+        let other = ciba.create("rp", ACCOUNT, "openid", "pay 1", None).await.unwrap();
+        assert_eq!(
+            reject_as(&p, other.as_str(), browser_of(&p, ACCOUNT, Some("https://idp.example")).await).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(ciba.get(other.as_str()).await.unwrap().unwrap().status, CibaStatus::Denied);
+    }
+
+    /// credential ID の一覧と challenge は、宛先の利用者にだけ渡す。approve は今までどおり passkey だけで通る。
+    #[tokio::test]
+    async fn passkey_options_are_given_only_to_the_addressed_user() {
+        let owner = SigningKey::generate();
+        let (p, _ciba, id) = seeded(&owner).await;
+
+        assert_eq!(options_as(&p, &id, (HeaderMap::new(), CookieJar::default())).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(options_as(&p, &id, app_of(&p, "acct-2").await).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            options_as(&p, &id, browser_of(&p, ACCOUNT, Some("https://evil.idp.example")).await).await.status(),
+            StatusCode::FORBIDDEN
+        );
+
+        for who in [app_of(&p, ACCOUNT).await, browser_of(&p, ACCOUNT, Some("https://idp.example")).await] {
+            let r = options_as(&p, &id, who).await;
+            assert_eq!(r.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+            let o: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(o["allowCredentials"][0]["id"], CRED);
+        }
+        assert_eq!(approve_with(&p, &id, &owner).await, StatusCode::OK);
     }
 }

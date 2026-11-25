@@ -53,9 +53,9 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | GET | `/ciba/pending` | アプリ | access token | はい | いいえ |
 | base | GET | `/ciba/history` | アプリ | access token | はい | いいえ |
 | base | POST | `/ciba/fcm-tokens` | アプリ | access token | はい | いいえ |
-| base | POST | `/ciba/{auth_req_id}/passkey-options` | ブラウザ、アプリ | 無し（auth_req_id を知っていること） | はい | いいえ |
+| base | POST | `/ciba/{auth_req_id}/passkey-options` | ブラウザ、アプリ | cookie（sid、自分の origin から）か access token。要求の宛先の利用者に限る | はい | いいえ |
 | base | POST | `/ciba/{auth_req_id}/approve` | ブラウザ、アプリ | passkey | はい | いいえ |
-| base | POST | `/ciba/{auth_req_id}/reject` | ブラウザ、アプリ | 無し（auth_req_id を知っていること） | はい | いいえ |
+| base | POST | `/ciba/{auth_req_id}/reject` | ブラウザ、アプリ | cookie（sid、自分の origin から）か access token。要求の宛先の利用者に限る | はい | いいえ |
 | base | GET | `/signup` | ブラウザ | 無し | いいえ | いいえ |
 | base | POST | `/signup` | ブラウザ | 無し | はい | いいえ |
 | base | GET | `/signup/verify` | ブラウザ | メールの token | いいえ | いいえ |
@@ -115,9 +115,12 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 - `top` の `/` と `{BASE_PATH}/` は、BASE_PATH が空でないときだけ在り、どちらも BASE_PATH へ送り返すだけ。
   BASE_PATH が空のときは、`base` の `/`（RP のデモ）が host の直下に来る。
 - `/admin/iats/flash/{flash_id}` は GET だが、一度見せたら消す。門は GET を通すので、この経路は門で守られていない。
-  守りは管理者の確かめと、`flash_id` を知っていること。
+  守りは管理者の確かめと、`flash_id` を知っていること。生の IAT を載せるので、応答には `Cache-Control: no-store` を付ける。
 - `/end-session` は GET で、確かめの画面を挟まずにセッションを消す。
-- `/ciba/{auth_req_id}/reject` はログインも passkey も要らない。`auth_req_id` を知る者なら誰でも拒否できる（失敗しても安全な側に倒れる操作として、そう作っている）。
+- `/ciba/{auth_req_id}/passkey-options` と `/reject` は、`auth_req_id` を知っているだけでは呼べない（`auth_req_id` は path に載り、ログに残る）。
+  `Authorization` があれば access token（`/ciba/pending` と同じ）、無ければ cookie（sid）で名乗り、要求の宛先の利用者でなければ 404。
+  cookie で名乗るときは、管理画面の門と同じ `from_own_origin` で自分の origin からの要求に限る（違えば 403）。
+  `/approve` は今までどおりログインを要らず、passkey の assertion が本人の確かめになる。
 - `fido` の経路は CORS の層が OPTIONS（preflight）に答える。表の method には書かない。
 - どれにも当たらない要求は、`log_unmatched` が 404 を返す。
 - 要求の Host が `LEGACY_HOSTS`（カンマ区切りのホスト名。大文字小文字と port は見ない）のどれかなら、経路を見る前に

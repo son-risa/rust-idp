@@ -27,8 +27,12 @@ fn now() -> u64 {
 pub struct AuthReqId(pub String);
 
 impl AuthReqId {
+    /// CIBA Core 第 7.3 節は 128 bit 以上の乱数を MUST とする。UUID v4 は 122 bit しかないので、
+    /// OS の乱数源から 256 bit を取り、base64url（43 文字）にする。
     pub fn generate() -> Self {
-        Self(uuid::Uuid::new_v4().simple().to_string())
+        let mut buf = [0u8; 32];
+        getrandom::fill(&mut buf).expect("OS の乱数源");
+        Self(crate::es256::b64url_encode(buf))
     }
     pub fn as_str(&self) -> &str {
         &self.0
@@ -539,6 +543,16 @@ mod tests {
             assert_eq!(CibaStatus::parse(s.as_str()), s);
         }
         assert_eq!(CibaStatus::parse("garbage"), CibaStatus::Pending);
+    }
+
+    /// 256 bit を base64url（パディング無し）にした 43 文字。path に載るので URL で使える文字だけ。
+    #[test]
+    fn auth_req_id_carries_256_random_bits() {
+        let a = AuthReqId::generate();
+        assert_eq!(a.as_str().len(), 43, "{}", a.as_str());
+        assert!(a.as_str().bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'), "{}", a.as_str());
+        assert_eq!(crate::es256::b64url_decode(a.as_str()).unwrap().len(), 32);
+        assert_ne!(a, AuthReqId::generate());
     }
 
     #[cfg(feature = "gcp")]
