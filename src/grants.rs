@@ -753,148 +753,6 @@ mod tests {
         }
     }
 
-    /// A3: 凍結の直前に出たコード・凍結の前の RT・承認済みの CIBA から、凍結の後に発行しない。
-    #[cfg(feature = "gcp")]
-    #[tokio::test]
-    async fn a_disabled_account_gets_no_tokens_from_a_code_a_refresh_token_or_ciba() {
-        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
-        let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
-        let outcome = crate::webauthn::RegOutcome {
-            credential_id: "cred-1".into(),
-            pub_x: "x".into(),
-            pub_y: "y".into(),
-            sign_count: 0,
-            aaguid: String::new(),
-        };
-        crate::registration::save_credential(&*fs, "u@example.com", "acc-1", &outcome)
-            .await
-            .unwrap();
-        use crate::ciba::CibaStore;
-        let ciba = std::sync::Arc::new(crate::ciba::MemoryCibaStore::default());
-        let req_id = ciba
-            .create("mobile-rp", "acc-1", "openid", "msg", None)
-            .await
-            .unwrap();
-        ciba.transition_if_pending(req_id.as_str(), CibaStatus::Approved)
-            .await
-            .unwrap();
-        let p = provider().with_firestore(fs.clone()).with_ciba(ciba);
-        let c = client("mobile-rp");
-
-        let mut code = base_code("C1", "mobile-rp");
-        code.account_id = "acc-1".into();
-        p.store.save_code(code).await.unwrap();
-        let rt = RefreshToken {
-            account_id: "acc-1".into(),
-            auth_time: Some(now()),
-            ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A")
-        };
-        p.store.save_refresh_token(rt).await.unwrap();
-        let refresh = form(&[("refresh_token", "RT1")]);
-        // 凍結の前は使える（RT は回さずに確かめるため、別の RT で見る）。
-        let rt2 = RefreshToken {
-            account_id: "acc-1".into(),
-            auth_time: Some(now()),
-            ..rt_bound("RT2", "mobile-rp", "openid offline_access", "KEY-A")
-        };
-        p.store.save_refresh_token(rt2).await.unwrap();
-        assert!(
-            RefreshTokenGrant
-                .handle(
-                    &p,
-                    &c,
-                    &form(&[("refresh_token", "RT2")]),
-                    Some("KEY-A".into())
-                )
-                .await
-                .is_ok()
-        );
-
-        crate::registration::set_disabled(&*fs, "u@example.com", true)
-            .await
-            .unwrap();
-        assert_no_tokens(&p, &c, &refresh, req_id.as_str()).await;
-
-        // 消した後も（逆引きが消えても）出さない。
-        crate::account_admin::delete_account(
-            &*fs,
-            &crate::firestore_store::FirestoreStore::new(fs.clone()),
-            "cli",
-            "u@example.com",
-        )
-        .await
-        .unwrap();
-        let mut code = base_code("C1", "mobile-rp");
-        code.account_id = "acc-1".into();
-        let p2 = provider().with_firestore(fs.clone());
-        p2.store.save_code(code).await.unwrap();
-        let rt = RefreshToken {
-            account_id: "acc-1".into(),
-            auth_time: Some(now()),
-            ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A")
-        };
-        p2.store.save_refresh_token(rt).await.unwrap();
-        let code_r = AuthorizationCodeGrant
-            .handle(
-                &p2,
-                &c,
-                &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]),
-                None,
-            )
-            .await;
-        assert!(
-            matches!(code_r, Err(OAuthError::InvalidGrant(_))),
-            "deleted code: {:?}",
-            code_r.map(|r| r.access_token)
-        );
-        let rt_r = RefreshTokenGrant
-            .handle(&p2, &c, &refresh, Some("KEY-A".into()))
-            .await;
-        assert!(
-            matches!(rt_r, Err(OAuthError::InvalidGrant(_))),
-            "deleted refresh: {:?}",
-            rt_r.map(|r| r.access_token)
-        );
-    }
-
-    #[cfg(feature = "gcp")]
-    async fn assert_no_tokens(
-        p: &Provider,
-        c: &Client,
-        refresh: &HashMap<String, String>,
-        req_id: &str,
-    ) {
-        let code_r = AuthorizationCodeGrant
-            .handle(
-                p,
-                c,
-                &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]),
-                None,
-            )
-            .await;
-        assert!(
-            matches!(code_r, Err(OAuthError::InvalidGrant(_))),
-            "code: {:?}",
-            code_r.map(|r| r.access_token)
-        );
-        let rt_r = RefreshTokenGrant
-            .handle(p, c, refresh, Some("KEY-A".into()))
-            .await;
-        assert!(
-            matches!(rt_r, Err(OAuthError::InvalidGrant(_))),
-            "refresh: {:?}",
-            rt_r.map(|r| r.access_token)
-        );
-        let ciba_r = CibaGrant
-            .handle(p, c, &form(&[("auth_req_id", req_id)]), None)
-            .await;
-        assert!(
-            matches!(ciba_r, Err(OAuthError::InvalidGrant(_))),
-            "ciba: {:?}",
-            ciba_r.map(|r| r.access_token)
-        );
-    }
-
     /// client_secret_basic の confidential client（client 認証が防壁。DPoP 束縛は任意）。
     fn confidential_client(id: &str) -> Client {
         Client {
@@ -1153,22 +1011,6 @@ mod tests {
         assert!(matches!(r, Err(OAuthError::InvalidDpopProof(_))));
     }
 
-    #[tokio::test]
-    async fn auth_code_reuse_is_rejected() {
-        let p = provider();
-        let c = client("rp");
-        p.store.save_code(base_code("C1", "rp")).await.unwrap();
-        let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        assert!(
-            AuthorizationCodeGrant
-                .handle(&p, &c, &f, None)
-                .await
-                .is_ok()
-        );
-        let again = AuthorizationCodeGrant.handle(&p, &c, &f, None).await;
-        assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
-    }
-
     /// A4: コードの再利用を見つけたら、そのコードから出た RT が回された後でも、後継の RT ごと使えなくする。
     async fn code_reuse_after_rotation_revokes_the_rotated_refresh_token(p: Provider) {
         let c = client("rp");
@@ -1294,63 +1136,6 @@ mod tests {
         let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
         code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider().with_store(store))
             .await;
-    }
-
-    #[tokio::test]
-    async fn auth_code_issued_to_another_client_rejected() {
-        let p = provider();
-        p.store.save_code(base_code("C1", "rp")).await.unwrap();
-        let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant
-            .handle(&p, &client("evil"), &f, None)
-            .await;
-        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-    }
-
-    #[tokio::test]
-    async fn auth_code_redirect_uri_mismatch_rejected() {
-        let p = provider();
-        let c = client("rp");
-        p.store.save_code(base_code("C1", "rp")).await.unwrap();
-        let f = form(&[("code", "C1"), ("redirect_uri", "https://evil/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await;
-        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-    }
-
-    #[tokio::test]
-    async fn auth_code_pkce_success_and_failure() {
-        let verifier = "the-verifier-string-1234567890ABCdef";
-        let challenge = b64url(Sha256::digest(verifier.as_bytes()));
-        let p = provider();
-        let c = client("rp");
-
-        let mut code = base_code("C1", "rp");
-        code.code_challenge = Some(challenge.clone());
-        p.store.save_code(code).await.unwrap();
-        let bad = form(&[
-            ("code", "C1"),
-            ("redirect_uri", "https://rp/cb"),
-            ("code_verifier", "wrong"),
-        ]);
-        assert!(matches!(
-            AuthorizationCodeGrant.handle(&p, &c, &bad, None).await,
-            Err(OAuthError::InvalidGrant(_))
-        ));
-
-        let mut code2 = base_code("C1", "rp");
-        code2.code_challenge = Some(challenge);
-        p.store.save_code(code2).await.unwrap();
-        let ok = form(&[
-            ("code", "C1"),
-            ("redirect_uri", "https://rp/cb"),
-            ("code_verifier", verifier),
-        ]);
-        assert!(
-            AuthorizationCodeGrant
-                .handle(&p, &c, &ok, None)
-                .await
-                .is_ok()
-        );
     }
 
     #[tokio::test]
@@ -2175,22 +1960,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_issued_to_another_client_rejected() {
-        let p = provider();
-        p.store
-            .save_refresh_token(rt("RT1", "rp", "openid"))
-            .await
-            .unwrap();
-        let f = form(&[("refresh_token", "RT1")]);
-        assert!(matches!(
-            RefreshTokenGrant
-                .handle(&p, &client("evil"), &f, None)
-                .await,
-            Err(OAuthError::InvalidGrant(_))
-        ));
-    }
-
-    #[tokio::test]
     async fn refresh_scope_widening_rejected_narrowing_ok() {
         let p = provider();
         let c = client("rp");
@@ -2259,39 +2028,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ciba_unknown_and_other_client_rejected() {
-        let (p, id) = seed_ciba(CibaStatus::Approved).await;
-        // 未知の auth_req_id
-        let unknown = form(&[("auth_req_id", "no-such-id")]);
-        assert!(matches!(
-            CibaGrant.handle(&p, &client("rp"), &unknown, None).await,
-            Err(OAuthError::InvalidGrant(_))
-        ));
-        // 別クライアントが他人の auth_req_id を使う
-        let f = form(&[("auth_req_id", &id)]);
-        assert!(matches!(
-            CibaGrant.handle(&p, &client("evil"), &f, None).await,
-            Err(OAuthError::InvalidGrant(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn ciba_approved_issues_tokens_once_then_rejects_reuse() {
-        let (p, id) = seed_ciba(CibaStatus::Approved).await;
-        let f = form(&[("auth_req_id", &id)]);
-        // 1 回目: トークン発行。
-        let r = CibaGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
-        assert!(!r.access_token.is_empty());
-        assert!(r.id_token.is_some());
-        assert_eq!(r.scope, "openid");
-        // 2 回目（並行 poll 相当の後発）: 既に単回消費済みなので拒否。二重発行しない。
-        assert!(matches!(
-            CibaGrant.handle(&p, &client("rp"), &f, None).await,
-            Err(OAuthError::InvalidGrant(_))
-        ));
-    }
-
-    #[tokio::test]
     async fn ciba_token_carries_the_mandate_stored_with_the_request() {
         let store = std::sync::Arc::new(MemoryCibaStore::default());
         let mandate = r#"[{"type":"payment_initiation","amount":"100"}]"#;
@@ -2317,14 +2053,138 @@ mod tests {
         assert_eq!(at.authorization_details.as_deref(), Some(mandate));
     }
 
-    #[tokio::test]
-    async fn ciba_approved_with_dpop_issues_dpop_token() {
-        let (p, id) = seed_ciba(CibaStatus::Approved).await;
-        let f = form(&[("auth_req_id", &id)]);
-        let r = CibaGrant
-            .handle(&p, &client("rp"), &f, Some("JKT".into()))
-            .await
-            .unwrap();
-        assert_eq!(r.token_type, "DPoP");
+    mod authorization_code {
+        use super::*;
+        use crate::grant_handler_contract::{Issuer, REDIRECT_URI, now};
+
+        /// PKCE（S256）つきの code を保存する。form は code・redirect_uri・code_verifier。
+        struct Codes(AuthorizationCodeGrant);
+        #[async_trait]
+        impl Issuer for Codes {
+            fn grant(&self) -> &dyn GrantHandler {
+                &self.0
+            }
+            async fn issue(
+                &self,
+                p: &Provider,
+                client: &Client,
+                account: &str,
+            ) -> HashMap<String, String> {
+                let code = opaque();
+                let verifier = format!("verifier-{}", opaque());
+                p.store
+                    .save_code(AuthorizationCode {
+                        code: code.clone(),
+                        client_id: client.client_id.clone(),
+                        account_id: account.into(),
+                        redirect_uri: REDIRECT_URI.into(),
+                        scope: "openid".into(),
+                        nonce: None,
+                        code_challenge: Some(b64url(Sha256::digest(verifier.as_bytes()))),
+                        code_challenge_method: Some("S256".into()),
+                        auth_time: now(),
+                        acr: None,
+                        dpop_jkt: None,
+                        resource: None,
+                        expires_at: now() + 60,
+                    })
+                    .await
+                    .unwrap();
+                form(&[
+                    ("grant_type", "authorization_code"),
+                    ("code", &code),
+                    ("redirect_uri", REDIRECT_URI),
+                    ("code_verifier", &verifier),
+                ])
+            }
+        }
+
+        async fn issuer() -> Codes {
+            Codes(AuthorizationCodeGrant)
+        }
+        crate::grant_handler_contract::grant_handler_contract_tests!(issuer);
+    }
+
+    mod refresh_token {
+        use super::*;
+        use crate::grant_handler_contract::{Issuer, now};
+
+        /// 鍵に束縛していない refresh token を保存する（confidential client の通常の経路）。form は refresh_token。
+        struct Refreshes(RefreshTokenGrant);
+        #[async_trait]
+        impl Issuer for Refreshes {
+            fn grant(&self) -> &dyn GrantHandler {
+                &self.0
+            }
+            async fn issue(
+                &self,
+                p: &Provider,
+                client: &Client,
+                account: &str,
+            ) -> HashMap<String, String> {
+                let token = opaque();
+                p.store
+                    .save_refresh_token(RefreshToken {
+                        token: token.clone(),
+                        client_id: client.client_id.clone(),
+                        account_id: account.into(),
+                        scope: "openid offline_access".into(),
+                        resource: None,
+                        jkt: None,
+                        acr: None,
+                        auth_time: Some(now()),
+                        family_id: opaque(),
+                        used: false,
+                        replaced_by: None,
+                    })
+                    .await
+                    .unwrap();
+                form(&[("grant_type", "refresh_token"), ("refresh_token", &token)])
+            }
+        }
+
+        async fn issuer() -> Refreshes {
+            Refreshes(RefreshTokenGrant)
+        }
+        crate::grant_handler_contract::grant_handler_contract_tests!(issuer);
+    }
+
+    mod ciba {
+        use super::*;
+        use crate::grant_handler_contract::Issuer;
+
+        /// 承認済みの CIBA の要求を作る。form は auth_req_id。
+        struct Approvals(CibaGrant);
+        #[async_trait]
+        impl Issuer for Approvals {
+            fn grant(&self) -> &dyn GrantHandler {
+                &self.0
+            }
+            async fn issue(
+                &self,
+                p: &Provider,
+                client: &Client,
+                account: &str,
+            ) -> HashMap<String, String> {
+                let id = p
+                    .ciba
+                    .create(&client.client_id, account, "openid", "msg", None)
+                    .await
+                    .unwrap();
+                p.ciba
+                    .transition_if_pending(id.as_str(), CibaStatus::Approved)
+                    .await
+                    .unwrap();
+                form(&[
+                    ("grant_type", "urn:openid:params:grant-type:ciba"),
+                    ("auth_req_id", id.as_str()),
+                ])
+            }
+        }
+
+        async fn issuer() -> Approvals {
+            Approvals(CibaGrant)
+        }
+        crate::grant_handler_contract::grant_handler_contract_tests!(issuer);
     }
 }

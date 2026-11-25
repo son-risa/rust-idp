@@ -21,3 +21,33 @@ impl ResponseMode for QueryMode {
         Redirect::to(&format!("{redirect_uri}{sep}{qs}")).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::response_mode_contract::{Arrival, Arrived};
+
+    /// 3xx の Location を、RP の側の URI として読む。
+    struct FromLocation(QueryMode);
+    impl Arrival for FromLocation {
+        fn mode(&self) -> &dyn ResponseMode {
+            &self.0
+        }
+        fn read(&self, resp: Response) -> Arrived {
+            assert!(resp.status().is_redirection(), "{}", resp.status());
+            let loc = resp.headers()["location"].to_str().unwrap().to_string();
+            let (rest, fragment) = loc.split_once('#').unwrap_or((&loc, ""));
+            let (uri, query) = rest.split_once('?').unwrap_or((rest, ""));
+            Arrived {
+                uri: uri.to_string(),
+                query: serde_urlencoded::from_str(query).unwrap(),
+                elsewhere: serde_urlencoded::from_str(fragment).unwrap(),
+            }
+        }
+    }
+
+    fn query() -> FromLocation {
+        FromLocation(QueryMode)
+    }
+    crate::response_mode_contract::response_mode_contract_tests!(query);
+}

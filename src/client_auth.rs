@@ -302,54 +302,17 @@ mod tests {
         assert!(!secret_eq("hunter2", "hunter2x")); // 長さ違い
     }
 
+    /// 方式の欄が空の client は、RFC 7591 §2 の既定（client_secret_basic）として secret で通る。
+    /// 別の方式で登録した client を断ることは、契約の試験（refuses_a_client_registered_for_another_method）が見る。
     #[tokio::test]
-    async fn secret_basic_unknown_client_rejected() {
-        let p = provider();
+    async fn secret_basic_accepts_an_unset_method() {
+        let p = provider().with_client(secret_client("unset", "hunter2", ""));
         assert!(
             ClientSecretBasic
-                .authenticate(&p, &input(None, None, Some(("ghost", "x"))))
-                .await
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn secret_basic_correct_secret_authenticates() {
-        let p = provider().with_client(secret_client("rp", "hunter2", "client_secret_basic"));
-        let ok = ClientSecretBasic
-            .authenticate(&p, &input(None, None, Some(("rp", "hunter2"))))
-            .await;
-        assert!(ok.is_ok());
-    }
-
-    #[tokio::test]
-    async fn secret_basic_wrong_secret_rejected() {
-        let p = provider().with_client(secret_client("rp", "hunter2", "client_secret_basic"));
-        let err = ClientSecretBasic
-            .authenticate(&p, &input(None, None, Some(("rp", "wrong"))))
-            .await;
-        assert!(err.is_err());
-    }
-
-    /// 方式の欄が空の client は、RFC 7591 §2 の既定（client_secret_basic）として今までどおり secret で通る。
-    /// public（none）と private_key_jwt の client は secret を持っていても通らない。
-    #[tokio::test]
-    async fn secret_basic_accepts_an_unset_method_and_refuses_other_registered_methods() {
-        let p = provider()
-            .with_client(secret_client("unset", "hunter2", ""))
-            .with_client(secret_client("pub", "hunter2", "none"))
-            .with_client(secret_client("pk", "hunter2", "private_key_jwt"));
-        let auth = |id: &str| input(None, None, Some((id, "hunter2")));
-        assert!(
-            ClientSecretBasic
-                .authenticate(&p, &auth("unset"))
+                .authenticate(&p, &input(None, None, Some(("unset", "hunter2"))))
                 .await
                 .is_ok()
         );
-        for id in ["pub", "pk"] {
-            let r = ClientSecretBasic.authenticate(&p, &auth(id)).await;
-            assert!(matches!(r, Err(OAuthError::InvalidClient(_))), "{id}");
-        }
     }
 
     #[test]
@@ -360,17 +323,6 @@ mod tests {
         assert_eq!(
             c.client_secret.as_deref(),
             Some(crate::dcr::hash_token("hunter2").as_str())
-        );
-    }
-
-    #[tokio::test]
-    async fn none_auth_rejects_confidential_client() {
-        let p = provider().with_client(secret_client("rp", "s", "client_secret_basic"));
-        assert!(
-            NoneAuth
-                .authenticate(&p, &input(None, Some(("rp", "")), None))
-                .await
-                .is_err()
         );
     }
 
@@ -413,19 +365,6 @@ mod tests {
             .as_secs()
             + 300;
         serde_json::json!({ "iss": id, "sub": id, "aud": ISS, "exp": exp, "jti": jti })
-    }
-
-    #[tokio::test]
-    async fn pkjwt_accepts_valid_assertion() {
-        let key = SigningKey::generate();
-        let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
-        let a = assertion(&key, "k1", "ES256", good_claims("rp", "j1"));
-        assert!(
-            PrivateKeyJwt::default()
-                .authenticate(&p, &input(Some(&a), None, None))
-                .await
-                .is_ok()
-        );
     }
 
     #[tokio::test]
@@ -499,27 +438,120 @@ mod tests {
         );
     }
 
+    /// 署名の鍵が合わない assertion を断ることは、契約の試験（refuses_forged_material）が見る。
     #[tokio::test]
-    async fn pkjwt_rejects_iss_sub_mismatch_and_bad_signature() {
+    async fn pkjwt_rejects_iss_sub_mismatch() {
         let key = SigningKey::generate();
-        let other = SigningKey::generate();
         let p = provider().with_client(pkjwt_client("rp", &key, "k1"));
-        let auth = PrivateKeyJwt::default();
-        // iss != sub
         let mut c = good_claims("rp", "je");
         c["iss"] = serde_json::json!("other");
         let mismatch = assertion(&key, "k1", "ES256", c);
         assert!(
-            auth.authenticate(&p, &input(Some(&mismatch), None, None))
+            PrivateKeyJwt::default()
+                .authenticate(&p, &input(Some(&mismatch), None, None))
                 .await
                 .is_err()
         );
-        // 別鍵署名（署名検証で落ちる）
-        let bad_sig = assertion(&other, "k1", "ES256", good_claims("rp", "jf"));
-        assert!(
-            auth.authenticate(&p, &input(Some(&bad_sig), None, None))
-                .await
-                .is_err()
-        );
+    }
+
+    fn basic(id: &str, secret: &str) -> ClientAuthInput {
+        input(None, None, Some((id, secret)))
+    }
+
+    mod client_secret_basic {
+        use super::*;
+        use crate::client_auth_contract::Case;
+
+        async fn case() -> Case {
+            Case {
+                auth: Box::new(ClientSecretBasic),
+                client: secret_client("rp", "hunter2", "client_secret_basic"),
+                good: Box::new(|| basic("rp", "hunter2")),
+                forged: vec![
+                    basic("rp", "wrong"),
+                    basic("rp", ""),
+                    basic("rp", "hunter2x"),
+                    // 保存しているハッシュそのものを secret として出しても通らない。
+                    basic("rp", &crate::dcr::hash_token("hunter2")),
+                ],
+            }
+        }
+        crate::client_auth_contract::client_auth_contract_tests!(case);
+    }
+
+    mod none {
+        use super::*;
+        use crate::client_auth_contract::Case;
+
+        async fn case() -> Case {
+            Case {
+                auth: Box::new(NoneAuth),
+                client: Client {
+                    client_secret: None,
+                    ..secret_client("app", "unused", "none")
+                },
+                good: Box::new(|| input(None, Some(("app", "")), None)),
+                forged: vec![],
+            }
+        }
+        crate::client_auth_contract::client_auth_contract_tests!(case);
+    }
+
+    /// 署名の鍵が登録と違う assertion と、別の kid を名乗る assertion。
+    fn pkjwt_forged(key: &SigningKey) -> Vec<ClientAuthInput> {
+        let other = SigningKey::generate();
+        vec![
+            input(
+                Some(&assertion(&other, "k1", "ES256", good_claims("rp", "f1"))),
+                None,
+                None,
+            ),
+            input(
+                Some(&assertion(key, "k2", "ES256", good_claims("rp", "f2"))),
+                None,
+                None,
+            ),
+        ]
+    }
+
+    fn pkjwt_case(auth: PrivateKeyJwt) -> crate::client_auth_contract::Case {
+        let key = SigningKey::generate();
+        let client = pkjwt_client("rp", &key, "k1");
+        let forged = pkjwt_forged(&key);
+        crate::client_auth_contract::Case {
+            auth: Box::new(auth),
+            client,
+            good: Box::new(move || {
+                let jti = uuid::Uuid::new_v4().to_string();
+                input(
+                    Some(&assertion(&key, "k1", "ES256", good_claims("rp", &jti))),
+                    None,
+                    None,
+                )
+            }),
+            forged,
+        }
+    }
+
+    mod private_key_jwt {
+        use super::*;
+
+        async fn case() -> crate::client_auth_contract::Case {
+            pkjwt_case(PrivateKeyJwt::default())
+        }
+        crate::client_auth_contract::client_auth_contract_tests!(case);
+    }
+
+    #[cfg(feature = "gcp")]
+    mod private_key_jwt_firestore {
+        use super::*;
+
+        async fn case() -> crate::client_auth_contract::Case {
+            let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+            pkjwt_case(PrivateKeyJwt::with_store(std::sync::Arc::new(
+                crate::firestore::Firestore::new_for_test("proj", host),
+            )))
+        }
+        crate::client_auth_contract::client_auth_contract_tests!(case);
     }
 }
