@@ -1208,42 +1208,12 @@ mod tests {
         assert!(!scrubbed.contains("a@b.com"), "scrubbed leaked raw form: {scrubbed}");
     }
 
-    #[tokio::test]
-    async fn set_doc_if_unchanged_wins_on_match_and_loses_on_stale_update_time() {
+    async fn fake() -> Firestore {
         let (host, _state) = fake_firestore::spawn().await;
-        let fs = Firestore::new_for_test("proj", host);
-        fs.set_doc("col", "id1", json!({ "v": int(1) })).await.unwrap();
-        let (_, update_time) = fs.get_doc_with_update_time("col", "id1").await.unwrap().unwrap();
-
-        let won = fs
-            .set_doc_if_unchanged("col", "id1", json!({ "v": int(2) }), &update_time)
-            .await
-            .unwrap();
-        assert!(won, "matching updateTime should win the CAS");
-        let (fields, _) = fs.get_doc_with_update_time("col", "id1").await.unwrap().unwrap();
-        assert_eq!(field_u64(&fields, "v"), Some(2));
-
-        // update_time は既に古い(上の書き込みで進んだ)ので、同じ値で再挑戦すると負ける。
-        let lost = fs
-            .set_doc_if_unchanged("col", "id1", json!({ "v": int(3) }), &update_time)
-            .await
-            .unwrap();
-        assert!(!lost, "stale updateTime should lose the CAS");
-        let (fields, _) = fs.get_doc_with_update_time("col", "id1").await.unwrap().unwrap();
-        assert_eq!(field_u64(&fields, "v"), Some(2), "loser must not overwrite the winner's value");
+        Firestore::new_for_test("proj", host)
     }
 
-    #[tokio::test]
-    async fn create_if_absent_succeeds_once_then_loses_race() {
-        let (host, _state) = fake_firestore::spawn().await;
-        let fs = Firestore::new_for_test("proj", host);
-        let first = fs.create_if_absent("col", "id2", json!({ "v": int(1) })).await.unwrap();
-        assert!(first);
-        let second = fs.create_if_absent("col", "id2", json!({ "v": int(99) })).await.unwrap();
-        assert!(!second, "create_if_absent on an existing doc must lose");
-        let (fields, _) = fs.get_doc_with_update_time("col", "id2").await.unwrap().unwrap();
-        assert_eq!(field_u64(&fields, "v"), Some(1), "loser must not overwrite");
-    }
+    crate::document_store_contract::document_store_contract_tests!(fake);
 
     /// 本文に競合の status が無い 400（不正な要求など）は、競合に負けたのではなく誤りとして返す。
     /// 負けにすると、たとえば長すぎる jti が「リプレイ」になり、原因がログに出ない。
@@ -1259,26 +1229,6 @@ mod tests {
         assert!(fs.set_doc_if_unchanged("col", "id9", json!({}), &ut).await.is_err());
         state.fail_once_with("DELETE", "col", Some("id9"), axum::http::StatusCode::BAD_REQUEST);
         assert!(fs.delete_doc_if_unchanged("col", "id9", &ut).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn delete_doc_if_unchanged_wins_on_match_and_loses_on_stale_update_time() {
-        let (host, _state) = fake_firestore::spawn().await;
-        let fs = Firestore::new_for_test("proj", host);
-        fs.set_doc("col", "id3", json!({ "v": int(1) })).await.unwrap();
-        let (_, stale_update_time) = fs.get_doc_with_update_time("col", "id3").await.unwrap().unwrap();
-        // 間に別の書き込みが割り込み updateTime が進む状況を模す
-        // (CIBA の承認と拒否が競合するケースなど)。
-        fs.set_doc("col", "id3", json!({ "v": int(2) })).await.unwrap();
-
-        let lost = fs.delete_doc_if_unchanged("col", "id3", &stale_update_time).await.unwrap();
-        assert!(!lost, "stale updateTime must lose the delete CAS");
-        assert!(fs.get_doc("col", "id3").await.unwrap().is_some(), "doc must survive a lost CAS delete");
-
-        let (_, fresh_update_time) = fs.get_doc_with_update_time("col", "id3").await.unwrap().unwrap();
-        let won = fs.delete_doc_if_unchanged("col", "id3", &fresh_update_time).await.unwrap();
-        assert!(won, "matching updateTime must win the delete CAS");
-        assert!(fs.get_doc("col", "id3").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1309,49 +1259,6 @@ mod tests {
             assert!(fields.get("n").is_some());
             assert!(!update_time.is_empty());
         }
-    }
-
-    #[tokio::test]
-    async fn list_collection_empty_when_no_docs() {
-        let (host, _state) = fake_firestore::spawn().await;
-        let fs = Firestore::new_for_test("proj", host);
-        let rows = fs.list_collection("nothing-here").await.unwrap();
-        assert!(rows.is_empty());
-    }
-
-    #[tokio::test]
-    async fn list_recent_ordered_sorts_desc_and_respects_limit() {
-        let (host, _state) = fake_firestore::spawn().await;
-        let fs = Firestore::new_for_test("proj", host);
-        for (id, ts) in [
-            ("a", "2026-01-01T00:00:00Z"),
-            ("b", "2026-01-03T00:00:00Z"),
-            ("c", "2026-01-02T00:00:00Z"),
-        ] {
-            fs.set_doc("events", id, json!({ "at": ts_field(ts) })).await.unwrap();
-        }
-
-        let rows = fs.list_recent_ordered("events", "at", 2).await.unwrap();
-        let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
-        assert_eq!(ids, vec!["b", "c"], "新しい順に並び、limitで絞られること");
-    }
-
-    #[tokio::test]
-    async fn list_recent_ordered_breaks_ties_by_name_when_at_matches() {
-        let (host, _state) = fake_firestore::spawn().await;
-        let fs = Firestore::new_for_test("proj", host);
-        // 同一 at (秒精度) を持つ複数件があっても __name__ の副次ソートで順序が決定的になる
-        // (この回帰ロックが無いと HashMap の反復順に左右され、実行ごとに結果がぶれうる)。
-        for id in ["x1", "x2", "x3"] {
-            fs.set_doc("events", id, json!({ "at": ts_field("2026-01-01T00:00:00Z") })).await.unwrap();
-        }
-        let rows = fs.list_recent_ordered("events", "at", 2).await.unwrap();
-        let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
-        assert_eq!(ids, vec!["x3", "x2"], "同一atは__name__降順でタイブレークされること");
-    }
-
-    fn ts_field(rfc3339: &str) -> Value {
-        json!({ "timestampValue": rfc3339 })
     }
 
     /// 応答が返らない要求は、HTTP の時間の上限で誤りとして返る（呼び出しが止まり続けない）。

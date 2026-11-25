@@ -235,43 +235,10 @@ impl DocumentStore for MemoryDocumentStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::firestore::{int, s, ts};
 
-    #[tokio::test]
-    async fn conditional_writes_win_once() {
-        let m = MemoryDocumentStore::default();
-        assert!(m.create_if_absent("c", "a", json!({ "v": int(1) })).await.unwrap());
-        assert!(!m.create_if_absent("c", "a", json!({ "v": int(2) })).await.unwrap());
-        let (_, ut) = m.get_doc_with_update_time("c", "a").await.unwrap().unwrap();
-        assert!(m.set_doc_if_unchanged("c", "a", json!({ "v": int(3) }), &ut).await.unwrap());
-        assert!(!m.set_doc_if_unchanged("c", "a", json!({ "v": int(4) }), &ut).await.unwrap());
-        assert!(!m.delete_doc_if_unchanged("c", "a", &ut).await.unwrap());
-        assert_eq!(m.take_doc("c", "a").await.unwrap(), Some(json!({ "v": int(3) })));
-        assert_eq!(m.take_doc("c", "a").await.unwrap(), None);
+    async fn memory() -> MemoryDocumentStore {
+        MemoryDocumentStore::default()
     }
 
-    #[tokio::test]
-    async fn partial_writes_keep_other_fields_and_update_needs_the_doc() {
-        let m = MemoryDocumentStore::default();
-        assert!(m.update_field("c", "a", "x", s("1")).await.is_err());
-        m.merge_fields("c", "a", json!({ "x": s("1"), "y": s("2") }), &[]).await.unwrap();
-        m.update_field("c", "a", "x", s("3")).await.unwrap();
-        m.merge_fields("c", "a", json!({}), &["y".to_string()]).await.unwrap();
-        assert_eq!(m.get_doc("c", "a").await.unwrap(), Some(json!({ "x": s("3") })));
-    }
-
-    #[tokio::test]
-    async fn queries_filter_and_order() {
-        let m = MemoryDocumentStore::default();
-        for (id, at, who) in [("1", 10, "a"), ("2", 30, "b"), ("3", 20, "a"), ("4", 30, "a")] {
-            m.set_doc("log", id, json!({ "at": ts(&crate::firestore::rfc3339(at)), "who": s(who) })).await.unwrap();
-        }
-        let ids = |rows: Vec<(String, Value)>| rows.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
-        assert_eq!(ids(m.query_eq("log", "who", "a").await.unwrap()), ["1", "3", "4"]);
-        assert_eq!(ids(m.list_recent_ordered("log", "at", 3).await.unwrap()), ["4", "2", "3"]);
-        assert_eq!(m.list_collection("log").await.unwrap().len(), 4);
-        m.delete_doc("log", "1").await.unwrap();
-        m.delete_doc("log", "1").await.unwrap();
-        assert_eq!(m.list_collection("log").await.unwrap().len(), 3);
-    }
+    crate::document_store_contract::document_store_contract_tests!(memory);
 }
