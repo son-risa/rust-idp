@@ -9,7 +9,7 @@ ADDR=127.0.0.1:8099 cargo run                                     # gcp 無し�
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8180 cargo run --features gcp   # Firestore だけエミュレータへ
 ```
 
-KMS・Secret Manager・Resend は、`K_SERVICE`（Cloud Run が設定する）があるときだけ有効になる。
+KMS と Secret Manager は、`K_SERVICE`（Cloud Run が設定する）があるときだけ有効になる。Resend は、Firestore を使う起動で `RESEND_API_KEY` と `MAIL_FROM` が両方あれば手元でも使う。どちらかが無ければ、メールはログに出る（Cloud Run の上だけは、`MAIL_FROM` が無いと今の差出人に落とす）。
 
 ### FIDO2 の適合試験の道具を手元で当てる
 

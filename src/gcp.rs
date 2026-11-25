@@ -13,8 +13,9 @@ use crate::{
 /// Cloud Run 上 (K_SERVICE あり) では Firestore + KMS/Secret Manager + Resend を有効化。
 /// ローカルで FIRESTORE_EMULATOR_HOST のみ設定されている場合は、Firestore 関連の配線
 /// （Store/CibaStore/DPoP/private_key_jwt/registration 直叩き）だけをエミュレータへ向けて
-/// 有効化する。KMS・Secret Manager・Resend は実 GCP 前提なので K_SERVICE 限定のまま
-/// （ローカルは Provider::new の既定 ephemeral 鍵 + LogMailer で動かす）。
+/// 有効化する。KMS・Secret Manager は実 GCP 前提なので K_SERVICE 限定のまま
+/// （ローカルは Provider::new の既定 ephemeral 鍵で動かす）。Resend は RESEND_API_KEY と
+/// MAIL_FROM が両方あれば手元でも使い、無ければ LogMailer。
 /// どちらも無ければ何も足さずに返す。
 pub async fn configure_from_env(mut provider: Provider) -> Provider {
     let use_firestore =
