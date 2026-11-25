@@ -10,6 +10,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use sha2::Digest;
 use std::sync::Arc;
 
+const KMS_BASE: &str = "https://cloudkms.googleapis.com";
+
 #[derive(Clone, Copy)]
 enum KmsKind {
     Es256,
@@ -20,6 +22,7 @@ pub struct KmsSigner {
     kind: KmsKind,
     fs: Arc<Firestore>, // metadata server のアクセストークン取得に使う
     http: reqwest::Client,
+    base: String,
     version: String, // cryptoKeyVersion のフル resource path
     kid: String,
     jwk: serde_json::Value,
@@ -34,11 +37,20 @@ impl KmsSigner {
     }
 
     async fn new(kind: KmsKind, fs: Arc<Firestore>, key_path: &str) -> Result<Self, String> {
+        Self::at(kind, fs, key_path, KMS_BASE.into()).await
+    }
+
+    async fn at(
+        kind: KmsKind,
+        fs: Arc<Firestore>,
+        key_path: &str,
+        base: String,
+    ) -> Result<Self, String> {
         let version = format!("{}/cryptoKeyVersions/1", key_path.trim_end_matches('/'));
         let http = crate::http::client();
         // 公開鍵 PEM を取得し JWK / kid を作る（既存 jws.rs と同じ kid スキーム）。
         let tok = fs.token().await?;
-        let url = format!("https://cloudkms.googleapis.com/v1/{version}/publicKey");
+        let url = format!("{base}/v1/{version}/publicKey");
         let resp = http
             .get(&url)
             .bearer_auth(&tok)
@@ -94,6 +106,7 @@ impl KmsSigner {
             kind,
             fs,
             http,
+            base,
             version,
             kid,
             jwk,
@@ -103,10 +116,7 @@ impl KmsSigner {
     /// digest(SHA-256) を KMS で署名し、JOSE 形式の署名(b64url)を返す。
     async fn kms_sign(&self, digest: &[u8]) -> Result<String, String> {
         let tok = self.fs.token().await?;
-        let url = format!(
-            "https://cloudkms.googleapis.com/v1/{}:asymmetricSign",
-            self.version
-        );
+        let url = format!("{}/v1/{}:asymmetricSign", self.base, self.version);
         let body = serde_json::json!({ "digest": { "sha256": B64.encode(digest) } });
         let resp = self
             .http
@@ -176,5 +186,103 @@ impl JwsSigner for KmsSigner {
 
     fn public_jwk(&self) -> serde_json::Value {
         self.jwk.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::{Path, State};
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use serde_json::{Value, json};
+
+    /// Cloud KMS の publicKey と asymmetricSign だけを模す。鍵はこの fake の中に持ち、渡された digest をそのまま署名して、
+    /// 本物と同じく ES256 は DER、RS256 は生の署名を base64 で返す。
+    enum FakeKey {
+        Es256(p256::ecdsa::SigningKey),
+        Rs256(Box<rsa::PrivateKey>),
+    }
+
+    impl FakeKey {
+        fn pem(&self) -> String {
+            use p256::pkcs8::{EncodePublicKey, LineEnding};
+            match self {
+                FakeKey::Es256(k) => k.verifying_key().to_public_key_pem(LineEnding::LF).unwrap(),
+                FakeKey::Rs256(k) => k.to_public_key().to_public_key_pem(LineEnding::LF).unwrap(),
+            }
+        }
+        fn sign(&self, digest: &[u8]) -> Vec<u8> {
+            match self {
+                FakeKey::Es256(k) => {
+                    use p256::ecdsa::signature::hazmat::PrehashSigner;
+                    let sig: p256::ecdsa::Signature = k.sign_prehash(digest).unwrap();
+                    sig.to_der().as_bytes().to_vec()
+                }
+                FakeKey::Rs256(k) => k
+                    .sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), digest)
+                    .unwrap(),
+            }
+        }
+    }
+
+    async fn public_key(State(key): State<Arc<FakeKey>>, Path(rest): Path<String>) -> Json<Value> {
+        assert!(rest.ends_with("/cryptoKeyVersions/1/publicKey"), "{rest}");
+        Json(json!({ "pem": key.pem() }))
+    }
+
+    async fn asymmetric_sign(
+        State(key): State<Arc<FakeKey>>,
+        Path(rest): Path<String>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        assert!(
+            rest.ends_with("/cryptoKeyVersions/1:asymmetricSign"),
+            "{rest}"
+        );
+        let digest = B64
+            .decode(body["digest"]["sha256"].as_str().unwrap())
+            .unwrap();
+        Json(json!({ "signature": B64.encode(key.sign(&digest)) }))
+    }
+
+    async fn signer_on_fake(kind: KmsKind, key: FakeKey) -> KmsSigner {
+        let app = Router::new()
+            .route("/v1/{*rest}", get(public_key).post(asymmetric_sign))
+            .with_state(Arc::new(key));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // new_for_test の Firestore は metadata server へ行かずに token を返す。宛先は使わない。
+        let fs = Arc::new(Firestore::new_for_test("proj", "127.0.0.1:9"));
+        KmsSigner::at(
+            kind,
+            fs,
+            "projects/p/locations/global/keyRings/r/cryptoKeys/k",
+            base,
+        )
+        .await
+        .unwrap()
+    }
+
+    mod es256 {
+        use super::*;
+        use p256::elliptic_curve::Generate;
+
+        async fn signer() -> KmsSigner {
+            let key = FakeKey::Es256(p256::ecdsa::SigningKey::generate());
+            signer_on_fake(KmsKind::Es256, key).await
+        }
+        crate::jws_signer_contract::jws_signer_contract_tests!(signer);
+    }
+
+    mod rs256 {
+        use super::*;
+
+        async fn signer() -> KmsSigner {
+            let key = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048).unwrap();
+            signer_on_fake(KmsKind::Rs256, FakeKey::Rs256(Box::new(key))).await
+        }
+        crate::jws_signer_contract::jws_signer_contract_tests!(signer);
     }
 }

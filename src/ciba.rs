@@ -676,39 +676,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn find_pending_for_filters_by_client() {
-        let s = MemoryCibaStore::default();
-        let a = s
-            .create("rp-a", "u@example.com", "openid", "msg-a", None)
-            .await
-            .unwrap();
-        let _b = s
-            .create("rp-b", "u@example.com", "openid", "msg-b", None)
-            .await
-            .unwrap();
-        let found = s
-            .find_pending_for("rp-a", "u@example.com")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.auth_req_id.0, a.0);
-        assert_eq!(found.client_id, "rp-a");
-        // 該当無し
-        assert!(
-            s.find_pending_for("rp-c", "u@example.com")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            s.find_pending_for("rp-a", "other@example.com")
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
     #[test]
     fn rate_limiter_admits_then_blocks_within_window() {
         let rl = CibaRateLimiter::new(std::time::Duration::from_secs(60), 3);
@@ -750,84 +717,22 @@ mod tests {
         assert_eq!(keys, vec!["new".to_string()]);
     }
 
-    #[tokio::test]
-    async fn memory_store_transition_is_first_wins() {
-        let s = MemoryCibaStore::default();
-        let id = s.create("rp", "u", "openid", "", None).await.unwrap();
-        // 先勝ち: 最初の Pending→Approved だけ成功し、後発は負ける。
-        assert!(
-            s.transition_if_pending(id.as_str(), CibaStatus::Approved)
-                .await
-                .unwrap()
-        );
-        assert!(
-            !s.transition_if_pending(id.as_str(), CibaStatus::Denied)
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            s.get(id.as_str()).await.unwrap().unwrap().status,
-            CibaStatus::Approved
-        );
-    }
-
-    #[tokio::test]
-    async fn memory_store_consume_is_single_use() {
-        let s = MemoryCibaStore::default();
-        let id = s.create("rp", "u", "openid", "", None).await.unwrap();
-        // Approved でないと消費できない。
-        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
-        s.transition_if_pending(id.as_str(), CibaStatus::Approved)
-            .await
-            .unwrap();
-        // 単回消費: 1 回目だけ Some、2 回目は None（並行 poll の二重発行防止）。
-        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_some());
-        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
-        assert!(s.get(id.as_str()).await.unwrap().is_none());
+    mod memory {
+        async fn store() -> super::MemoryCibaStore {
+            super::MemoryCibaStore::default()
+        }
+        crate::ciba_store_contract::ciba_store_contract_tests!(store);
     }
 
     #[cfg(feature = "gcp")]
-    #[tokio::test]
-    async fn firestore_store_consume_is_single_use() {
-        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
-        let s = FirestoreCibaStore::new(Arc::new(Firestore::new_for_test("proj", host)));
-        let id = s.create("rp", "u", "openid", "", None).await.unwrap();
-        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
-        s.transition_if_pending(id.as_str(), CibaStatus::Approved)
-            .await
-            .unwrap();
-        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_some());
-        assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
-    }
+    mod firestore {
+        use super::*;
 
-    #[tokio::test]
-    async fn history_record_and_list_newest_first() {
-        let s = MemoryCibaStore::default();
-        let mk = |id: &str, ts: u64, outcome: &str| CibaHistoryEntry {
-            auth_req_id: id.into(),
-            account: "u".into(),
-            client_id: "rp".into(),
-            scope: "openid".into(),
-            binding_message: String::new(),
-            authorization_details: None,
-            outcome: outcome.into(),
-            resolved_at: ts,
-        };
-        s.record_history(&mk("a", 100, "approved")).await.unwrap();
-        s.record_history(&mk("b", 200, "denied")).await.unwrap();
-        let h = s.list_history("u", 10).await.unwrap();
-        assert_eq!(h.len(), 2);
-        assert_eq!(h[0].auth_req_id, "b", "新しい順");
-        assert_eq!(h[1].auth_req_id, "a");
-        assert!(
-            s.list_history("other", 10).await.unwrap().is_empty(),
-            "別アカウントは混ざらない"
-        );
-        assert_eq!(
-            s.sweep_expired("u").await.unwrap(),
-            0,
-            "期限切れpendingが無ければ0"
-        );
+        async fn store() -> FirestoreCibaStore {
+            let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+            FirestoreCibaStore::new(Arc::new(Firestore::new_for_test("proj", host)))
+        }
+        crate::ciba_store_contract::ciba_store_contract_tests!(store);
     }
 
     #[test]

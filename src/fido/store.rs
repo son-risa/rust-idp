@@ -225,3 +225,26 @@ impl FidoStore for FirestoreFidoStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    mod memory {
+        async fn store() -> crate::fido::store::MemFidoStore {
+            crate::fido::store::MemFidoStore::default()
+        }
+        crate::fido_store_contract::fido_store_contract_tests!(store);
+    }
+
+    #[cfg(feature = "gcp")]
+    mod firestore {
+        use crate::fido::store::FirestoreFidoStore;
+        use crate::firestore::{Firestore, fake_firestore};
+        use std::sync::Arc;
+
+        async fn store() -> FirestoreFidoStore {
+            let (host, _state) = fake_firestore::spawn().await;
+            FirestoreFidoStore::new(Arc::new(Firestore::new_for_test("proj", host)))
+        }
+        crate::fido_store_contract::fido_store_contract_tests!(store);
+    }
+}

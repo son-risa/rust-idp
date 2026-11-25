@@ -23,6 +23,8 @@ mod admin_store;
 mod audit_log;
 mod auth_checks;
 mod ciba;
+#[cfg(test)]
+mod ciba_store_contract;
 mod claims;
 mod client_auth;
 mod context;
@@ -38,6 +40,8 @@ mod error;
 mod es256;
 mod fcm;
 mod fido;
+#[cfg(test)]
+mod fido_store_contract;
 mod firestore;
 #[cfg(feature = "gcp")]
 mod firestore_store;
@@ -52,11 +56,15 @@ mod http;
 mod interaction_policy;
 mod jwks_resolver;
 mod jws;
+#[cfg(test)]
+mod jws_signer_contract;
 #[cfg(kani)]
 mod kani_harness;
 #[cfg(feature = "gcp")]
 mod kms;
 mod mailer;
+#[cfg(test)]
+mod mailer_contract;
 mod model;
 mod nonce;
 mod par;

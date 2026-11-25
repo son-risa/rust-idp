@@ -98,7 +98,7 @@
     "premise": "マンデート(auth_req_id) は**単回消費**",
     "assurance": "`mandate_consumed` CAS（/oauth/mandate/consume）+ CIBA store の単回",
     "guard": ["src/ciba.rs: MemoryCibaStore::consume_if_approved", "src/ciba.rs: FirestoreCibaStore::consume_if_approved", "src/store.rs: MemoryStore::consume_mandate_if_unused", "src/firestore_store.rs: FirestoreStore::consume_mandate_if_unused"],
-    "tests": ["ciba::tests::memory_store_consume_is_single_use", "store::tests::contract::consume_mandate_is_single_use", "firestore_store::tests::contract::consume_mandate_is_single_use", "grants::tests::ciba_approved_issues_tokens_once_then_rejects_reuse", "ciba::tests::firestore_store_consume_is_single_use"]
+    "tests": ["ciba::tests::memory::contract::consume_if_approved_is_single_use", "store::tests::contract::consume_mandate_is_single_use", "firestore_store::tests::contract::consume_mandate_is_single_use", "grants::tests::ciba_approved_issues_tokens_once_then_rejects_reuse", "ciba::tests::firestore::contract::consume_if_approved_is_single_use"]
   },
   {
     "id": "P-CAUTH",
@@ -176,7 +176,7 @@
     "premise": "RP は OP の JWKS で署名検証",
     "assurance": "discovery / JWKS 公開、RP が検証",
     "guard": ["src/jws.rs: Es256Signer::sign"],
-    "tests": ["jws::tests::sign_produces_verifiable_compact_jws", "jws::tests::tampered_payload_fails_verification", "jws::tests::kid_equals_jwk_thumbprint"]
+    "tests": ["jws::tests::es256::contract::a_signature_verifies_with_the_published_jwk","jws::tests::es256::contract::the_jwk_names_the_alg_and_its_thumbprint_as_kid"]
   },
   {
     "id": "P-ISS",
