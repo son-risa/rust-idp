@@ -253,7 +253,7 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
         .route("/oauth/mandate/consume", post(oidc::mandate_consume))
         .route("/oauth/register", post(oidc::register))
         .route("/revoke", post(oidc::revoke))
-        .route("/end-session", get(oidc::end_session))
+        .route("/end-session", get(oidc::end_session).post(oidc::end_session_post))
         .route("/par", post(oidc::par))
         .route("/userinfo", get(oidc::userinfo_get).post(oidc::userinfo_post))
         .route("/me/profile", get(oidc::profile_get).put(oidc::profile_put))

@@ -615,55 +615,167 @@ pub(super) struct EndSessionQuery {
     post_logout_redirect_uri: Option<String>,
     state: Option<String>,
     client_id: Option<String>,
+    /// 確かめの画面の form だけが付ける。POST でしか効かない。
+    confirm: Option<String>,
 }
 
-/// JWT(検証なし)の aud を取り出して client を特定する補助。
-fn jwt_aud(jwt: &str) -> Option<String> {
-    let payload = jwt.split('.').nth(1)?;
-    let bytes = crate::es256::b64url_decode(payload).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    match v.get("aud")? {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(a) => a.first().and_then(|x| x.as_str()).map(|s| s.to_string()),
-        _ => None,
+struct IdTokenHint {
+    sub: String,
+    aud: String,
+}
+
+/// 自分の鍵で署名し、自分が発行した ID Token なら、その sub と aud を返す。
+/// 期限は見ない。仕様第 2 節は、exp を過ぎた ID Token も受けることを SHOULD としている。
+fn own_id_token(p: &Provider, jwt: &str) -> Option<IdTokenHint> {
+    let mut parts = jwt.split('.');
+    let (h, b, s) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
     }
+    let dec = |x: &str| crate::es256::b64url_decode(x).ok();
+    let header: serde_json::Value = serde_json::from_slice(&dec(h)?).ok()?;
+    let alg = header.get("alg")?.as_str()?;
+    let kid = header.get("kid")?.as_str()?;
+    let jwk = p.all_signers().map(|s| s.public_jwk()).find(|k| k["alg"] == alg && k["kid"] == kid)?;
+    let part = |name: &str| jwk.get(name).and_then(|v| v.as_str()).and_then(dec);
+    let input = format!("{h}.{b}");
+    let sig = dec(s)?;
+    let signed_by_us = match alg {
+        "ES256" => {
+            use p256::ecdsa::signature::Verifier;
+            let vk = crate::es256::verifying_key_from_xy(&part("x")?, &part("y")?).ok()?;
+            let sig = p256::ecdsa::Signature::from_slice(&sig).ok()?;
+            vk.verify(input.as_bytes(), &sig).is_ok()
+        }
+        "RS256" => crate::sig::verify_rs256(&part("n")?, &part("e")?, input.as_bytes(), &sig).is_ok(),
+        _ => false,
+    };
+    if !signed_by_us {
+        return None;
+    }
+    let claims: serde_json::Value = serde_json::from_slice(&dec(b)?).ok()?;
+    if claims.get("iss")?.as_str()? != p.issuer {
+        return None;
+    }
+    // aud は 1 つの client_id の文字列で発行している（grants.rs）。
+    Some(IdTokenHint {
+        sub: claims.get("sub")?.as_str()?.to_string(),
+        aud: claims.get("aud")?.as_str()?.to_string(),
+    })
 }
 
+/// RP からの GET。確かめの画面の confirm は GET では効かない。
 pub(super) async fn end_session(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
     jar: CookieJar,
     Query(q): Query<EndSessionQuery>,
 ) -> Response {
-    // OP セッション破棄（cookie + ストア）。即ログアウト（確認画面なし）。
-    if let Some(sid) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
-        p.store.delete_session(&sid).await;
+    sign_out(&p, &headers, jar, q, false).await
+}
+
+/// RP からの POST（form）と、確かめの画面からの POST。RP からの POST は他の origin から来るので
+/// 管理画面の門は掛けず、確かめの画面の POST（confirm 付き）だけを、門と同じ考え方で自分の origin に限る。
+pub(super) async fn end_session_post(
+    State(p): State<Arc<Provider>>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Form(q): Form<EndSessionQuery>,
+) -> Response {
+    let confirmed = q.confirm.is_some();
+    if confirmed && !from_own_origin(&headers, &p.origin()) {
+        tracing::warn!(event = "end_session_cross_origin_confirm_rejected");
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    sign_out(&p, &headers, jar, q, confirmed).await
+}
+
+async fn sign_out(p: &Provider, headers: &HeaderMap, jar: CookieJar, q: EndSessionQuery, confirmed: bool) -> Response {
+    let lang = Lang::from_headers(headers);
+
+    // id_token_hint は、自分の鍵の署名・iss・aud（登録済みの client）を確かめ、client_id があれば aud と比べる。
+    let mut hint_failed = false;
+    let hint = match q.id_token_hint.as_deref() {
+        None => None,
+        Some(t) => match own_id_token(p, t) {
+            Some(h)
+                if q.client_id.as_deref().is_none_or(|c| c == h.aud) && p.resolve_client(&h.aud).await.is_some() =>
+            {
+                Some(h)
+            }
+            _ => {
+                tracing::warn!(event = "end_session_hint_rejected");
+                hint_failed = true;
+                None
+            }
+        },
+    };
+    let client_id = q.client_id.clone().or_else(|| hint.as_ref().map(|h| h.aud.clone()));
+
+    // post_logout_redirect_uri は client 登録値のみ許可（オープンリダイレクト防止）。
+    // hint が確かめに失敗した要求は、仕様第 4 節に従い RP へ戻さない（ログアウトは確かめの画面を経て行う）。
+    let return_to = match &q.post_logout_redirect_uri {
+        Some(uri) if !hint_failed => {
+            let registered = match client_id.as_deref() {
+                Some(id) => match p.resolve_client(id).await {
+                    Some(c) => c.post_logout_redirect_uris.iter().any(|u| u == uri),
+                    None => false,
+                },
+                None => false,
+            };
+            if !registered {
+                tracing::warn!("end_session: post_logout_redirect_uri not registered: {uri}");
+                let msg = localize(
+                    "[[The return address after sign-out is not registered for this app. Please contact the app provider.]]",
+                    lang,
+                );
+                return plain_error(&msg);
+            }
+            Some(uri.clone())
+        }
+        _ => None,
+    };
+
+    // 仕様第 2 節: hint が無い・確かめに失敗した・今のセッションの利用者の ID Token でない、のどれかなら、
+    // ログアウトしてよいか利用者に確かめる。他のサイトから遷移させるだけでログアウトさせられないように。
+    let sid = jar.get(SID_COOKIE).map(|c| c.value().to_string());
+    let session = match &sid {
+        Some(s) => p.store.get_session(s).await,
+        None => None,
+    };
+    let needs_confirm =
+        !confirmed && session.as_ref().is_some_and(|s| hint.as_ref().is_none_or(|h| h.sub != s.account_id));
+    if needs_confirm {
+        let carried = match (&return_to, &client_id) {
+            (Some(uri), Some(id)) => {
+                let mut f = hidden("client_id", id) + &hidden("post_logout_redirect_uri", uri);
+                if let Some(st) = &q.state {
+                    f += &hidden("state", st);
+                }
+                f
+            }
+            _ => String::new(),
+        };
+        let action = admin::esc(&p.path("/end-session"));
+        let html = format!(
+            r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
+<style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
+button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f51b5;color:#fff;cursor:pointer}}</style></head><body>
+<h1 style="font-size:1.3rem;font-weight:500">[[Do you want to sign out?]]</h1>
+<p>[[You will need to sign in again to use apps that sign in with this account.]]</p>
+<form method="post" action="{action}"><input type="hidden" name="confirm" value="1">{carried}
+<button type="submit">[[Sign out]]</button></form></body></html>"##
+        );
+        return ([(header::CACHE_CONTROL, "no-store")], Html(localize(&html, lang))).into_response();
+    }
+
+    if let Some(sid) = &sid {
+        p.store.delete_session(sid).await;
     }
     let jar = jar.remove(Cookie::build((SID_COOKIE, "")).path("/").secure(true).build());
 
-    // post_logout_redirect_uri は client 登録値のみ許可（オープンリダイレクト防止）。
-    let client_id = q
-        .client_id
-        .clone()
-        .or_else(|| q.id_token_hint.as_deref().and_then(jwt_aud));
-
-    if let Some(uri) = &q.post_logout_redirect_uri {
-        let registered = match client_id.as_deref() {
-            Some(id) => match p.resolve_client(id).await {
-                Some(c) => c.post_logout_redirect_uris.iter().any(|u| u == uri),
-                None => false,
-            },
-            None => false,
-        };
-        if !registered {
-            tracing::warn!("end_session: post_logout_redirect_uri not registered: {uri}");
-            let msg = localize(
-                "[[The return address after sign-out is not registered for this app. Please contact the app provider.]]",
-                Lang::from_headers(&headers),
-            );
-            return (jar, plain_error(&msg)).into_response();
-        }
-        let mut target = uri.clone();
+    if let Some(mut target) = return_to {
         if let Some(state) = &q.state {
             let sep = if target.contains('?') { '&' } else { '?' };
             let qs = serde_urlencoded::to_string([("state", state)]).unwrap_or_default();
@@ -682,7 +794,11 @@ a{{color:#3f51b5}}</style></head><body>
 <h1 style="font-size:1.3rem;font-weight:500">[[You have signed out]]</h1>
 <p><a href="{home}">[[Go to sign in]]</a></p></body></html>"##
     );
-    (jar, Html(localize(&html, Lang::from_headers(&headers)))).into_response()
+    (jar, Html(localize(&html, lang))).into_response()
+}
+
+fn hidden(name: &str, value: &str) -> String {
+    format!(r#"<input type="hidden" name="{name}" value="{}">"#, admin::esc(value))
 }
 /* ===== PAR (RFC 9126) ===== */
 
@@ -1094,6 +1210,7 @@ mod tests {
                 post_logout_redirect_uri: Some(uri.to_string()),
                 state: Some("s1".into()),
                 client_id: client_id.map(str::to_string),
+                confirm: None,
             };
             end_session(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(q))
         };
@@ -1116,6 +1233,231 @@ mod tests {
             let resp = end(client, uri).await;
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{client:?} {uri}");
             assert!(resp.headers().get(header::LOCATION).is_none());
+        }
+    }
+
+    /// RP-Initiated Logout 1.0 の確かめ。router を通し、セッションが残ったか消えたかまで見る。
+    mod rp_initiated_logout {
+        use super::*;
+        use crate::jws::JwsSigner;
+        use tower::ServiceExt;
+
+        const OP: &str = "https://op.example";
+        const BYE: &str = "https://rp.example.com/bye";
+
+        struct World {
+            app: Router,
+            store: Arc<dyn crate::store::Store>,
+            /// 自分の鍵で署名した正しい hint。
+            hint: String,
+            /// RS256 で発行する client 向けの、正しい hint。
+            rs_hint: String,
+            /// 自分の鍵で署名したが、iss・aud・sub のどれかが違う hint。
+            off: Vec<(&'static str, String)>,
+        }
+
+        async fn world() -> World {
+            let other = crate::model::Client { client_id: "dcr-y".into(), ..client_with_post_logout(&[]) };
+            let p = Provider::new(OP)
+                .with_client(client_with_post_logout(&[BYE]))
+                .with_client(other)
+                .add_signer(Arc::new(crate::jws::Rs256Signer::generate()));
+            let hint = id_token(&p, serde_json::json!({})).await;
+            let rs_claims = serde_json::json!({"iss": OP, "sub": "acc-1", "aud": "dcr-x", "iat": 1, "exp": 2});
+            let rs_hint = p.signer_for(Some("RS256")).unwrap().sign(&rs_claims).await;
+            let mut off = Vec::new();
+            for (name, over) in [
+                ("other iss", serde_json::json!({"iss": "https://op.example.evil"})),
+                ("unregistered aud", serde_json::json!({"aud": "nope"})),
+                ("aud list", serde_json::json!({"aud": ["dcr-x"]})),
+            ] {
+                off.push((name, id_token(&p, over).await));
+            }
+            World { store: p.store.clone(), app: super::super::router(p), hint, rs_hint, off }
+        }
+
+        /// 自分の鍵で署名した、acc-1 が dcr-x に入ったときの ID Token。exp は過ぎている。
+        async fn id_token(p: &Provider, over: serde_json::Value) -> String {
+            let mut claims = serde_json::json!({"iss": OP, "sub": "acc-1", "aud": "dcr-x", "iat": 1, "exp": 2});
+            for (k, v) in over.as_object().unwrap() {
+                claims[k] = v.clone();
+            }
+            p.signer_for(None).unwrap().sign(&claims).await
+        }
+
+        impl World {
+            async fn signed_in(&self, sid: &str) {
+                self.store.save_session(Session { sid: sid.into(), account_id: "acc-1".into(), auth_time: 0 }).await;
+            }
+            async fn still_signed_in(&self, sid: &str) -> bool {
+                self.store.get_session(sid).await.is_some()
+            }
+            async fn send(&self, method: &str, sid: &str, params: &[(&str, &str)], origin: Option<&str>) -> Response {
+                let qs = serde_urlencoded::to_string(params).unwrap();
+                let mut req = axum::http::Request::builder()
+                    .method(method)
+                    .header(header::COOKIE, format!("{SID_COOKIE}={sid}"));
+                if let Some(o) = origin {
+                    req = req.header(header::ORIGIN, o);
+                }
+                let req = if method == "GET" {
+                    req.uri(format!("/end-session?{qs}")).body(axum::body::Body::empty())
+                } else {
+                    req.uri("/end-session")
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(axum::body::Body::from(qs))
+                };
+                self.app.clone().oneshot(req.unwrap()).await.unwrap()
+            }
+        }
+
+        async fn body(r: Response) -> String {
+            String::from_utf8(axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap()
+        }
+
+        fn signed_out_to_rp(r: &Response) {
+            assert!(r.status().is_redirection(), "{}", r.status());
+            assert_eq!(r.headers()[header::LOCATION], format!("{BYE}?state=s1"));
+            let set = r.headers()[header::SET_COOKIE].to_str().unwrap();
+            assert!(set.starts_with(&format!("{SID_COOKIE}=;")), "{set}");
+        }
+
+        async fn asks_first(r: Response) -> String {
+            assert_eq!(r.status(), StatusCode::OK);
+            assert!(r.headers().get(header::SET_COOKIE).is_none(), "確かめる前に cookie を消した");
+            let html = body(r).await;
+            assert!(html.contains("Do you want to sign out?"), "{html}");
+            assert!(html.contains(r#"<form method="post" action="/end-session"><input type="hidden" name="confirm" value="1">"#), "{html}");
+            html
+        }
+
+        /// AMATE の形（GET、client_id・post_logout_redirect_uri・期限切れの id_token_hint）は、確かめずにログアウトして戻す。
+        #[tokio::test]
+        async fn a_valid_hint_signs_out_without_asking_even_after_it_expired() {
+            let w = world().await;
+            w.signed_in("s-get").await;
+            let r = w
+                .send("GET", "s-get", &[("id_token_hint", &w.hint), ("client_id", "dcr-x"), ("post_logout_redirect_uri", BYE), ("state", "s1")], None)
+                .await;
+            signed_out_to_rp(&r);
+            assert!(!w.still_signed_in("s-get").await);
+
+            // client_id が無くても、hint の aud から client を引く。
+            w.signed_in("s-aud").await;
+            let r = w.send("GET", "s-aud", &[("id_token_hint", &w.hint), ("post_logout_redirect_uri", BYE), ("state", "s1")], None).await;
+            signed_out_to_rp(&r);
+            assert!(!w.still_signed_in("s-aud").await);
+
+            w.signed_in("s-rs").await;
+            let r = w.send("GET", "s-rs", &[("id_token_hint", &w.rs_hint), ("post_logout_redirect_uri", BYE), ("state", "s1")], None).await;
+            signed_out_to_rp(&r);
+            assert!(!w.still_signed_in("s-rs").await);
+        }
+
+        /// RP は form の POST でも呼べる（仕様第 2 節）。RP の origin から来るので、Origin は問わない。
+        #[tokio::test]
+        async fn an_rp_can_post_the_logout_request_from_its_own_origin() {
+            let w = world().await;
+            w.signed_in("s-post").await;
+            let r = w
+                .send(
+                    "POST",
+                    "s-post",
+                    &[("id_token_hint", &w.hint), ("client_id", "dcr-x"), ("post_logout_redirect_uri", BYE), ("state", "s1")],
+                    Some("https://rp.example.com"),
+                )
+                .await;
+            signed_out_to_rp(&r);
+            assert!(!w.still_signed_in("s-post").await);
+
+            // hint の無い POST は、GET と同じく確かめる。
+            w.signed_in("s-post2").await;
+            asks_first(w.send("POST", "s-post2", &[("client_id", "dcr-x")], Some("https://rp.example.com")).await).await;
+            assert!(w.still_signed_in("s-post2").await);
+        }
+
+        /// hint が無ければ確かめる。戻り先は form に載せて引き継ぐ。GET に confirm を付けても確かめは飛ばせない。
+        #[tokio::test]
+        async fn without_a_hint_the_user_is_asked_first() {
+            let w = world().await;
+            w.signed_in("s-none").await;
+            let params = [("client_id", "dcr-x"), ("post_logout_redirect_uri", BYE), ("state", "s1")];
+            let html = asks_first(w.send("GET", "s-none", &params, None).await).await;
+            for f in [r#"name="client_id" value="dcr-x""#, r#"name="post_logout_redirect_uri" value="https://rp.example.com/bye""#, r#"name="state" value="s1""#] {
+                assert!(html.contains(f), "{f}: {html}");
+            }
+            assert!(w.still_signed_in("s-none").await);
+
+            let mut with_confirm = params.to_vec();
+            with_confirm.push(("confirm", "1"));
+            asks_first(w.send("GET", "s-none", &with_confirm, None).await).await;
+            assert!(w.still_signed_in("s-none").await);
+
+            // セッションが無ければ、消すものが無いので確かめない。
+            let r = w.send("GET", "s-gone", &params, None).await;
+            signed_out_to_rp(&r);
+        }
+
+        /// 確かめの画面の POST は、自分の origin から来たときだけ通す。
+        #[tokio::test]
+        async fn the_confirmation_post_must_come_from_our_own_origin() {
+            let w = world().await;
+            w.signed_in("s-c").await;
+            let params = [("confirm", "1"), ("client_id", "dcr-x"), ("post_logout_redirect_uri", BYE), ("state", "s1")];
+            for origin in [Some("https://rp.example.com"), Some("https://op.example.evil"), Some("null"), None] {
+                let r = w.send("POST", "s-c", &params, origin).await;
+                assert_eq!(r.status(), StatusCode::FORBIDDEN, "{origin:?}");
+                assert!(w.still_signed_in("s-c").await, "{origin:?}");
+            }
+            let r = w.send("POST", "s-c", &params, Some(OP)).await;
+            signed_out_to_rp(&r);
+            assert!(!w.still_signed_in("s-c").await);
+        }
+
+        /// 他の鍵の署名・他の iss・他の aud・client_id と食い違う aud・他の利用者の hint は、確かめに回す。
+        /// 確かめに失敗した hint の要求は、RP へ戻さない（仕様第 4 節）。
+        #[tokio::test]
+        async fn a_hint_that_fails_verification_does_not_skip_the_question() {
+            let w = world().await;
+            let stranger = crate::jws::Es256Signer::generate();
+            let claims = serde_json::json!({"iss": OP, "sub": "acc-1", "aud": "dcr-x", "iat": 1, "exp": 2});
+            let other_key = stranger.sign(&claims).await;
+            // 自分の kid を名乗り、他の鍵で署名したもの。
+            let our_header = w.hint.split('.').next().unwrap();
+            let forged = format!("{our_header}.{}", other_key.split_once('.').unwrap().1);
+            let mut cases = vec![
+                ("other key", other_key, Some("dcr-x")),
+                ("forged kid", forged, Some("dcr-x")),
+                ("client_id is not the aud", w.hint.clone(), Some("dcr-y")),
+                ("not a jwt", "abc".to_string(), None),
+            ];
+            for (name, hint) in &w.off {
+                cases.push((*name, hint.clone(), None));
+            }
+            for (name, hint, client) in cases {
+                let sid = format!("s-{name}");
+                w.signed_in(&sid).await;
+                let mut params = vec![("id_token_hint", hint.as_str()), ("post_logout_redirect_uri", BYE), ("state", "s1")];
+                if let Some(c) = client {
+                    params.push(("client_id", c));
+                }
+                let html = asks_first(w.send("GET", &sid, &params, None).await).await;
+                assert!(!html.contains("post_logout_redirect_uri"), "{name}: 戻り先を引き継いだ");
+                assert!(w.still_signed_in(&sid).await, "{name}");
+            }
+        }
+
+        /// 正しい hint でも、今ログインしている利用者のものでなければ確かめる（仕様第 2 節）。
+        #[tokio::test]
+        async fn a_hint_for_someone_else_than_the_signed_in_user_asks_first() {
+            let w = world().await;
+            w.store.save_session(Session { sid: "s-2".into(), account_id: "acc-2".into(), auth_time: 0 }).await;
+            let html = asks_first(
+                w.send("GET", "s-2", &[("id_token_hint", &w.hint), ("post_logout_redirect_uri", BYE), ("state", "s1")], None).await,
+            )
+            .await;
+            assert!(html.contains(r#"name="client_id" value="dcr-x""#), "{html}");
+            assert!(w.store.get_session("s-2").await.is_some());
         }
     }
 

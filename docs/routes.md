@@ -42,7 +42,8 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | POST | `/oauth/mandate/consume` | RS | client 認証 | はい | いいえ |
 | base | POST | `/oauth/register` | RP | Initial Access Token（Bearer、一度きり） | はい | いいえ |
 | base | POST | `/revoke` | RP | client 認証 | はい | いいえ |
-| base | GET | `/end-session` | ブラウザ（RP から） | 無し（cookie（sid）を消す） | はい | いいえ |
+| base | GET | `/end-session` | ブラウザ（RP から） | id_token_hint（無いか確かめに失敗すれば、確かめの画面を出すだけ） | はい | いいえ |
+| base | POST | `/end-session` | ブラウザ（RP から、確かめの画面から） | id_token_hint、または確かめの画面の form（自分の origin に限る） | はい | いいえ |
 | base | POST | `/par` | RP | client 認証、DPoP（任意） | はい | いいえ |
 | base | GET | `/userinfo` | RP | access token | いいえ | いいえ |
 | base | POST | `/userinfo` | RP | access token（body の access_token も可） | いいえ | いいえ |
@@ -116,7 +117,12 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
   BASE_PATH が空のときは、`base` の `/`（RP のデモ）が host の直下に来る。
 - `/admin/iats/flash/{flash_id}` は GET だが、一度見せたら消す。門は GET を通すので、この経路は門で守られていない。
   守りは管理者の確かめと、`flash_id` を知っていること。生の IAT を載せるので、応答には `Cache-Control: no-store` を付ける。
-- `/end-session` は GET で、確かめの画面を挟まずにセッションを消す。
+- `/end-session` は OpenID Connect RP-Initiated Logout 1.0 の Logout Endpoint で、GET と POST を受ける。
+  id_token_hint が自分の鍵の署名・iss・aud（登録済みの client、client_id があればそれと一致）を満たし、
+  sub が今のセッションの利用者なら、確かめずにセッションを消す（exp は見ない）。それ以外でセッションがあれば、
+  消す前に確かめの画面を出す。画面の form は `confirm` を付けて同じ path へ POST し、その POST だけは
+  `admin_same_origin` と同じ考え方（`from_own_origin`）で自分の origin に限る。RP の POST は他の origin から来るので、門は掛けない。
+  確かめに失敗した hint の要求は、post_logout_redirect_uri へ戻さない。
 - `/ciba/{auth_req_id}/passkey-options` と `/reject` は、`auth_req_id` を知っているだけでは呼べない（`auth_req_id` は path に載り、ログに残る）。
   `Authorization` があれば access token（`/ciba/pending` と同じ）、無ければ cookie（sid）で名乗り、要求の宛先の利用者でなければ 404。
   cookie で名乗るときは、管理画面の門と同じ `from_own_origin` で自分の origin からの要求に限る（違えば 403）。

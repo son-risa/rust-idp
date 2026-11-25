@@ -231,6 +231,11 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     // oidc.rs
     ("You have signed out", "ログアウトしました"),
     ("Go to sign in", "ログインへ"),
+    ("Do you want to sign out?", "ログアウトしますか？"),
+    (
+        "You will need to sign in again to use apps that sign in with this account.",
+        "このアカウントでログインするアプリを使うには、もう一度ログインが必要になります。",
+    ),
     ("Back to sign in", "ログイン画面に戻る"),
     ("Back to the app", "アプリに戻る"),
     // ciba.rs

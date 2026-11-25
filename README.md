@@ -50,7 +50,7 @@ Provider ── checks:    Vec<dyn AuthorizationCheck>   （順序が意味を�
 - Authorization Code Flow + **PKCE（S256 のみ。plain は拒否）**
 - Refresh Token（DPoP 束縛 + ローテーション、系列失効）
 - ID Token（**ES256 既定 + RS256**。OIDC Core §15.1 対応）、UserInfo、Introspection、Revocation
-- RP-Initiated Logout（`end_session`、post_logout_redirect_uri は登録値のみ許可）
+- RP-Initiated Logout（`end_session`、GET と POST。id_token_hint の署名・iss・aud を確かめ、無いか確かめに失敗すれば利用者に確かめる。post_logout_redirect_uri は登録値のみ許可）
 - claims（scope→claim マッピング: profile / email / address / phone）
 
 ### FAPI 2.0 Security Profile
@@ -91,7 +91,7 @@ Provider ── checks:    Vec<dyn AuthorizationCheck>   （順序が意味を�
 | ログイン（パスキー） | `GET /login/{uid}`, `POST /login/{uid}/passkey/options`, `.../verify` |
 | トークン | `POST /token`, `POST /introspect`, `POST /revoke` |
 | UserInfo / プロフィール | `GET\|POST /userinfo`, `GET\|PUT /me/profile` |
-| ログアウト | `GET /end-session` |
+| ログアウト | `GET\|POST /end-session` |
 | DCR | `POST /oauth/register` |
 | Mandate | `POST /oauth/mandate/consume` |
 | CIBA | `POST /backchannel-authentication`, `GET /ciba`, `POST /ciba/{id}/approve\|reject`, `/ciba/fcm-tokens` |
