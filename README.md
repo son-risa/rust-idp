@@ -58,6 +58,8 @@ cargo deny check            # advisories and licences
 | `FAPI1_X/Y/KID` / `FAPI2_X/Y/KID` | FAPI2 conformance 静的クライアント `fapi-1`/`fapi-2` の公開鍵（**設定時のみ登録 = ON/OFF 切替**。staging にだけ入れ、本番には入れない） |
 | `CONFORMANCE_FAPI_CALLBACK` | FAPI conformance の redirect 上書き |
 | `LOG_PSEUDONYM_KEY` | ログ内 sub の擬似化キー |
+| `INVITE_CLIENT_IDS` | `/invites`・`/accounts/disable` を呼べる client_id（カンマ区切り） |
+| `INTROSPECTION_CLIENT_IDS` | ほかの client に出た access token も `/introspect`・`/oauth/mandate/consume` で引ける RS の client_id（カンマ区切り）。ここに無い client は自分に出た token しか引けない |
 
 `K_SERVICE` は Cloud Run が自動設定（本番機能の有効化トリガ）。
 

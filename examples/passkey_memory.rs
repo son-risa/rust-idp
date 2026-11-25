@@ -143,7 +143,7 @@ async fn run() {
 
     let opts: Value = http
         .post(format!("{issuer}/login/{uid}/passkey/options"))
-        .json(&json!({ "email": EMAIL }))
+        .json(&json!({}))
         .send()
         .await
         .unwrap()
@@ -156,7 +156,7 @@ async fn run() {
         .header(reqwest::header::COOKIE, cookie_header(&cookies))
         .json(&json!({
             "id": URL_SAFE_NO_PAD.encode(&cred_id),
-            "response": { "clientDataJSON": cdj, "authenticatorData": auth_data, "signature": signature, "userHandle": null },
+            "response": { "clientDataJSON": cdj, "authenticatorData": auth_data, "signature": signature, "userHandle": URL_SAFE_NO_PAD.encode(account_id.as_bytes()) },
         }))
         .send()
         .await

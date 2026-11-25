@@ -1118,6 +1118,7 @@ pub(super) async fn iat_mint_submit(
             serde_json::json!({
                 "raw_token": crate::firestore::s(&raw),
                 "expires_at": crate::firestore::int(flash_expires_at),
+                "minted_by": crate::firestore::s(&viewer),
             }),
         )
         .await
@@ -1149,13 +1150,23 @@ pub(super) async fn iat_show_once(
 }
 
 async fn show_iat_once(p: Arc<Provider>, headers: HeaderMap, jar: CookieJar, flash_id: String) -> Response {
-    let (_viewer, fs) =match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
+    let (viewer, fs) = match require_admin_fs(&p, &jar, Lang::from_headers(&headers)).await {
         Ok(x) => x,
         Err(r) => return r,
     };
 
-    // 一度だけ表示する。updateTime の CAS 削除に勝った 1 つの要求だけが生トークンを受け取る（多重タブでも 1 回）。
-    let fields = match fs.take_doc("adminIatFlash", &flash_id).await {
+    // 発行した管理者にだけ、一度だけ表示する。ほかの管理者には表示済みと同じ画面を返し、消費もさせない。
+    // updateTime の CAS 削除に勝った 1 つの要求だけが生トークンを受け取る（多重タブでも 1 回）。
+    let taken = match fs.get_doc_with_update_time("adminIatFlash", &flash_id).await {
+        Ok(Some((fields, update_time)))
+            if crate::firestore::field_str(&fields, "minted_by") == Some(viewer.as_str()) =>
+        {
+            fs.delete_doc_if_unchanged("adminIatFlash", &flash_id, &update_time).await.map(|won| won.then_some(fields))
+        }
+        Ok(_) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let fields = match taken {
         Ok(Some(f)) => f,
         Ok(None) => {
             return page(
@@ -1416,7 +1427,11 @@ mod tests {
         fs.set_doc(
             "adminIatFlash",
             "F1",
-            serde_json::json!({ "raw_token": crate::firestore::s("RAW-IAT"), "expires_at": crate::firestore::int(expires) }),
+            serde_json::json!({
+                "raw_token": crate::firestore::s("RAW-IAT"),
+                "expires_at": crate::firestore::int(expires),
+                "minted_by": crate::firestore::s("admin-1"),
+            }),
         )
         .await
         .unwrap();

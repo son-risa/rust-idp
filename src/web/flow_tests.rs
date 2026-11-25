@@ -234,16 +234,24 @@ async fn email_login_with_credential(
         })
         .await;
 
-    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({ "email": email })).unwrap();
-    let opts = login::login_passkey_options(State(p.clone()), Path(uid.clone()), Json(opts_req)).await;
+    let opts = login::login_passkey_options(State(p.clone()), Path(uid.clone())).await;
     assert_eq!(opts.status(), StatusCode::OK);
     let opts_json = body_json(opts).await;
     let challenge = opts_json["challenge"].as_str().unwrap().to_string();
 
+    // options は常に discoverable なので、ブラウザと同じく userHandle（= その email の account_id）で名乗る。
+    let account_id = crate::registration::get_account(p.docs.as_deref().unwrap(), email)
+        .await
+        .unwrap()
+        .map(|a| a.account_id)
+        .unwrap_or_default();
     let (ad, sig, cdj) = make_auth_ceremony(key, sign_count, &challenge, &p.origin(), &p.rp_id(), false);
     let verify_req: AuthVerifyReq = serde_json::from_value(json!({
         "id": crate::webauthn::b64e(cred_id),
-        "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": tamper(sig), "userHandle": null },
+        "response": {
+            "clientDataJSON": cdj, "authenticatorData": ad, "signature": tamper(sig),
+            "userHandle": crate::webauthn::b64e(account_id.as_bytes()),
+        },
     }))
     .unwrap();
     let verify =
@@ -265,8 +273,7 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
         })
         .await;
 
-    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({})).unwrap();
-    let opts = login::login_passkey_options(State(p.clone()), Path(uid.clone()), Json(opts_req)).await;
+    let opts = login::login_passkey_options(State(p.clone()), Path(uid.clone())).await;
     assert_eq!(opts.status(), StatusCode::OK);
     let opts_json = body_json(opts).await;
     let challenge = opts_json["challenge"].as_str().unwrap().to_string();
@@ -292,6 +299,38 @@ async fn login_discoverable(p: &Arc<Provider>, account_id: &str, key: &SigningKe
         Some(account_id),
         "discoverable ログインの最終 sub が userHandle の account_id と一致しない"
     );
+}
+
+/// ログインの options は、登録の有無で中身が変わらない（challenge 以外は同じで、allowCredentials は空）。
+/// email を送っても読まない。
+#[tokio::test]
+async fn login_options_do_not_reveal_whether_an_email_is_registered() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_key, _cred_id, _account_id) = register_test_account(&p, &email).await;
+
+    // 本文を JSON で受けるかどうかまで見るため、handler を直に呼ばず router を通す。
+    let app = super::router(Provider::new(p.issuer().to_string()).with_document_store(p.docs.clone().unwrap()));
+    let options_for = |body: serde_json::Value| {
+        let app = app.clone();
+        async move {
+            let req = axum::http::Request::post("/login/u/passkey/options")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let mut v = body_json(resp).await;
+            v.as_object_mut().unwrap().remove("challenge").expect("challenge");
+            v
+        }
+    };
+    let registered = options_for(json!({ "email": email })).await;
+    let unknown = options_for(json!({ "email": "nobody@example.com" })).await;
+    let blank = options_for(json!({})).await;
+    assert_eq!(registered["allowCredentials"], json!([]), "{registered}");
+    assert_eq!(registered, unknown);
+    assert_eq!(registered, blank);
 }
 
 /// DCR登録エンドポイント(oidc::register)が ConfidentialSecret プロファイルの IAT を
@@ -345,7 +384,7 @@ async fn register_confidential_secret_returns_raw_secret_once() {
 async fn disabled_account_cannot_login() {
     let p = test_provider().await;
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
-    let (key, _cred_id, _account_id) = register_test_account(&p, &email).await;
+    let (key, _cred_id, account_id) = register_test_account(&p, &email).await;
 
     let fs = p.docs.as_deref().unwrap();
     let out = crate::account_admin::disable_account(fs, &*p.store, "test", &email).await.unwrap();
@@ -363,8 +402,7 @@ async fn disabled_account_cannot_login() {
         })
         .await;
 
-    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({ "email": email })).unwrap();
-    let opts = login::login_passkey_options(State(p.clone()), Path(uid.clone()), Json(opts_req)).await;
+    let opts = login::login_passkey_options(State(p.clone()), Path(uid.clone())).await;
     assert_eq!(opts.status(), StatusCode::OK, "options自体は通す(disabled状態を先出ししない)");
     let opts_json = body_json(opts).await;
     let challenge = opts_json["challenge"].as_str().unwrap().to_string();
@@ -372,7 +410,10 @@ async fn disabled_account_cannot_login() {
     let (ad, sig, cdj) = make_auth_ceremony(&key, 0, &challenge, &p.origin(), &p.rp_id(), false);
     let verify_req: AuthVerifyReq = serde_json::from_value(json!({
         "id": crate::webauthn::b64e(b"probe-credential-id"),
-        "response": { "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig, "userHandle": null },
+        "response": {
+            "clientDataJSON": cdj, "authenticatorData": ad, "signature": sig,
+            "userHandle": crate::webauthn::b64e(account_id.as_bytes()),
+        },
     }))
     .unwrap();
     let verify =
@@ -442,6 +483,41 @@ async fn admin_mint_iat_flash_is_shown_once() {
     .await;
     let second_body = body_text(second).await;
     assert!(second_body.contains("表示済みです"), "2回目は「表示済み」になること: {second_body}");
+}
+
+/// 一度きりの IAT は発行した管理者にだけ見せる。flash_id を知るほかの管理者には「表示済み」を返し、
+/// 消費もさせない（発行した管理者はその後も 1 回見られる）。
+#[tokio::test]
+async fn admin_iat_flash_is_shown_only_to_the_admin_who_minted_it() {
+    let p = test_provider().await;
+    let fs = p.docs.as_deref().unwrap();
+    let mut jars = vec![];
+    for account_id in ["admin-minter", "admin-other"] {
+        crate::admin_store::grant_admin(fs, account_id, "test").await.unwrap();
+        let sid = uuid::Uuid::new_v4().to_string();
+        p.store.save_session(Session { sid: sid.clone(), account_id: account_id.into(), auth_time: 0 }).await;
+        jars.push(CookieJar::default().add(Cookie::new(SID_COOKIE, sid)));
+    }
+    let (minter, other) = (jars[0].clone(), jars[1].clone());
+
+    let form: admin::IatMintForm = serde_json::from_value(json!({
+        "profile": "confidential-secret",
+        "redirect_hosts": "rp.example.com",
+        "grant_types": "",
+        "ttl_hours": 1,
+    }))
+    .unwrap();
+    let mint = admin::iat_mint_submit(State(p.clone()), HeaderMap::new(), minter.clone(), Form(form)).await;
+    let location = mint.headers().get(header::LOCATION).unwrap().to_str().unwrap().to_string();
+    let flash_id = location.rsplit('/').next().unwrap().to_string();
+
+    let mut ja = HeaderMap::new();
+    ja.insert(header::ACCEPT_LANGUAGE, "ja".parse().unwrap());
+    let show = |jar: CookieJar| admin::iat_show_once(State(p.clone()), ja.clone(), jar, Path(flash_id.clone()));
+    let by_other = body_text(show(other).await).await;
+    assert!(by_other.contains("表示済みです") && !by_other.contains("IATを発行しました"), "{by_other}");
+    let by_minter = body_text(show(minter).await).await;
+    assert!(by_minter.contains("IATを発行しました"), "発行した管理者は見られること: {by_minter}");
 }
 
 #[tokio::test]
@@ -653,8 +729,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
             browser_binding: super::browser_binding_hash("b"),
         })
         .await;
-    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({})).unwrap();
-    let opts = body_json(login::login_passkey_options(State(p.clone()), Path(uid.clone()), Json(opts_req)).await).await;
+    let opts = body_json(login::login_passkey_options(State(p.clone()), Path(uid.clone())).await).await;
     let challenge = opts["challenge"].as_str().unwrap().to_string();
     let (ad, sig, cdj) = make_auth_ceremony(&attacker, 0, &challenge, &p.origin(), &p.rp_id(), false);
     let verify_req: AuthVerifyReq = serde_json::from_value(json!({
@@ -713,14 +788,6 @@ async fn either_of_two_passkeys_signs_in_as_the_same_account() {
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let (key1, cred1, account_id) = register_test_account(&p, &email).await;
     let key2 = add_passkey(&p, &email, &account_id, b"second-credential").await;
-
-    let opts_req: login::LoginPkOptionsReq = serde_json::from_value(json!({ "email": email })).unwrap();
-    let opts = body_json(login::login_passkey_options(State(p.clone()), Path("u".into()), Json(opts_req)).await).await;
-    let mut allowed: Vec<String> = opts["allowCredentials"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect();
-    let mut want = vec![crate::webauthn::b64e(&cred1), crate::webauthn::b64e(b"second-credential")];
-    allowed.sort();
-    want.sort();
-    assert_eq!(allowed, want);
 
     let (_, r) = email_login_with_credential(&p, &email, &cred1, &key1, 1, |s| s).await;
     assert_eq!(r.status(), StatusCode::OK);

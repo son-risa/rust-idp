@@ -43,15 +43,10 @@ async fn main() {
     // このため Firestore が未配線のローカル実行(FIRESTORE_EMULATOR_HOST 未設定)では
     // これらのクライアントは解決できない点に注意（demo-rp 等の動作確認には
     // FIRESTORE_EMULATOR_HOST を設定し migrate-static-clients を流し込んでおくこと）。
-    let mut provider = Provider::new(issuer.clone()).with_base_path(base_path.clone()).with_invite_clients(
-        std::env::var("INVITE_CLIENT_IDS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(str::to_string)
-            .collect(),
-    );
+    let mut provider = Provider::new(issuer.clone())
+        .with_base_path(base_path.clone())
+        .with_invite_clients(client_ids_from_env("INVITE_CLIENT_IDS"))
+        .with_introspection_clients(client_ids_from_env("INTROSPECTION_CLIENT_IDS"));
 
     if let Some(app) = mobile_app_from_env() {
         provider = provider.with_mobile_app(app);
@@ -119,6 +114,17 @@ async fn main() {
             }
         }
     }
+}
+
+/// カンマ区切りの client_id の一覧。未設定なら空。
+fn client_ids_from_env(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// 登録の画面から開くアプリと AASA。4 つが揃っていれば Some。
