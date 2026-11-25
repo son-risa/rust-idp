@@ -8,6 +8,8 @@ WORKDIR /app
 # 依存だけ先にビルドしてレイヤキャッシュを効かせる。
 # 本番は Firestore・KMS などへ出る実装を入れた gcp の feature で build する（Cargo.toml の [features]）。
 COPY Cargo.toml Cargo.lock ./
+# Cargo.toml が [[example]] で名指す file が無いと、manifest を読む段で落ちる。
+COPY examples ./examples
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --features gcp && rm -rf src
 COPY src ./src
 # touch でソース更新を確実に検知させてから本ビルド。
