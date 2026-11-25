@@ -205,6 +205,22 @@ mod tests {
         assert!(matches!(none, Err(OAuthError::InvalidRequest(_))));
     }
 
+    /// 登録値を頭に持つだけの URI や、query を足した URI は別の宛先として断る（前方一致にしない）。
+    #[tokio::test]
+    async fn resolve_addressee_refuses_uris_that_only_start_with_the_registered_one() {
+        let c = Client { redirect_uris: vec!["https://rp.example/cb".into()], ..client(true, false) };
+        let p = Provider::new("https://op").with_client(c);
+        let with = |ru: &str| raw(AuthParams { redirect_uri: Some(ru.into()), ..params() });
+
+        assert!(resolve_addressee(&p, with("https://rp.example/cb")).await.is_ok());
+        for ru in ["https://rp.example/cb/evil", "https://rp.example/cbx", "https://rp.example/cb?x=1"] {
+            assert!(
+                matches!(resolve_addressee(&p, with(ru)).await, Err(OAuthError::InvalidRequest(_))),
+                "{ru} を通した"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn check_response_type_code_only() {
         let p = Provider::new("https://op");
@@ -243,5 +259,18 @@ mod tests {
         // challenge あり + plain method → S256 必須エラー
         let plain = AuthParams { code_challenge_method: Some("plain".into()), ..params() };
         assert!(CheckPkce.check(&p, &addressed(plain, client(false, false))).await.is_err());
+    }
+
+    /// method を省いた challenge は RFC 7636 §4.3 により plain とみなす。S256 とみなして通さない。
+    #[tokio::test]
+    async fn check_pkce_refuses_a_challenge_without_method() {
+        let p = Provider::new("https://op");
+        let no_method = AuthParams { code_challenge_method: None, ..params() };
+        for c in [client(true, false), client(false, false), client(false, true)] {
+            assert_matches!(
+                CheckPkce.check(&p, &addressed(no_method.clone(), c)).await,
+                Err(OAuthError::InvalidRequest(_))
+            );
+        }
     }
 }

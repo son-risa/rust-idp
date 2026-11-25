@@ -1662,6 +1662,81 @@ mod tests {
         assert!(p.store.get_access_token("AT").await.unwrap().is_none());
     }
 
+    /// RFC 7009 §2.1: ほかの client の token を渡されても消さない（200 は返す）。持ち主は消せる。
+    #[tokio::test]
+    async fn revoke_does_not_remove_another_clients_tokens() {
+        let public = |id: &str| crate::model::Client {
+            client_id: id.into(),
+            token_endpoint_auth_method: "none".into(),
+            client_secret: None,
+            ..client_with_post_logout(&[])
+        };
+        let p = Arc::new(Provider::new("https://op.example").with_client(public("rp-a")).with_client(public("rp-b")));
+        p.store.save_access_token(AccessToken { client_id: "rp-b".into(), ..at(None) }).await.unwrap();
+        p.store
+            .save_refresh_token(crate::model::RefreshToken {
+                token: "RT".into(),
+                client_id: "rp-b".into(),
+                account_id: "user@example.com".into(),
+                scope: "openid offline_access".into(),
+                resource: None,
+                jkt: None,
+                acr: None,
+                auth_time: None,
+                family_id: "F".into(),
+                used: false,
+                replaced_by: None,
+            })
+            .await
+            .unwrap();
+        let form = |client: &str, token: &str| {
+            Form(HashMap::from([("client_id".to_string(), client.to_string()), ("token".to_string(), token.to_string())]))
+        };
+
+        for token in ["AT", "RT"] {
+            let r = revoke(State(p.clone()), HeaderMap::new(), form("rp-a", token)).await;
+            assert_eq!(r.status(), StatusCode::OK);
+        }
+        assert!(p.store.get_access_token("AT").await.unwrap().is_some(), "ほかの client が AT を消した");
+        assert!(p.store.get_refresh_token("RT").await.unwrap().is_some(), "ほかの client が RT を消した");
+
+        for token in ["AT", "RT"] {
+            let r = revoke(State(p.clone()), HeaderMap::new(), form("rp-b", token)).await;
+            assert_eq!(r.status(), StatusCode::OK);
+        }
+        assert!(p.store.get_access_token("AT").await.unwrap().is_none());
+        assert!(p.store.get_refresh_token("RT").await.unwrap().is_none());
+    }
+
+    /// 期限を過ぎた access token は、fake の Firestore に文書が残っていても introspect で active=false。
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn an_expired_access_token_is_inactive_on_firestore() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let store = Arc::new(crate::firestore_store::FirestoreStore::new(fs.clone()));
+        let rp = crate::model::Client { client_id: "rp".into(), ..client_with_post_logout(&[]) };
+        let rp = crate::model::Client { client_secret: Some(crate::dcr::hash_token("s3cret")), ..rp };
+        let p = Arc::new(Provider::new("https://op.example").with_store(store).with_client(rp));
+        p.store.save_access_token(at(None)).await.unwrap();
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, format!("Basic {}", B64.encode("rp:s3cret")).parse().unwrap());
+        let active = |p: Arc<Provider>, h: HeaderMap| async move {
+            let r = introspect(State(p), h, Form(HashMap::from([("token".to_string(), "AT".to_string())]))).await;
+            let v: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap();
+            v["active"].clone()
+        };
+
+        assert_eq!(active(p.clone(), h.clone()).await, true);
+        let past = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 60;
+        fs.merge_doc("accessTokens", "AT", serde_json::json!({ "expiresAt": crate::firestore::ts(&crate::firestore::rfc3339(past)) }))
+            .await
+            .unwrap();
+        assert!(fs.get_doc("accessTokens", "AT").await.unwrap().is_some(), "文書は残っている前提");
+        assert!(p.store.get_access_token("AT").await.unwrap().is_none());
+        assert_eq!(active(p.clone(), h).await, false);
+    }
+
     #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn profile_put_refuses_the_values_the_registration_page_refuses() {
