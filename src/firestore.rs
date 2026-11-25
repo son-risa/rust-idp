@@ -10,11 +10,15 @@
 //! その名前付きデータベースへ向く。本番と検証環境で同一プロジェクト内の別データベースを
 //! 使い分け、staging での動作確認が本番データに一切触れないようにするための分離。
 
+#[cfg(feature = "gcp")]
 use base64::Engine;
 use serde_json::{json, Value};
+#[cfg(feature = "gcp")]
 use std::sync::Mutex;
+#[cfg(feature = "gcp")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "gcp")]
 pub struct Firestore {
     project: String,
     database: String,
@@ -56,6 +60,7 @@ pub fn field_ts_secs(fields: &Value, name: &str) -> Option<u64> {
 
 /// runQuery のレスポンス(`[{document:{name,fields}}, ...]` 形式)をパースする共通処理。
 /// query_eq / list_recent_ordered の両方から使う。
+#[cfg(feature = "gcp")]
 fn parse_run_query_response(arr: &Value) -> Vec<(String, Value)> {
     arr.as_array()
         .map(|rows| {
@@ -120,6 +125,7 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146097 + doe - 719468
 }
 
+#[cfg(feature = "gcp")]
 fn enc(id: &str) -> String {
     // ドキュメント ID をパスに埋めるため最小限の percent-encode（'@' '/' 等）。
     id.bytes()
@@ -136,17 +142,72 @@ fn enc(id: &str) -> String {
 /// ような壊れた URL になり全リクエストが失敗するため、空も未設定扱いにする。
 /// env を直接読まない純粋関数にしているのは、値を変えたテストで set_var（並行テスト間で
 /// 競合する）を使わずに済ませるため。
+#[cfg(feature = "gcp")]
 fn resolve_database(raw: Result<String, std::env::VarError>) -> String {
     raw.ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "(default)".into())
 }
 
 /// Firestore への 1 回の要求の時間の上限。応答が返らない要求で、呼び出し（失効の走査・ローテーション）が止まり続けない。
+#[cfg(feature = "gcp")]
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(feature = "gcp")]
 fn http_client() -> reqwest::Client {
     crate::http::builder().timeout(HTTP_TIMEOUT).build().expect("reqwest client")
 }
 
+/// `gcp` の feature 無しの Firestore。値の無い型なので、`Provider` の `firestore` は常に None になり、
+/// これを要る経路（passkey の登録とログイン、PAR、DCR、管理画面など）は今のローカル実行
+/// （FIRESTORE_EMULATOR_HOST 無し）と同じく 503 などで断る。その経路の上に書いた処理を
+/// gcp 無しでも compile するために、呼ばれている method だけを同じ形で持つ。
+#[cfg(not(feature = "gcp"))]
+pub enum Firestore {}
+
+#[cfg(not(feature = "gcp"))]
+#[allow(clippy::unused_async)]
+impl Firestore {
+    pub async fn set_doc(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
+        match *self {}
+    }
+    pub async fn update_field(&self, _: &str, _: &str, _: &str, _: Value) -> Result<(), String> {
+        match *self {}
+    }
+    pub async fn update_fields(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
+        match *self {}
+    }
+    pub async fn get_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
+        match *self {}
+    }
+    pub async fn get_doc_with_update_time(&self, _: &str, _: &str) -> Result<Option<(Value, String)>, String> {
+        match *self {}
+    }
+    pub async fn set_doc_if_unchanged(&self, _: &str, _: &str, _: Value, _: &str) -> Result<bool, String> {
+        match *self {}
+    }
+    pub async fn create_if_absent(&self, _: &str, _: &str, _: Value) -> Result<bool, String> {
+        match *self {}
+    }
+    pub async fn delete_doc_if_unchanged(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+        match *self {}
+    }
+    pub async fn take_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
+        match *self {}
+    }
+    pub async fn query_eq(&self, _: &str, _: &str, _: &str) -> Result<Vec<(String, Value)>, String> {
+        match *self {}
+    }
+    pub async fn list_recent_ordered(&self, _: &str, _: &str, _: u32) -> Result<Vec<(String, Value)>, String> {
+        match *self {}
+    }
+    pub async fn list_collection(&self, _: &str) -> Result<Vec<(String, Value, String)>, String> {
+        match *self {}
+    }
+    pub async fn delete_doc(&self, _: &str, _: &str) -> Result<(), String> {
+        match *self {}
+    }
+}
+
+#[cfg(feature = "gcp")]
 impl Firestore {
     pub fn new(project: impl Into<String>) -> Self {
         let project = project.into();
@@ -656,6 +717,7 @@ impl Firestore {
 /// 本文の status で分ける。HTTP の番号だけだと、不正な要求の 400 INVALID_ARGUMENT も「負けた」になる。
 /// 実 Firestore で確かめた返し方: updateTime の不一致（消えた文書も含む）は 400 FAILED_PRECONDITION、
 /// exists=false で既に在れば 409 ALREADY_EXISTS。
+#[cfg(feature = "gcp")]
 async fn precondition_lost(r: reqwest::Response, what: &str) -> Result<bool, String> {
     let code = r.status();
     let body: Value = r.json().await.unwrap_or(Value::Null);
@@ -683,8 +745,11 @@ pub fn field_str<'a>(fields: &'a Value, name: &str) -> Option<&'a str> {
 /// 別途信頼する）。ここで検証するのは「クライアント側(このクレート)がプリコンディションを
 /// 正しく送り、勝敗のレスポンスを正しく解釈するか」「fcm.rs が Firestore とは別ホストへ
 /// 正しく POST するか」という、実際にこのコードベースがバグを混入しうる部分に限定する。
+// gcp は内側に書く。外側を #[cfg(test)] だけにしておくと、経路の照合の試験（web/routes_tests.rs）が試験の mod として除ける。
+#[allow(clippy::mixed_attributes_style)]
 #[cfg(test)]
 pub(crate) mod fake_firestore {
+    #![cfg(feature = "gcp")]
     use axum::extract::{Path, Query, State};
     use axum::http::StatusCode;
     use axum::response::{IntoResponse, Response};
@@ -1065,8 +1130,10 @@ pub(crate) mod fake_firestore {
     }
 }
 
+#[allow(clippy::mixed_attributes_style)]
 #[cfg(test)]
 mod tests {
+    #![cfg(feature = "gcp")]
     use std::assert_matches;
     use super::*;
 

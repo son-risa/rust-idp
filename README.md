@@ -112,15 +112,37 @@ issuer = `ORIGIN + BASE_PATH`（例: `https://<issuer-host>` + `/oidc`）。
 
 ---
 
+## ライブラリとして使う
+
+crate は 1 つで、`rust_idp::Provider` を組み、`rust_idp::router` で axum の Router にする。保存先・署名鍵・
+メール送信などは trait（`Store` / `CibaStore` / `JwsSigner` / `Mailer` / `DpopVerifier` / `ClientAuthMethod` /
+`GrantHandler` / `ResponseMode` / `AuthorizationCheck`）の実装を差し込んで替える。既定はメモリ上の保存先と
+起動ごとの鍵。
+
+```sh
+cargo run --example in_memory   # localhost に OP を立て、discovery → 認可コード → token まで通す
+```
+
+`examples/in_memory.rs` は、ログイン済みのセッションを保存先へ直接入れてから `/authorize` を呼ぶ。
+passkey の登録とログイン、PAR、DCR、管理画面などは利用者の保存先が Firestore にしか無いため、
+`gcp` の feature を付けたときだけ使える（付けないと 503 などで断る）。
+
+### `gcp` の feature
+
+Firestore・Cloud KMS・Secret Manager・FCM・Resend へ出る実装と、本番の配線（`rust_idp::gcp`）・
+管理者用サブコマンドは `gcp` の feature の中にある。既定では入らない。Cloud Run の本番の binary は
+`--features gcp` で build する（`Dockerfile`）。gcp 無しの binary は `K_SERVICE` があると起動しない。
+
 ## ローカル実行
 
 ```sh
 cargo run                                   # http://localhost:8080
 ADDR=127.0.0.1:8099 cargo run               # ポート指定（IPv4/IPv6 両 loopback で待受）
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8180 cargo run --features gcp   # Firestore だけエミュレータへ
 ```
 
 ローカルでは Firestore / Resend / KMS は無効（in-memory + LogMailer、起動毎の一時署名鍵）。
-本番機能は `K_SERVICE`（Cloud Run）検出時のみ有効化される。
+本番機能は `--features gcp` で build し、`K_SERVICE`（Cloud Run）検出時のみ有効化される。
 
 ### FIDO2 Conformance をローカルで動かす
 
@@ -135,7 +157,8 @@ ADDR=127.0.0.1:8099 FIDO_RP_ID=localhost FIDO_ORIGIN=http://localhost:8099 \
 ## テスト / 品質保証
 
 ```sh
-cargo test                                  # 194 ユニット + fuzz + 差分テスト
+cargo test                                  # gcp 無し（fake Firestore を使う試験は除く）
+cargo test --features gcp                   # 本番と同じ構成。全部の試験
 PROPTEST_CASES=30000 cargo test fuzz_tests  # 重いファジング（約42万入力）
 cargo kani                                  # 9 つの形式証明（cargo-kani 要）
 cargo deny check                            # 供給網（RUSTSEC 勧告 / ライセンス）
@@ -210,7 +233,9 @@ gcloud run deploy <service> --source . --region <region>
 
 ```
 src/
-  main.rs            起動・クライアント登録・KMS/Firestore 配線・mint/revoke サブコマンド
+  lib.rs             公開の API（Provider / router / 差し替えの trait / メモリ上の保存先）
+  main.rs            起動・クライアント登録（lib を使う薄い binary）
+  gcp.rs             KMS/Firestore 配線・mint/revoke などの管理者用サブコマンド（gcp の feature）
   provider.rs        トレイトレジストリ本体
   auth_checks.rs     AuthorizationCheck 群
   grants.rs          GrantHandler 群（code / refresh / ciba）
@@ -227,6 +252,8 @@ src/
   fido/              FIDO2 Server Conformance（verify / tpm / mds / store）
   web/               axum エンドポイント（oidc / ciba / login / register / pages）
   fuzz_tests.rs / diff_tests.rs / kani_harness.rs   品質保証（通常ビルド非対象）
+examples/
+  in_memory.rs       メモリ上の保存先で OP を立て、認可コードまで通す例
 ```
 
 ---

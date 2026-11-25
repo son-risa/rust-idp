@@ -1,16 +1,21 @@
 //! CIBA (OIDC Client-Initiated Backchannel Authentication) のバックチャネル要求。
 //! Rust を生かす: auth_req_id は newtype、status は網羅 enum、Firestore 永続化。
 
+#[cfg(feature = "gcp")]
 use crate::firestore::{self, Firestore};
 use async_trait::async_trait;
+#[cfg(feature = "gcp")]
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TTL_SECS: u64 = 300;
+#[cfg(feature = "gcp")]
 const COL: &str = "cibaRequests";
 /// 解決済み要求の監査履歴（active な COL とは別。単回消費・dedup を壊さない追記専用ログ）。
+#[cfg(feature = "gcp")]
 const HIST_COL: &str = "cibaHistory";
 /// 履歴の保持期間。Firestore TTL ポリシー（expireAt）のバックストップと併用する。
+#[cfg(feature = "gcp")]
 const HISTORY_RETENTION_SECS: u64 = 90 * 86400;
 
 fn now() -> u64 {
@@ -38,6 +43,7 @@ pub enum CibaStatus {
     Denied,
 }
 
+#[cfg(feature = "gcp")]
 impl CibaStatus {
     fn as_str(self) -> &'static str {
         match self {
@@ -73,6 +79,7 @@ impl BackchannelAuthRequest {
     pub fn expired(&self) -> bool {
         self.expires_at < now()
     }
+    #[cfg(feature = "gcp")]
     fn fields(&self) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         obj.insert("clientId".into(), firestore::s(&self.client_id));
@@ -86,6 +93,7 @@ impl BackchannelAuthRequest {
         }
         serde_json::Value::Object(obj)
     }
+    #[cfg(feature = "gcp")]
     fn from_fields(auth_req_id: AuthReqId, f: &serde_json::Value) -> Self {
         let g = |k: &str| firestore::field_str(f, k).unwrap_or("").to_string();
         let expires_at = f
@@ -137,6 +145,7 @@ impl CibaHistoryEntry {
             resolved_at,
         }
     }
+    #[cfg(feature = "gcp")]
     fn fields(&self) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         obj.insert("account".into(), firestore::s(&self.account));
@@ -155,6 +164,7 @@ impl CibaHistoryEntry {
         }
         serde_json::Value::Object(obj)
     }
+    #[cfg(feature = "gcp")]
     fn from_fields(auth_req_id: String, f: &serde_json::Value) -> Self {
         let g = |k: &str| firestore::field_str(f, k).unwrap_or("").to_string();
         let resolved_at = f
@@ -284,16 +294,19 @@ impl Default for CibaRateLimiter {
 }
 
 /// 本番実装。Firestore の updateTime プリコンディションで CAS を実現する。
+#[cfg(feature = "gcp")]
 pub struct FirestoreCibaStore {
     fs: Arc<Firestore>,
 }
 
+#[cfg(feature = "gcp")]
 impl FirestoreCibaStore {
     pub fn new(fs: Arc<Firestore>) -> Self {
         Self { fs }
     }
 }
 
+#[cfg(feature = "gcp")]
 #[async_trait]
 impl CibaStore for FirestoreCibaStore {
     async fn create(
@@ -519,6 +532,7 @@ impl CibaStore for MemoryCibaStore {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "gcp")]
     #[test]
     fn status_str_roundtrip_and_unknown_defaults_pending() {
         for s in [CibaStatus::Pending, CibaStatus::Approved, CibaStatus::Denied] {
@@ -527,6 +541,7 @@ mod tests {
         assert_eq!(CibaStatus::parse("garbage"), CibaStatus::Pending);
     }
 
+    #[cfg(feature = "gcp")]
     #[test]
     fn fields_roundtrip_preserves_values() {
         let req = BackchannelAuthRequest {
@@ -623,6 +638,7 @@ mod tests {
         assert!(s.get(id.as_str()).await.unwrap().is_none());
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn firestore_store_consume_is_single_use() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;

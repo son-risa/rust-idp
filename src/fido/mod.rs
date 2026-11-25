@@ -26,7 +26,7 @@ mod tpm;
 pub(crate) mod verify;
 
 use crate::es256::{b64url_decode, b64url_encode};
-use store::{ChallengeState, FidoStore, FirestoreFidoStore, MemFidoStore, StoredCredential};
+use store::{ChallengeState, FidoStore, MemFidoStore, StoredCredential};
 
 /// pubKeyCredParams で広告する COSEAlgorithmIdentifier。
 /// 「広告 = 実装」を厳守する。ES256(-7) / RS256(-257) / EdDSA(-8) / RS1(-65535)。
@@ -64,21 +64,24 @@ pub struct FidoState {
 impl FidoState {
     /// 環境変数から構築。ローカル emulator 既定は localhost。
     /// FIDO_RP_ID / FIDO_ORIGIN で Conformance Tool 設定に合わせて上書きする。
-    /// K_SERVICE(Cloud Run) では Firestore、それ以外は in-memory。
+    /// K_SERVICE(Cloud Run) では Firestore（gcp の feature があるときだけ）、それ以外は in-memory。
     pub fn from_env() -> Self {
         let rp_id = std::env::var("FIDO_RP_ID").unwrap_or_else(|_| "localhost".into());
         let origin = std::env::var("FIDO_ORIGIN")
             .unwrap_or_else(|_| format!("http://{rp_id}"));
         let rp_name = std::env::var("FIDO_RP_NAME").unwrap_or_else(|_| "rust-idp FIDO2".into());
+        #[cfg(feature = "gcp")]
         let store: Arc<dyn FidoStore> = if std::env::var("K_SERVICE").is_ok() {
             let project = std::env::var("GCLOUD_PROJECT")
                 .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
                 .unwrap_or_else(|_| "fido2-8b943".into());
             let fs = Arc::new(crate::firestore::Firestore::new(project));
-            Arc::new(FirestoreFidoStore::new(fs))
+            Arc::new(store::FirestoreFidoStore::new(fs))
         } else {
             Arc::new(MemFidoStore::default())
         };
+        #[cfg(not(feature = "gcp"))]
+        let store: Arc<dyn FidoStore> = Arc::new(MemFidoStore::default());
         FidoState {
             rp_id,
             rp_name,

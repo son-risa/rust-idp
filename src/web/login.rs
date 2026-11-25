@@ -521,6 +521,7 @@ mod tests {
         a_late_verify_cannot_revive_a_consumed_interaction(provider(Arc::new(crate::store::MemoryStore::default()))).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_late_verify_cannot_revive_a_consumed_interaction_in_firestore() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -529,6 +530,7 @@ mod tests {
     }
 
     /// verify の読みと書きの間に resume が消費しても、書きは消費済みの interaction を作り直さない（CAS で負ける）。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_verify_racing_a_resume_does_not_revive_the_interaction_in_firestore() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;

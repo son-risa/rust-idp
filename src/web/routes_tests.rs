@@ -31,6 +31,16 @@ fn manifest_path(rel: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
+/// crates.io の package には docs/ を入れない。package から取り出した crate（`.cargo_vcs_info.json` が在る）で
+/// cargo test を回したときだけ、表との照合を飛ばす。repo の中で docs/routes.md が消えたときは飛ばさずに落とす。
+fn skipped_in_package() -> bool {
+    let skip = !manifest_path("docs/routes.md").is_file() && manifest_path(".cargo_vcs_info.json").is_file();
+    if skip {
+        eprintln!("skip: docs/routes.md は package に入らない");
+    }
+    skip
+}
+
 fn documented() -> Vec<Row> {
     let doc = std::fs::read_to_string(manifest_path("docs/routes.md")).expect("docs/routes.md");
     let after = doc.split("## 一覧").nth(1).expect("docs/routes.md に「## 一覧」が無い");
@@ -103,6 +113,9 @@ async fn probe(app: &Router, url: &str, origin: Option<&str>) -> (StatusCode, BT
 /// 表の path を全部叩き、受ける method の全部と門の有無が表と一致するかを見る。
 #[tokio::test]
 async fn every_documented_route_is_served_with_exactly_the_documented_methods_and_gate() {
+    if skipped_in_package() {
+        return;
+    }
     let app = router(Provider::new(format!("{ORIGIN}{BASE}")).with_base_path(BASE));
     // fido は FIDO_CONFORMANCE_ENABLED のときだけ router() が host の直下へ merge する。環境変数を触らずに同じものを組む。
     let fido = crate::fido::router(Arc::new(crate::fido::FidoState::from_env()));
@@ -199,6 +212,9 @@ fn without_test_mods(src: &str) -> String {
 /// 門の内と外は同じ置き場なので、表では 1 つ。門の外に同じ path を足すと src の数だけが増えて止まる。
 #[test]
 fn every_route_in_the_source_is_documented() {
+    if skipped_in_package() {
+        return;
+    }
     let in_source = routes_in_source();
     let mut in_doc: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for r in documented() {

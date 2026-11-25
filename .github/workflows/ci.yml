@@ -25,12 +25,17 @@ jobs:
           toolchain: 1.100.0 # rust-toolchain.toml と同じ版
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # gcp 無し（crates.io の既定）と gcp 付き（Cloud Run の本番）の両方を見る。
       - name: Clippy（警告が 1 つでもあれば止める）
         env:
           CARGO_BUILD_WARNINGS: deny
-        run: cargo clippy --locked --all-targets
-      - name: Test
+        run: |
+          cargo clippy --locked --all-targets
+          cargo clippy --locked --all-targets --features gcp
+      - name: Test（gcp 無し）
         run: cargo test --locked
+      - name: Test（gcp 付き）
+        run: cargo test --locked --features gcp
       - name: 前提の台帳の試験が実在するか（cargo test の一覧と照合）
         run: formal/check-ledger-tests.sh
 

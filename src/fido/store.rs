@@ -5,13 +5,16 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::es256::{b64url_decode, b64url_encode};
 use crate::fido::verify::CredKey;
-use crate::firestore::{self, Firestore};
-use serde_json::{json, Value};
+#[cfg(feature = "gcp")]
+use {
+    crate::es256::{b64url_decode, b64url_encode},
+    crate::firestore::{self, Firestore},
+    serde_json::{json, Value},
+    std::sync::Arc,
+};
 
 const CHALLENGE_TTL_SECS: u64 = 300;
 
@@ -95,19 +98,24 @@ impl FidoStore for MemFidoStore {
 
 /* ===== Firestore（Cloud Run） ===== */
 
+#[cfg(feature = "gcp")]
 const COL_CHALLENGES: &str = "fidoChallenges";
+#[cfg(feature = "gcp")]
 const COL_CREDENTIALS: &str = "fidoCredentials";
 
+#[cfg(feature = "gcp")]
 pub struct FirestoreFidoStore {
     fs: Arc<Firestore>,
 }
 
+#[cfg(feature = "gcp")]
 impl FirestoreFidoStore {
     pub fn new(fs: Arc<Firestore>) -> Self {
         Self { fs }
     }
 }
 
+#[cfg(feature = "gcp")]
 fn cred_to_fields(user: &str, c: &StoredCredential) -> Value {
     let mut f = serde_json::Map::new();
     f.insert("user".into(), firestore::s(user));
@@ -126,6 +134,7 @@ fn cred_to_fields(user: &str, c: &StoredCredential) -> Value {
     Value::Object(f)
 }
 
+#[cfg(feature = "gcp")]
 fn cred_from_fields(f: &Value) -> Option<StoredCredential> {
     let id = firestore::field_str(f, "credId")?.to_string();
     let sign_count = firestore::field_u64(f, "signCount").unwrap_or(0) as u32;
@@ -140,6 +149,7 @@ fn cred_from_fields(f: &Value) -> Option<StoredCredential> {
     Some(StoredCredential { id, key, sign_count })
 }
 
+#[cfg(feature = "gcp")]
 #[async_trait]
 impl FidoStore for FirestoreFidoStore {
     async fn save_challenge(&self, challenge: &str, st: ChallengeState) {

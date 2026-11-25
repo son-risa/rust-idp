@@ -8,7 +8,7 @@
 use axum::http::{header, HeaderMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Lang {
+pub enum Lang {
     En,
     Ja,
 }
@@ -97,6 +97,7 @@ pub(crate) fn localize(template: &str, lang: Lang) -> String {
 }
 
 /// 言語が分からない宛先（メール・push）向け。日本語の後に英語を並べる。
+#[cfg(any(feature = "gcp", test))]
 pub(crate) fn bilingual(template: &str) -> String {
     format!(
         "{} / {}",

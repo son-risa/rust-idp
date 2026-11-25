@@ -138,7 +138,7 @@ pub async fn revoke_admin(fs: &Firestore, account_id: &str) -> Result<RevokeAdmi
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

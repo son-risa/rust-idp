@@ -1,6 +1,7 @@
 //! 登録→ログイン→CIBA承認を fake Firestore（`firestore::fake_firestore`）に対して流し、account_id(UUID)が
 //! 一貫して使われ、email が sub/user.id/CIBA account に漏れないことを検証する。
 //! 以前は実 Firestore エミュレータを前提に `#[ignore]` で、CI では走っていなかった。
+#![cfg(feature = "gcp")]
 
 use std::assert_matches;
 use p256::elliptic_curve::Generate;

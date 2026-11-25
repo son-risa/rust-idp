@@ -234,7 +234,7 @@ async fn revoke_by_account(fs: &Firestore, col: &str, account_id: &str) -> Resul
     Ok(revoked)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

@@ -1187,7 +1187,7 @@ pub(super) async fn iat_show_once(
     .into_response()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

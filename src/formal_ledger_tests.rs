@@ -37,6 +37,16 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// crates.io の package には formal/ を入れない。package から取り出した crate（`.cargo_vcs_info.json` が在る）で
+/// cargo test を回したときだけ、この門を飛ばす。repo の中で formal/ が消えたときは飛ばさずに落とす。
+fn skipped_in_package() -> bool {
+    let skip = !root().join("formal").is_dir() && root().join(".cargo_vcs_info.json").is_file();
+    if skip {
+        eprintln!("skip: formal/ は package に入らない");
+    }
+    skip
+}
+
 fn read(rel: &str) -> String {
     std::fs::read_to_string(root().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
@@ -156,6 +166,9 @@ fn guard_exists(guard: &str) -> Result<(), String> {
 
 #[test]
 fn readme_premise_tables_are_generated_from_the_ledger() {
+    if skipped_in_package() {
+        return;
+    }
     let tables = premise_tables(&ledger()).unwrap_or_else(|e| panic!("{}", e.join("\n")));
     let readme = read("formal/README.md");
     let expected = readme_with_tables(&readme, &tables).unwrap_or_else(|e| panic!("{}", e.join("\n")));
@@ -171,6 +184,9 @@ fn readme_premise_tables_are_generated_from_the_ledger() {
 
 #[test]
 fn every_ledger_row_points_at_things_that_exist() {
+    if skipped_in_package() {
+        return;
+    }
     let harnesses: Vec<String> =
         read("formal/kani-harnesses.txt").lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
     let mut errors = Vec::new();
