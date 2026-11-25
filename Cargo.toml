@@ -40,6 +40,8 @@ subtle = "2"
 proptest = "1"
 # 差分テスト用の独立 COSE 実装（ピュア Rust, openssl/ring 非依存）。
 coset = "0.4"
+# router を通しで叩く試験（oneshot）。axum が既に引いている版。
+tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

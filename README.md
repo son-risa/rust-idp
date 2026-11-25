@@ -165,7 +165,7 @@ cargo deny check                            # 供給網（RUSTSEC 勧告 / ラ�
 | `FIDO_CONFORMANCE_ENABLED` | `/fido` conformance 面の有効化 |
 | `CIBA_RP_SECRET` | CIBA クライアントの secret |
 | `RESEND_API_KEY` | メール送信（Secret Manager） |
-| `FAPI1_X/Y/KID` / `FAPI2_X/Y/KID` | FAPI2 conformance 静的クライアント `fapi-1`/`fapi-2` の公開鍵（**設定時のみ登録 = ON/OFF 切替**） |
+| `FAPI1_X/Y/KID` / `FAPI2_X/Y/KID` | FAPI2 conformance 静的クライアント `fapi-1`/`fapi-2` の公開鍵（**設定時のみ登録 = ON/OFF 切替**。staging にだけ入れ、本番には入れない） |
 | `CONFORMANCE_FAPI_CALLBACK` | FAPI conformance の redirect 上書き |
 | `LOG_PSEUDONYM_KEY` | ログ内 sub の擬似化キー |
 
@@ -180,7 +180,7 @@ cargo deny check                            # 供給網（RUSTSEC 勧告 / ラ�
 | `demo-rp` | public + PKCE + DPoP | 内蔵デモ |
 | `mobile-rp` | public + PKCE + DPoP | Flutter モバイルアプリ（custom scheme redirect） |
 | `ciba-rp` | client_secret_basic | CIBA Consumption Device |
-| `fapi-1` / `fapi-2` | private_key_jwt + PAR + PKCE + DPoP | FAPI2 conformance（env 設定時のみ） |
+| `fapi-1` / `fapi-2` | private_key_jwt + PAR + PKCE + DPoP | FAPI2 conformance（env 設定時のみ。staging だけ） |
 | `dcr-*` | private_key_jwt | DCR で動的登録（Firestore 永続化） |
 
 ---

@@ -44,7 +44,7 @@ rust-op を Anthropic「[Zero Trust for AI Agents](https://claude.com/blog/zero-
 | **A3** | **TLS 終端の機密性**（Cloud Run / Firebase Hosting） | L4 | トークン平文窃取が容易（Tamarin は「鍵への暗号化」で抽象化） | TLS 強制・HSTS・証明書管理。issuer=`https://oidc.sonrisa.co.jp/oidc` |
 | **A4** | **暗号/エンコーディングライブラリの正当性**（p256, sha2, rsa, ed25519, base64, subtle `ct_eq`） | **L2** | 署名検証バイパス・タイミング漏洩等 | [`docs/crypto-assumptions.md`](./crypto-assumptions.md) で3分解: **(a) 設計安全性＝文献で確立・引用可（ECDSA/EdDSA/RSA の EUF-CMA, SHA-256 ROM/CR）/ (b) 実装正しさ＝クレート監査・テストベクタに依拠（深掘りは hax/Aeneas）/ (c) 定数時間＝subtle に依拠**。cargo-deny（SHA ピン）で供給網監査。残余 (b)(c) は GAP |
 | **A5** | **DPoP 時刻スキュー ≤60s / jti TTL 有界** | L4＋L3 | リプレイ窓の拡大・jti 保持の無限肥大 | clock 同期。jti 保持窓は **L3 `jti_ttl_is_bounded` で ≤3600s 有界を証明済** |
-| **A6** | **試験面の本番排除**（`CONFORMANCE_CLIENTS_ENABLED` / `FIDO_CONFORMANCE_ENABLED`） | L4 | 試験用クライアント/エンドポイントが本番で有効化 | 本番デプロイで両フラグ無効を確認（現リビジョンで `/fido/*`=404、試験クライアント排除） |
+| **A6** | **試験面の本番排除**（`FAPI{1,2}_X/Y/KID` / `FIDO_CONFORMANCE_ENABLED`） | L4 | 試験用クライアント/エンドポイントが本番で有効化 | 試験用 client `fapi-1`・`fapi-2` は `FAPI{1,2}_X/Y/KID` を入れたときだけ登録される。本番からは 2026-11-25 に外し、staging にだけ残す（本番の `/authorize?client_id=fapi-1` が `invalid_client`）。`/fido/*` は `FIDO_CONFORMANCE_ENABLED` 未設定で 404 |
 | **A7** | **client_assertion exp 上限（3600s）＋ jti 単回** | L3＋L1 | 長命 assertion のリプレイ | **L3 `exp_in_window` で窓検査＋オーバーフロー安全を証明済**。jti 単回は A1 に依存 |
 
 > この台帳が「前提を明示し、必要な運用を導出する」という本来ゴールの中身。**proof は前提付き**であり、前提（A1–A7）は運用（L4）と仮定（L2）で支える、という構造を崩さないこと。

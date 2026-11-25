@@ -258,7 +258,34 @@ pub fn router(provider: Provider) -> Router {
         .route("/ciba/{auth_req_id}/passkey-options", post(ciba::ciba_approve_options))
         .route("/ciba/{auth_req_id}/approve", post(ciba::ciba_approve))
         .route("/ciba/{auth_req_id}/reject", post(ciba::ciba_reject))
-        // 管理者向け（sid セッション + admins/{account_id} の存在で判定）。
+        // メール確認つきユーザー登録（Web HTML フロー + ネイティブ JSON API）。
+        // OAuth の「クライアント登録(DCR)」と区別するため /signup/* に置く。
+        .route("/signup", get(register::register_form).post(register::register_submit))
+        .route("/signup/verify", get(register::verify_form))
+        .route("/signup/email-challenge", post(register::register_email_challenge))
+        .route("/signup/verify-email", post(register::register_verify_email))
+        .route("/signup/passkey/options", post(register::register_passkey_options))
+        .route("/signup/passkey/verify", post(register::register_passkey_verify))
+        // 招待: RP（INVITE_CLIENT_IDS の confidential client）が登録リンクを発行し、受け手は /invite で登録する。
+        .route("/account", get(account::account_page))
+        .route("/account/signin/options", post(account::signin_options))
+        .route("/account/signin/verify", post(account::signin_verify))
+        .route("/account/passkeys/options", post(account::add_options))
+        .route("/account/passkeys/verify", post(account::add_verify))
+        .route("/account/passkeys/delete", post(account::delete_passkey))
+        .route("/recover", get(recover::recover_page).post(recover::recover_submit))
+        .route("/recover/options", post(recover::recover_options))
+        .route("/recover/verify", post(recover::recover_verify))
+        .route("/invites", post(register::invite_create))
+        .route("/accounts/disable", post(register::account_disable))
+        .route("/invite", get(register::invite_page))
+        // ブラウザで完結する RP デモ。
+        .route("/", get(pages::demo_start))
+        .route("/callback", get(pages::demo_callback));
+
+    // 管理者向け（sid セッション + admins/{account_id} の存在で判定）。
+    // 自分の origin から来た POST だけを通す（CSRF の守り）。
+    let admin = Router::new()
         .route("/admin/whoami", get(admin::whoami))
         .route("/admin", get(admin::admin_home))
         .route("/admin/users", get(admin::users_list))
@@ -285,32 +312,9 @@ pub fn router(provider: Provider) -> Router {
         .route("/admin/iats/new", get(admin::iat_mint_form).post(admin::iat_mint_submit))
         .route("/admin/iats/{hash}/revoke", post(admin::iat_revoke))
         .route("/admin/iats/flash/{flash_id}", get(admin::iat_show_once))
-        // メール確認つきユーザー登録（Web HTML フロー + ネイティブ JSON API）。
-        // OAuth の「クライアント登録(DCR)」と区別するため /signup/* に置く。
-        .route("/signup", get(register::register_form).post(register::register_submit))
-        .route("/signup/verify", get(register::verify_form))
-        .route("/signup/email-challenge", post(register::register_email_challenge))
-        .route("/signup/verify-email", post(register::register_verify_email))
-        .route("/signup/passkey/options", post(register::register_passkey_options))
-        .route("/signup/passkey/verify", post(register::register_passkey_verify))
-        // 招待: RP（INVITE_CLIENT_IDS の confidential client）が登録リンクを発行し、受け手は /invite で登録する。
-        .route("/account", get(account::account_page))
-        .route("/account/signin/options", post(account::signin_options))
-        .route("/account/signin/verify", post(account::signin_verify))
-        .route("/account/passkeys/options", post(account::add_options))
-        .route("/account/passkeys/verify", post(account::add_verify))
-        .route("/account/passkeys/delete", post(account::delete_passkey))
-        .route("/recover", get(recover::recover_page).post(recover::recover_submit))
-        .route("/recover/options", post(recover::recover_options))
-        .route("/recover/verify", post(recover::recover_verify))
-        .route("/invites", post(register::invite_create))
-        .route("/accounts/disable", post(register::account_disable))
-        .route("/invite", get(register::invite_page))
-        // ブラウザで完結する RP デモ。
-        .route("/", get(pages::demo_start))
-        .route("/callback", get(pages::demo_callback));
+        .route_layer(axum::middleware::from_fn_with_state(shared.clone(), admin_same_origin));
 
-    let inner = inner.with_state(shared.clone());
+    let inner = inner.merge(admin).with_state(shared.clone());
 
     // メールリンク /r はトップレベル（base_path 非依存、AASA の paths と一致）。
     let magic = Router::new()
@@ -350,8 +354,57 @@ pub fn router(provider: Provider) -> Router {
     };
     // 全リクエストに request_id を付与し、構造化ログを相関させる（ZT Observability Foundation）。
     app.layer(axum::middleware::from_fn(localize_rejections))
+        .layer(axum::middleware::from_fn(security_headers))
         .layer(axum::middleware::from_fn(drop_encoded_cookie_names))
         .layer(axum::middleware::from_fn(request_trace))
+}
+
+/// 管理画面の状態を変える要求は、自分の origin の画面から送られたものだけを通す。
+/// `__Host-sid` は SameSite=Lax なので、兄弟のサブドメインからの POST にも cookie が付く。
+/// ブラウザは form の POST に Origin を付ける。付かない古い形には Referer で代える。
+async fn admin_same_origin(
+    State(p): State<Arc<Provider>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if req.method() != axum::http::Method::GET
+        && req.method() != axum::http::Method::HEAD
+        && !from_own_origin(req.headers(), &p.origin())
+    {
+        tracing::warn!(event = "admin_cross_origin_rejected", path = %req.uri().path());
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    next.run(req).await
+}
+
+fn from_own_origin(h: &HeaderMap, origin: &str) -> bool {
+    if let Some(o) = h.get(header::ORIGIN) {
+        return o.to_str().is_ok_and(|o| o == origin);
+    }
+    h.get(header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|r| r == origin || r.strip_prefix(origin).is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// 全応答に HSTS を付ける。includeSubDomains は付けない（同じ親ドメインの他の host に効かせない）。
+/// HTML には、inline の script と style を壊さない範囲の CSP だけを付ける。
+async fn security_headers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    if !h.contains_key(header::STRICT_TRANSPORT_SECURITY) {
+        h.insert(header::STRICT_TRANSPORT_SECURITY, header::HeaderValue::from_static("max-age=31536000"));
+    }
+    let is_html = h
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    if is_html && !h.contains_key(header::CONTENT_SECURITY_POLICY) {
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_static("frame-ancestors 'none'; base-uri 'none'; object-src 'none'"),
+        );
+    }
+    resp
 }
 
 /// 名前に `%` を含む cookie を、ハンドラが読む前に Cookie の見出しから落とす。
@@ -692,6 +745,73 @@ async fn authenticate_token(
         }
     }
     Ok(at)
+}
+
+#[cfg(test)]
+mod browser_guard_tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    fn app() -> Router {
+        router(Provider::new("https://idp.example/oidc".to_string()).with_base_path("/oidc"))
+    }
+
+    async fn post_admin(origin: Option<&str>, referer: Option<&str>) -> StatusCode {
+        let mut req = axum::http::Request::post("/oidc/admin/users/acc-1/disable");
+        if let Some(o) = origin {
+            req = req.header(header::ORIGIN, o);
+        }
+        if let Some(r) = referer {
+            req = req.header(header::REFERER, r);
+        }
+        app().oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    /// 他の origin からの POST、どこから来たか分からない POST は、管理者の確かめより前に断る。
+    #[tokio::test]
+    async fn an_admin_post_from_another_origin_is_refused() {
+        assert_eq!(post_admin(None, None).await, StatusCode::FORBIDDEN);
+        assert_eq!(post_admin(Some("https://test.idp.example"), None).await, StatusCode::FORBIDDEN);
+        assert_eq!(post_admin(Some("null"), None).await, StatusCode::FORBIDDEN);
+        assert_eq!(post_admin(None, Some("https://idp.example.evil/oidc/admin")).await, StatusCode::FORBIDDEN);
+        // Origin があれば Referer より先に見る。
+        assert_eq!(
+            post_admin(Some("https://evil.example"), Some("https://idp.example/oidc/admin")).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// 自分の origin からなら門を通り、その先の管理者の確かめ（ここではサインインへの案内）に進む。
+    #[tokio::test]
+    async fn an_admin_post_from_its_own_origin_passes_the_gate() {
+        for s in [
+            post_admin(Some("https://idp.example"), None).await,
+            post_admin(None, Some("https://idp.example/oidc/admin/users/acc-1")).await,
+        ] {
+            assert!(s != StatusCode::FORBIDDEN && s != StatusCode::NOT_FOUND, "{s}");
+        }
+    }
+
+    #[tokio::test]
+    async fn html_gets_hsts_and_a_frame_ban_and_json_gets_only_hsts() {
+        let html = app()
+            .oneshot(axum::http::Request::get("/oidc/signup").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(html.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
+        let csp = html.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+        let json = app()
+            .oneshot(
+                axum::http::Request::get("/oidc/.well-known/openid-configuration")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(json.headers()[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
+        assert!(!json.headers().contains_key(header::CONTENT_SECURITY_POLICY));
+    }
 }
 
 #[cfg(test)]
