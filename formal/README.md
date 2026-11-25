@@ -493,6 +493,131 @@ Present → 新しい RT での Rotate の続き）が示している。
 
 ---
 
+## モデル #11: 合成（認可コード + PKCE + client 認証 + Bearer。本番の主な RP の形）
+
+#6（`composition_code_dpop.spthy`）の `comp_resource_secrecy` は DPoP の束縛（cnf）を前提にしていて、cnf を外した
+`composition_NEG_no_cnf.spthy` は破れる。本番の主な RP は ConfidentialSecret の profile（`client_secret_basic` + PKCE S256、
+PAR なし・DPoP なし・Bearer）で動いているので、#6 は当てはまらない。#11 はその形を、そのまま書いたモデル。
+client 認証を private_key_jwt に変えた形（PAR と DPoP は入れない）も、同じ骨組みの変種として並べる。
+
+| file | client 認証 | 違う所 |
+|---|---|---|
+| `composition_code_bearer_secret.spthy` | `client_secret_basic` | client は毎回秘密そのものを TLS の中で送る。AS は秘密のハッシュだけを持つ |
+| `composition_code_bearer_pkjwt.spthy` | `private_key_jwt` | client は毎回新しい jti の assertion を送る。AS は公開鍵だけを持ち、jti を 1 回だけ受ける |
+| `composition_bearer_NEG_no_pkce.spthy` | `client_secret_basic` | NEG 版。token endpoint の PKCE の検査を外す |
+
+2 つの変種は、client の登録・償還・token endpoint の client 認証の検査・漏れの規則だけが違い、他の規則と lemma の式は同じ。
+変種を file で分けたのは、既存のモデルが public と confidential、本体と NEG を file で分けているのに合わせたため。
+
+モデルの作り（#1・#6 との違い）:
+- token endpoint と RS の TLS を、AS の公開鍵への暗号化と、client が作る応答用の鍵で表す（サーバ認証の TLS）。
+  #1 の「client の鍵への暗号化」より実際の TLS に近く、`client_secret_basic` の秘密を通信路に載せられる。
+- 認可コードはフロントチャネルに `Out` する（横取りできる）。redirect_uri の完全一致は効いていない最悪の場合として置く。
+- 利用者は、フロントチャネルに来た client C 宛ての要求なら、攻撃者が始めた要求にも passkey で同意する。
+- ID token は (iss, aud=C, sub=U, nonce, at_hash) に OP の鍵で署名する。client は署名・aud・nonce を確かめる。
+- RS（`/userinfo` などの token で守る口）は Bearer。token を持って来た者に、その者の TLS の鍵でリソースを返す。
+- 漏れの規則を 4 つ置く: client の秘密（鍵）の漏れ、処理を終えた token 要求の記録の漏れ、client が持つ Bearer token の漏れ、
+  利用者の passkey の漏れ。lemma の条件にどれが出てくるかが、その性質が何に頼っているかを表す。
+
+### 示す性質（lemma。両方の変種で verified）
+| lemma | 主張 | 条件（漏れてもよいもの / 漏れてはいけないもの） |
+|---|---|---|
+| `executable` | 正直な流れ（同意 → code → token → RS）が最後まで通る | 漏れなし |
+| `intercepted_code_unusable` | 正直な client の要求から出た code を横取りしても、その code の token を攻撃者は知らない（PKCE） | client の秘密（鍵）が漏れていても成り立つ。Bearer token の漏れだけを除く |
+| `token_secrecy` | 正直な client が受け取った access token と ID token を、攻撃者は知らない | 同上 |
+| `no_injection` | 正直な client が要求 (v, n) で受け取った token は、AS がこの client に、challenge h(v) と nonce n に結び付いた code に対して出したもの。別の要求の code・token・ID token を混ぜられない | 条件なし（どの漏れの下でも） |
+| `consent_agreement` | その token の利用者 U は、まさにこの要求 (C, h(v), n) に同意している | U の passkey の漏れを除く |
+| `client_auth_sound` | AS が C として認めた token 要求は、C 自身が送ったもの（なりすましへの耐性）。pkjwt では assertion 単位で、「AS が受けた (jti, code) の組は、C 自身がその code の償還のために作ったもの」 | secret: 秘密が保管庫からも記録からも漏れない限り。pkjwt: 秘密鍵が漏れない限り（記録の漏れは条件に無い） |
+| `resource_secrecy` | 利用者のリソースは攻撃者に漏れない | 利用者の passkey、client の秘密（鍵）、記録、Bearer token のどれも漏れない限り |
+
+### 示せない性質（exists-trace の lemma。verified = 攻撃の跡が在る = その性質は成り立たない）
+| lemma | 変種 | 示すこと |
+|---|---|---|
+| `limit_bearer_theft_usable` | 両方 | 漏れた Bearer token は、client の秘密も passkey も無事なまま、そのまま使える（DPoP が無いため） |
+| `limit_secret_leak_impersonation` | secret | 共有の秘密が漏れると、C になりすまして token endpoint を通れる |
+| `limit_logged_secret_is_reusable` | secret | 処理を終えた token 要求の記録が漏れると、攻撃者は秘密そのものを知る（毎回同じ値を送るため）。あとは上と同じ |
+| `limit_secret_leak_resource` | secret | 秘密が漏れ、攻撃者が始めた要求に利用者が同意すると、利用者のリソースが漏れる（PKCE は攻撃者自身の verifier なので止めない） |
+| `limit_key_leak_impersonation` | pkjwt | 秘密鍵が漏れると、C になりすまして token endpoint を通れる |
+| `limit_key_leak_resource` | pkjwt | 秘密鍵が漏れ、利用者が攻撃者の要求に同意すると、利用者のリソースが漏れる |
+
+`limit_logged_secret_is_reusable` は、はじめ「記録の漏れ → C 以外が token endpoint を通る」を 1 つの exists-trace に書いたが、
+手元で 2 分を超えても跡が出なかったので、「記録から秘密そのものを知る」に分けた。なりすましへのつながりは
+`limit_secret_leak_impersonation` が示す。
+
+### 検証結果（Tamarin 1.12.0 / maude 3.5.1, 2026-11-25 実測。手元の Apple Silicon で 1 つずつ）
+| モデル | 結果 | 時間 |
+|---|---|---|
+| `composition_code_bearer_secret.spthy` | 示す性質 7 つ（`executable` を含む）と示せない性質 4 つが、すべて **verified** | 約 45 秒 |
+| `composition_code_bearer_pkjwt.spthy` | 示す性質 7 つと示せない性質 3 つが、すべて **verified** | 約 40 秒 |
+| `composition_bearer_NEG_no_pkce.spthy` | `intercepted_code_unusable`（16 steps）と `no_injection`（10 steps）が **falsified**。`executable` は verified | 約 12 秒 |
+
+派生の検査（wellformedness の 1 つ）が手元でも 3〜4 秒かかり、既定の 5 秒の打ち切りに近いので、`check.sh` は
+`--derivcheck-timeout=60` で走らせる。
+
+jti の単回（`OnceJti`）を外した NEG 版（記録から漏れた assertion を、攻撃者が自分の要求で得た別の code に使い回す）では、
+`client_auth_sound` が **falsified（29 steps）** になる。つまり pkjwt の `client_auth_sound` は jti の単回（P-AJTI）に頼っている。
+ただし、全 lemma（`executable` と `client_auth_sound`）を証明すると手元で約 670 秒かかり、CI の tamarin の job の上限（15 分）を超えるおそれがあるので、
+NEG 版は formal/ に置いていない（`--prove=client_auth_sound` に絞ると約 265 秒）。作り方は、`composition_code_bearer_pkjwt.spthy` から
+`OnceJti` の action と restriction を外すだけ。コードの側の jti の単回は試験 `client_auth::tests::pkjwt_rejects_jti_replay` が見る。
+
+→ **PKCE は、client の秘密が漏れた場合の横取りと注入を止める**。NEG 版で外すと `intercepted_code_unusable` と `no_injection`
+が破れる。#1 では「confidential client では client 認証と PKCE は冗長な多層防御」としたが、秘密の漏れを入れると、
+PKCE が個別に効く場面がはっきりする。
+→ **2 つの client 認証の差は、送った値が後から漏れた場合に出る**。`client_secret_basic` は毎回同じ秘密を送るので、
+記録（前段のログ、RP の側の記録）に残れば秘密が漏れたのと同じになる。`private_key_jwt` は jti を 1 回だけ受けるので、
+記録から漏れた assertion では通れない（`client_auth_sound` の条件に記録の漏れが無い）。保管庫から鍵が漏れた場合は、どちらも同じく破れる。
+ただしこれは、private_key_jwt の client が Basic では通らないこと（P-NOLEGACYSECRET）を前提にしている。いまのコードの
+`ClientSecretBasic::authenticate`（`src/client_auth.rs`）は登録された方式を見ないので、移した client に秘密のハッシュが残っていれば、
+漏れた秘密で Basic のまま通る。実装は本番の主な RP の移行の後で直す予定。
+→ **Bearer は盗まれれば使える**。これは仕様どおりで、防ぐのは DPoP（#6）の役目。この形では、access token の寿命（900 秒）と、
+RP の側の保管が守りになる。
+
+### 表に出た前提 → rust-op の担保
+
+client_secret_basic の変種:
+<!-- premises: composition_code_bearer_secret.spthy -->
+| ID | 前提（抽象） | rust-op の担保 |
+|---|---|---|
+| P-VERIFIER | PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない） | `CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる） |
+| P-TLS | token endpoint と RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵） | TLS（Cloud Run のドメインのマッピング）。HSTS |
+| P-ENVSEP | ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない | Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事 |
+| P-ATSTORE | Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`） | RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける |
+| P-CSECRET | client の共有の秘密は client の保管庫から**漏れない**（漏れればなりすませる: `limit_secret_leak_impersonation`） | RP の秘密の保管（Secret Manager など）。rust-idp は秘密のハッシュだけを持つ（`dcr::hash_token`） |
+| P-SECRETCMP | AS は提示された秘密の**ハッシュ**を、登録したハッシュと比べる（`h(cs) = hs`） | `ClientSecretBasic::authenticate`（`hash_token` を定数時間で比べる。平文は保存しない） |
+| P-NOCREDLOG | token 要求の `Authorization` の見出し（秘密そのもの）が、処理の後も**記録に残らない**（残れば秘密が漏れたのと同じ: `limit_logged_secret_is_reusable`） | rust-idp は見出しを記録しない。前段（Cloud Run のリクエストログ）と RP の側の記録の設定に依る |
+<!-- /premises -->
+
+private_key_jwt の変種:
+<!-- premises: composition_code_bearer_pkjwt.spthy -->
+| ID | 前提（抽象） | rust-op の担保 |
+|---|---|---|
+| P-VERIFIER | PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない） | `CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる） |
+| P-TLS | token endpoint と RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵） | TLS（Cloud Run のドメインのマッピング）。HSTS |
+| P-ENVSEP | ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない | Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事 |
+| P-ATSTORE | Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`） | RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける |
+| P-CPRIVKEY | client の秘密鍵は client の保管庫から**漏れない**（漏れればなりすませる: `limit_key_leak_impersonation`） | RP の鍵の保管。rust-idp は公開鍵（jwks / jwks_uri）だけを持つ |
+| P-AJTI | client_assertion の jti は **1 回だけ**受ける（記録から漏れた assertion を使い回させない） | `PrivateKeyJwt::authenticate` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ |
+| P-NOLEGACYSECRET | private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない） | **いまは担保が無い**。`ClientSecretBasic::authenticate` は登録された `token_endpoint_auth_method` を見ず、`client_secret` のハッシュが残っていれば Basic で通す。private_key_jwt に移した client にハッシュが残ると、漏れた秘密でなりすませる。本番の主な RP の移行の後で、登録された方式だけを受けるように直す予定 |
+<!-- /premises -->
+
+- （攻撃者モデル）フロントチャネルを完全に支配し、認可コードを横取りできる（担保: —。redirect_uri の完全一致は効いていない場合として置く）
+- 認可コードの単回（P-SINGLEUSE）は、#11 のどの lemma も頼っていないので、#11 の前提の表に置かない（#1 が見る）。
+- 利用者の同意は passkey の署名（#4 の前提）。ID token の検査（署名・aud・nonce）は RP の側の実装で、このモデルでは TLS と PKCE が先に
+  注入を止めるため、単独では効いていない（ID token の署名の効き目は #5 `id_token.spthy` が見る）
+
+### 限界
+- 時刻（code の 60 秒、assertion の exp、token の 900 秒）は記号モデルの外。assertion の exp の窓は Kani の `exp_in_window_spec` が見る。
+- 記録の漏れ（`Leak_TokenRequestLog`）は、AS が要求を処理して token を出した後だけを置いている。処理の前の漏れ（前段で記録され、
+  AS に届く前に読まれる）と、断られた要求の記録の漏れは置いていない。
+- 同意は、モデルでは要求ごとの passkey の署名（`U_Consent`）で表す。実装では、ログイン済みの session（SSO）が要求ごとの passkey の
+  代わりをする。session の盗難や、session がある間に攻撃者の要求へ黙って同意が出る場合は、モデルの外。
+- 利用者の同意の画面のすり替え（利用者が偽の client に同意する）は外。client は登録された名前だけで区別する。
+- refresh token は外（ローテーションと系列の失効は #10 が見る）。
+- private_key_jwt の変種（PAR・DPoP なし）は、いまの DCR の profile には無い組み合わせ（ConfidentialKey は PAR と DPoP を必ず付ける）。
+  移すときは、profile を足すか、client の記録の旗を個別に決める。
+
+---
+
 ## ロードマップ達成状況
 **#1 ✅ #2 ✅ #3 ✅ #4 ✅ #5 ✅ #6 ✅ #7 ✅ #8 ✅** — 全モデルが Tamarin 1.12.0 で verified、各前提の必要性も
 NEG 変種の falsify で実証。各モデルが「防げる攻撃 ＋ 必要前提（→ rust-op の運用要件）」を1セット産んだ。
