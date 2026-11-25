@@ -15,7 +15,7 @@ use crate::{
 /// （Store/CibaStore/DPoP/private_key_jwt/registration 直叩き）だけをエミュレータへ向けて
 /// 有効化する。KMS・Secret Manager は実 GCP 前提なので K_SERVICE 限定のまま
 /// （ローカルは Provider::new の既定 ephemeral 鍵で動かす）。Resend は RESEND_API_KEY と
-/// MAIL_FROM が両方あれば手元でも使い、無ければ LogMailer。
+/// MAIL_FROM が両方あれば使い、無ければ LogMailer。
 /// どちらも無ければ何も足さずに返す。
 pub async fn configure_from_env(mut provider: Provider) -> Provider {
     let use_firestore =
@@ -134,32 +134,11 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
             .with_ciba(std::sync::Arc::new(ciba::FirestoreCibaStore::new(fs.clone())))
             .with_firestore(fs);
         if let Ok(key) = std::env::var("RESEND_API_KEY") {
-            // 互換: 本番の Cloud Run に MAIL_FROM が入るまでは、今までの差出人に落とす。手元（エミュレータ）では
-            // 落とさず Resend を使わない。メールはログに出るので、リンクはそこから拾える。
-            let from = match std::env::var("MAIL_FROM") {
-                Ok(from) => Some(from),
-                Err(_) if std::env::var("K_SERVICE").is_ok() => {
-                    tracing::warn!("MAIL_FROM is not set; using the legacy sender");
-                    Some("rust-idp <noreply@sonrisa.co.jp>".into())
-                }
-                Err(_) => {
-                    tracing::warn!("RESEND_API_KEY is set but MAIL_FROM is not; mail goes to the log instead of Resend");
-                    None
-                }
-            };
-            if let Some(from) = from {
-                provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from)));
+            // 差出人が無ければ Resend は使わず、メールはログに出す（リンクはそこから拾える）。
+            match std::env::var("MAIL_FROM") {
+                Ok(from) => provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from))),
+                Err(_) => tracing::warn!("RESEND_API_KEY is set but MAIL_FROM is not; mail goes to the log instead of Resend"),
             }
-        }
-        // 互換: 本番の Cloud Run に APP_* が入るまでは、今までのアプリ（fido2demo）を出す。
-        if provider.mobile_app.is_none() && std::env::var("K_SERVICE").is_ok() {
-            tracing::warn!("APP_NAME / APP_SCHEME / APP_ANDROID_PACKAGE / APPLE_APP_ID are not set; using the legacy app");
-            provider = provider.with_mobile_app(crate::MobileApp {
-                name: "fido2demo".into(),
-                scheme: "jp.co.sonrisa.fido2demo".into(),
-                android_package: "jp.co.sonrisa.fido2demo".into(),
-                apple_app_id: "RA5A5W7PJB.jp.co.sonrisa.fido2demo".into(),
-            });
         }
     }
     provider

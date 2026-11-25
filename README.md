@@ -53,7 +53,7 @@ cargo deny check            # advisories and licences
 | `FIDO_CONFORMANCE_ENABLED` | `/fido` conformance 面の有効化 |
 | `CIBA_RP_SECRET` | CIBA クライアントの secret |
 | `RESEND_API_KEY` | メール送信（Secret Manager） |
-| `MAIL_FROM` | Resend で送るメールの差出人（例 `rust-idp <noreply@example.com>`） |
+| `MAIL_FROM` | Resend で送るメールの差出人（例 `rust-idp <noreply@example.com>`）。無ければ Resend を使わず、メールはログに出る |
 | `APP_NAME` / `APP_SCHEME` / `APP_ANDROID_PACKAGE` / `APPLE_APP_ID` | メールのリンクから passkey の登録を渡すネイティブのアプリ（表示名・custom scheme・Android の package・`<Team ID>.<Bundle ID>`）。4 つが揃ったときだけ、登録の画面のアプリへの誘導と AASA（`/.well-known/apple-app-site-association`）を出す |
 | `FAPI1_X/Y/KID` / `FAPI2_X/Y/KID` | FAPI2 conformance 静的クライアント `fapi-1`/`fapi-2` の公開鍵（**設定時のみ登録 = ON/OFF 切替**。staging にだけ入れ、本番には入れない） |
 | `CONFORMANCE_FAPI_CALLBACK` | FAPI conformance の redirect 上書き |
