@@ -13,6 +13,9 @@ use tower::ServiceExt;
 const ORIGIN: &str = "https://idp.example";
 const BASE: &str = "/oidc";
 
+/// router() が `base` の経路を BASE_PATH の下へ置く nest。
+const KNOWN_NEST: &str = ".nest(&base_path, inner)";
+
 /// 文字列でない path を `.route(` に渡している箇所と、表での書き方。
 const NON_LITERAL_PATHS: &[(&str, &str)] = &[("&format!(\"{base_path}/\")", "{BASE_PATH}/")];
 
@@ -30,9 +33,15 @@ fn manifest_path(rel: &str) -> std::path::PathBuf {
 
 fn documented() -> Vec<Row> {
     let doc = std::fs::read_to_string(manifest_path("docs/routes.md")).expect("docs/routes.md");
-    let table = doc.split("## 一覧").nth(1).expect("docs/routes.md に「## 一覧」が無い");
+    let after = doc.split("## 一覧").nth(1).expect("docs/routes.md に「## 一覧」が無い");
+    let table = after.split("## 注記").next().unwrap().trim();
+    // 表の途中の空行や地の文で、後ろの行を黙って捨てないよう、「## 注記」まで表の行だけが続くことを求める。
+    let lines: Vec<&str> = table.lines().collect();
+    if let Some(bad) = lines.iter().find(|l| !l.starts_with('|')) {
+        panic!("docs/routes.md の表が「## 注記」の前で途切れている: {bad:?}");
+    }
     let mut rows = Vec::new();
-    for line in table.lines().skip_while(|l| !l.starts_with('|')).take_while(|l| l.starts_with('|')).skip(2) {
+    for line in lines.into_iter().skip(2) {
         let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
         assert_eq!(cells.len(), 7, "列の数が違う: {line}");
         assert!(["base", "top", "fido"].contains(&cells[0]), "置き場が分からない: {line}");
@@ -139,6 +148,13 @@ fn routes_in_source() -> BTreeMap<String, Vec<String>> {
             for bad in ["route_service(", "nest_service(", "fallback_service("] {
                 assert!(!code.contains(bad), "{shown} の {bad} は、この試験では経路を拾えない。拾い方を足す");
             }
+            // 経路の前に接頭辞を付ける nest は、BASE_PATH の下へ置くこの 1 つだけを知っている。
+            for (i, _) in code.match_indices(".nest(") {
+                assert!(
+                    code[i..].starts_with(KNOWN_NEST),
+                    "{shown}: 知らない `.nest(` が在る。この試験は接頭辞の付いた path を拾えない。拾い方を足す"
+                );
+            }
             for (i, _) in code.match_indices(".route(") {
                 let arg = code[i + ".route(".len()..].trim_start();
                 let path = match arg.strip_prefix('"') {
@@ -178,18 +194,32 @@ fn without_test_mods(src: &str) -> String {
 }
 
 /// 表に無い経路を src に足したら（または表に在る経路を src から消したら）止める。
+/// path が同じでも、置き場（base・top・fido）や門の内外が違えば `.route(` は別に要る。
+/// path ごとに、src に現れる数と、表でその path を持つ置き場の数とを比べる。
+/// 門の内と外は同じ置き場なので、表では 1 つ。門の外に同じ path を足すと src の数だけが増えて止まる。
 #[test]
 fn every_route_in_the_source_is_documented() {
     let in_source = routes_in_source();
-    let in_doc: BTreeSet<String> = documented().into_iter().map(|r| r.path).collect();
-    let undocumented: Vec<String> = in_source
-        .iter()
-        .filter(|(p, _)| !in_doc.contains(*p))
-        .map(|(p, files)| format!("{p}（{}）", files.join(", ")))
-        .collect();
-    let missing: Vec<&String> = in_doc.iter().filter(|p| !in_source.contains_key(*p)).collect();
-    assert!(
-        undocumented.is_empty() && missing.is_empty(),
-        "docs/routes.md に無い経路: {undocumented:?}\nsrc に無い経路: {missing:?}"
-    );
+    let mut in_doc: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for r in documented() {
+        in_doc.entry(r.path).or_default().insert(r.place);
+    }
+    let mut errors = Vec::new();
+    for (path, files) in &in_source {
+        let places = in_doc.get(path).map_or(0, BTreeSet::len);
+        if files.len() != places {
+            errors.push(format!(
+                "{path}: src に {} 回（{}）、表の置き場は {places} つ（{:?}）",
+                files.len(),
+                files.join(", "),
+                in_doc.get(path).cloned().unwrap_or_default()
+            ));
+        }
+    }
+    for (path, places) in &in_doc {
+        if !in_source.contains_key(path) {
+            errors.push(format!("{path}: 表の置き場は {places:?}、src に無い"));
+        }
+    }
+    assert!(errors.is_empty(), "docs/routes.md と src の `.route(` が食い違う:\n{}", errors.join("\n"));
 }

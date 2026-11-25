@@ -18,8 +18,11 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
   - cookie（sid）: `__Host-sid` の SSO セッション。「確かめ済み」は、最近 passkey で本人と確かめたセッションに限る。
   - cookie（印）: `/authorize` が張る `__Host-ix_{uid}`（ログインを始めたブラウザの印）。
   - メールの token: メールのリンクに載る一度きりの token。
+  - 招待の token: RP が `/invites` で発行させた招待のリンクに載る token。
+  - Initial Access Token: 管理者が管理画面（`/admin/iats/new`）で発行する、client の登録（`/oauth/register`）に一度だけ使える Bearer の token。
   - 管理者: cookie（sid）に加え、そのアカウントが `admins/{account_id}` に在ること（`require_admin`）。
 - **状態を変える**: 保存した値を作る・変える・消す、またはメールを送るなら「はい」。WebAuthn の challenge を保存するだけのものも「はい」。
+  読むだけに見える経路でも、ついでに期限切れを掃除して書き込むもの（`/ciba/pending`・`/ciba/history` の `sweep_expired`）は「はい」。
 - **門**: `admin_same_origin`（GET と HEAD 以外は、自分の origin から来た要求だけを通す）が掛かっていれば「はい」。
 
 ## 一覧
@@ -31,7 +34,7 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | GET | `/authorize` | ブラウザ（RP から） | 無し（cookie（sid）があれば SSO に使う） | はい | いいえ |
 | base | GET | `/authorize/resume` | ブラウザ | cookie（印） | はい | いいえ |
 | base | GET | `/login/{uid}` | ブラウザ | cookie（印） | いいえ | いいえ |
-| base | GET | `/login/{uid}/cancel` | ブラウザ | cookie（印） | はい | いいえ |
+| base | GET | `/login/{uid}/cancel` | ブラウザ | cookie（印） | いいえ | いいえ |
 | base | POST | `/login/{uid}/passkey/options` | ブラウザ | 無し | はい | いいえ |
 | base | POST | `/login/{uid}/passkey/verify` | ブラウザ | passkey、cookie（印） | はい | いいえ |
 | base | POST | `/token` | RP | client 認証、DPoP（client が dpop_bound なら必須） | はい | いいえ |
@@ -47,8 +50,8 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | PUT | `/me/profile` | RP | access token | はい | いいえ |
 | base | POST | `/backchannel-authentication` | RP | client 認証 | はい | いいえ |
 | base | GET | `/ciba` | ブラウザ | cookie（sid） | いいえ | いいえ |
-| base | GET | `/ciba/pending` | アプリ | access token | いいえ | いいえ |
-| base | GET | `/ciba/history` | アプリ | access token | いいえ | いいえ |
+| base | GET | `/ciba/pending` | アプリ | access token | はい | いいえ |
+| base | GET | `/ciba/history` | アプリ | access token | はい | いいえ |
 | base | POST | `/ciba/fcm-tokens` | アプリ | access token | はい | いいえ |
 | base | POST | `/ciba/{auth_req_id}/passkey-options` | ブラウザ、アプリ | 無し（auth_req_id を知っていること） | はい | いいえ |
 | base | POST | `/ciba/{auth_req_id}/approve` | ブラウザ、アプリ | passkey | はい | いいえ |
