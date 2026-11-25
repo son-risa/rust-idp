@@ -70,6 +70,7 @@ pub use auth_checks::AuthorizationCheck;
 pub use ciba::{AuthReqId, BackchannelAuthRequest, CibaHistoryEntry, CibaStatus, CibaStore, MemoryCibaStore};
 pub use client_auth::{ClientAuthInput, ClientAuthMethod};
 pub use context::AddressedRequest;
+pub use dcr::hash_token;
 pub use dpop::{DpopVerifier, Es256Dpop};
 pub use error::OAuthError;
 pub use grants::GrantHandler;

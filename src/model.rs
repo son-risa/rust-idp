@@ -19,6 +19,8 @@ pub struct Client {
     pub redirect_uris: Vec<String>,
     /// "none" | "client_secret_basic" | "private_key_jwt"
     pub token_endpoint_auth_method: String,
+    /// 平文ではなく [`crate::hash_token`] のハッシュを積む。client_secret_basic の照合は、提示された secret を
+    /// 同じ関数でハッシュしてから比べる。
     pub client_secret: Option<String>,
     pub grant_types: Vec<String>,
     /// RP-Initiated Logout の許可リダイレクト先（オープンリダイレクト防止）。

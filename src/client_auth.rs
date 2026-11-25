@@ -68,7 +68,7 @@ impl ClientAuthMethod for NoneAuth {
 /// token_endpoint_auth_method = client_secret_basic。
 ///
 /// Client.client_secret は平文ではなく [`crate::dcr::hash_token`] によるハッシュを保持する契約。
-/// main.rs の静的クライアントは読み込み時にハッシュ化し、DCR の ConfidentialSecret プロファイル
+/// gcp.rs の静的クライアント（migrate-static-clients）は読み込み時にハッシュ化し、DCR の ConfidentialSecret プロファイル
 /// (`dcr::validate_registration`) は生成した secret を登録レスポンスで一度だけ平文で返しつつ
 /// 保存はハッシュのみ行う——経路は違っても「平文は Client 構造体に残らない」契約は共通。
 /// ここでは提示された secret を同じ関数でハッシュ化してから比較するため、平文の secret が
@@ -232,7 +232,7 @@ mod tests {
     }
 
     /// secret には平文の期待値を渡す。Client.client_secret にはそのハッシュだけを積む
-    /// （本番の main.rs / DCR 発行と同じ契約）。テストコードは平文の secret をそのまま
+    /// （本番の gcp.rs / DCR 発行と同じ契約）。テストコードは平文の secret をそのまま
     /// Basic 認証の入力に使えばよい。
     fn secret_client(id: &str, secret: &str, method: &str) -> Client {
         Client {
