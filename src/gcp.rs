@@ -453,7 +453,8 @@ async fn revoke_admin_cmd(args: &[String]) {
 /// `rust-idp disable-account --email <email>`
 async fn disable_account_cmd(args: &[String]) {
     let email = parse_email_arg("disable-account", args);
-    let fs = firestore::Firestore::new(resolve_project());
+    let fs = std::sync::Arc::new(firestore::Firestore::new(resolve_project()));
+    let store = firestore_store::FirestoreStore::new(fs.clone());
     let report = |label: &str, counts: &account_admin::RevocationCounts| {
         println!(
             "{label}: {email} (sessions={} access_tokens={} refresh_tokens={})",
@@ -470,7 +471,7 @@ async fn disable_account_cmd(args: &[String]) {
             std::process::exit(1);
         }
     };
-    match account_admin::disable_account(&fs, "cli", &email).await {
+    match account_admin::disable_account(&*fs, &store, "cli", &email).await {
         Ok(account_admin::DisableOutcome::Disabled(counts)) => report("disabled", &counts),
         Ok(account_admin::DisableOutcome::AlreadyDisabled(counts)) => {
             report("already disabled", &counts)

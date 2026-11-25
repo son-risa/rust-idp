@@ -13,17 +13,10 @@
 use crate::document_store::DocumentStore;
 #[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
+use crate::store::Store;
 use crate::{audit_log, registration};
 
-/// セッション/トークン失効の結果。query_errors に列挙されたコレクションは「0件だった」
-/// のではなく「検索自体が失敗し存否不明」であることを示す（呼び出し側はこれを区別できる）。
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct RevocationCounts {
-    pub sessions: usize,
-    pub access_tokens: usize,
-    pub refresh_tokens: usize,
-    pub query_errors: Vec<&'static str>,
-}
+pub use crate::store::RevocationCounts;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DisableOutcome {
@@ -42,7 +35,7 @@ pub enum EnableOutcome {
 }
 
 /// actor は監査ログへ記録する呼び出し主体（CLI実行なら"cli"）。
-pub async fn disable_account(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<DisableOutcome, String> {
+pub async fn disable_account(fs: &dyn DocumentStore, store: &dyn Store, actor: &str, email: &str) -> Result<DisableOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DisableOutcome::NotFound),
@@ -51,7 +44,7 @@ pub async fn disable_account(fs: &dyn DocumentStore, actor: &str, email: &str) -
     if !already_disabled {
         registration::set_disabled(fs, email, true).await?;
     }
-    let counts = revoke_all(fs, &cred.account_id).await;
+    let counts = store.revoke_account(&cred.account_id, "").await;
     audit_log::record(
         fs,
         actor,
@@ -102,7 +95,7 @@ pub enum DeleteOutcome {
 
 /// 凍結済みのアカウントを完全に消す。accounts・credentials・accountsByUuid・profiles と、
 /// セッション・トークンを消し、監査ログを残す。
-pub async fn delete_account(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<DeleteOutcome, String> {
+pub async fn delete_account(fs: &dyn DocumentStore, store: &dyn Store, actor: &str, email: &str) -> Result<DeleteOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DeleteOutcome::NotFound),
@@ -110,7 +103,7 @@ pub async fn delete_account(fs: &dyn DocumentStore, actor: &str, email: &str) ->
     if !cred.disabled {
         return Ok(DeleteOutcome::NotDisabled);
     }
-    let counts = revoke_all(fs, &cred.account_id).await;
+    let counts = store.revoke_account(&cred.account_id, "").await;
     registration::delete_all_credentials(fs, &cred).await?;
     fs.delete_doc("fcmTokens", &cred.account_id).await?;
     fs.delete_doc("profiles", &cred.account_id).await?;
@@ -133,7 +126,7 @@ pub async fn delete_account(fs: &dyn DocumentStore, actor: &str, email: &str) ->
 /// passkey だけを全部消す。アカウント（accountId＝sub）とプロフィールは残すので、登録し直しても
 /// 同じ人のまま。端末をなくしたときなどに使うので、セッションとトークンも失効させる。
 /// アカウントが無ければ None。
-pub async fn delete_passkeys(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<Option<usize>, String> {
+pub async fn delete_passkeys(fs: &dyn DocumentStore, store: &dyn Store, actor: &str, email: &str) -> Result<Option<usize>, String> {
     let Some(a) = registration::get_account(fs, email).await? else {
         return Ok(None);
     };
@@ -141,7 +134,7 @@ pub async fn delete_passkeys(fs: &dyn DocumentStore, actor: &str, email: &str) -
         return Err(format!("{email}: accountId missing"));
     }
     // 先に失効させる（passkey を消す途中で失敗しても、なくした端末のセッションは残さない）。
-    let counts = revoke_all(fs, &a.account_id).await;
+    let counts = store.revoke_account(&a.account_id, "").await;
     let removed = registration::remove_all_credentials(fs, email).await;
     audit_log::record(
         fs,
@@ -161,81 +154,6 @@ pub async fn delete_passkeys(fs: &dyn DocumentStore, actor: &str, email: &str) -
     removed
 }
 
-/// 本人が passkey を消したとき、いま使っているセッション以外のセッションと、発行済みのトークンを失効させる
-/// （消した passkey の端末に残るセッションやトークンを使わせない。どの passkey で入ったかは記録していない）。
-pub async fn revoke_other_sessions(fs: &dyn DocumentStore, account_id: &str, keep_sid: &str) -> RevocationCounts {
-    let mut counts = RevocationCounts::default();
-    match fs.query_eq("sessions", "accountId", account_id).await {
-        Ok(rows) => {
-            for (sid, _) in rows.iter().filter(|(sid, _)| sid != keep_sid) {
-                match fs.delete_doc("sessions", sid).await {
-                    Ok(()) => counts.sessions += 1,
-                    Err(e) => tracing::error!("account_admin: sessions revoke failed: {e}"),
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!("account_admin: sessions revocation query failed for {account_id}: {e}");
-            counts.query_errors.push("sessions");
-        }
-    }
-    for (col, n) in [("accessTokens", &mut counts.access_tokens), ("refreshTokens", &mut counts.refresh_tokens)] {
-        match revoke_by_account(fs, col, account_id).await {
-            Ok(k) => *n = k,
-            Err(e) => {
-                tracing::error!("account_admin: {col} revocation query failed for {account_id}: {e}");
-                counts.query_errors.push(col);
-            }
-        }
-    }
-    counts
-}
-
-/// account_id に紐づく sessions/accessTokens/refreshTokens を検索し削除する。
-/// コレクション単位で query_eq 自体が失敗しても他のコレクションの失効は続ける
-/// （1種類の障害で残りを諦めない）。失敗したコレクションは query_errors に記録し、
-/// 呼び出し側（CLI 出力・監査ログ）へその不確実性を伝える。
-async fn revoke_all(fs: &dyn DocumentStore, account_id: &str) -> RevocationCounts {
-    let mut counts = RevocationCounts::default();
-    match revoke_by_account(fs, "sessions", account_id).await {
-        Ok(n) => counts.sessions = n,
-        Err(e) => {
-            tracing::error!("account_admin: sessions revocation query failed for {account_id}: {e}");
-            counts.query_errors.push("sessions");
-        }
-    }
-    match revoke_by_account(fs, "accessTokens", account_id).await {
-        Ok(n) => counts.access_tokens = n,
-        Err(e) => {
-            tracing::error!("account_admin: accessTokens revocation query failed for {account_id}: {e}");
-            counts.query_errors.push("accessTokens");
-        }
-    }
-    match revoke_by_account(fs, "refreshTokens", account_id).await {
-        Ok(n) => counts.refresh_tokens = n,
-        Err(e) => {
-            tracing::error!("account_admin: refreshTokens revocation query failed for {account_id}: {e}");
-            counts.query_errors.push("refreshTokens");
-        }
-    }
-    counts
-}
-
-/// account_id に紐づく col の全ドキュメントを検索し削除する。1件の削除失敗で残りを
-/// 諦めない（ベストエフォート。失敗したものは tracing::error に残す）。戻り値は実際に
-/// 削除できた件数。
-async fn revoke_by_account(fs: &dyn DocumentStore, col: &str, account_id: &str) -> Result<usize, String> {
-    let rows = fs.query_eq(col, "accountId", account_id).await?;
-    let mut revoked = 0usize;
-    for (id, _fields) in &rows {
-        match fs.delete_doc(col, id).await {
-            Ok(()) => revoked += 1,
-            Err(e) => tracing::error!("account_admin: {col} revoke failed id={id}: {e}"),
-        }
-    }
-    Ok(revoked)
-}
-
 #[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
@@ -245,9 +163,13 @@ mod tests {
 
     /// (emulator host, Firestore) を返す。host は同じ fake サーバを指す2つ目の Firestore
     /// （FirestoreStore 経由のセッション/トークン操作用）を作るために呼び出し側で使う。
+    fn fstore(host: &str) -> crate::firestore_store::FirestoreStore {
+        crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test("proj", host)))
+    }
+
     async fn setup() -> (String, Firestore) {
         let (host, _state) = fake_firestore::spawn().await;
-        (host.clone(), Firestore::new_for_test("proj", host))
+        (host.clone(), Firestore::new_for_test("proj", host.clone()))
     }
 
     async fn register(fs: &dyn DocumentStore, email: &str, account_id: &str) {
@@ -263,8 +185,8 @@ mod tests {
 
     #[tokio::test]
     async fn disable_unknown_account_returns_not_found() {
-        let (_host, fs) = setup().await;
-        let out = disable_account(&fs, "cli", "nobody@example.com").await.unwrap();
+        let (host, fs) = setup().await;
+        let out = disable_account(&fs, &fstore(&host), "cli", "nobody@example.com").await.unwrap();
         assert_eq!(out, DisableOutcome::NotFound);
     }
 
@@ -275,7 +197,7 @@ mod tests {
         register(&fs, "other@example.com", "acc-other").await;
 
         let store = crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(
-            Firestore::new_for_test("proj", host),
+            Firestore::new_for_test("proj", host.clone()),
         ));
         store
             .save_session(Session { sid: "sid-1".into(), account_id: "acc-victim".into(), auth_time: 0 })
@@ -313,7 +235,7 @@ mod tests {
             })
             .await.unwrap();
 
-        let out = disable_account(&fs, "cli", "victim@example.com").await.unwrap();
+        let out = disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
         assert_eq!(
             out,
             DisableOutcome::Disabled(RevocationCounts {
@@ -335,19 +257,19 @@ mod tests {
 
     #[tokio::test]
     async fn disable_is_idempotent_and_reports_already_disabled() {
-        let (_host, fs) = setup().await;
+        let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
-        disable_account(&fs, "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
 
-        let out = disable_account(&fs, "cli", "victim@example.com").await.unwrap();
+        let out = disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
         assert_eq!(out, DisableOutcome::AlreadyDisabled(RevocationCounts::default()));
     }
 
     #[tokio::test]
     async fn reregistration_preserves_disabled_flag() {
-        let (_host, fs) = setup().await;
+        let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
-        disable_account(&fs, "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
 
         // 機種変更等で passkey を作り直しても凍結は解除されない。
         register(&fs, "victim@example.com", "acc-victim").await;
@@ -357,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn enable_clears_flag_and_records_audit_even_when_noop() {
-        let (_host, fs) = setup().await;
+        let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
 
         assert_eq!(
@@ -365,7 +287,7 @@ mod tests {
             EnableOutcome::AlreadyEnabled
         );
 
-        disable_account(&fs, "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
         assert_eq!(enable_account(&fs, "cli", "victim@example.com").await.unwrap(), EnableOutcome::Enabled);
         let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
         assert!(!cred.disabled);
@@ -377,23 +299,23 @@ mod tests {
 
     #[tokio::test]
     async fn delete_refuses_an_account_that_is_not_disabled() {
-        let (_host, fs) = setup().await;
+        let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
-        let out = delete_account(&fs, "cli", "victim@example.com").await.unwrap();
+        let out = delete_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
         assert_eq!(out, DeleteOutcome::NotDisabled);
         assert!(registration::get_account(&fs, "victim@example.com").await.unwrap().is_some());
     }
 
     #[tokio::test]
     async fn delete_unknown_account_returns_not_found() {
-        let (_host, fs) = setup().await;
-        let out = delete_account(&fs, "cli", "nobody@example.com").await.unwrap();
+        let (host, fs) = setup().await;
+        let out = delete_account(&fs, &fstore(&host), "cli", "nobody@example.com").await.unwrap();
         assert_eq!(out, DeleteOutcome::NotFound);
     }
 
     #[tokio::test]
     async fn delete_removes_account_index_and_profile_but_not_other_accounts() {
-        let (_host, fs) = setup().await;
+        let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
         register(&fs, "other@example.com", "acc-other").await;
         let name = std::collections::HashMap::from([("name".to_string(), "被害者".to_string())]);
@@ -402,9 +324,9 @@ mod tests {
         for id in ["acc-victim", "acc-other"] {
             fs.set_doc("fcmTokens", id, serde_json::json!({ "token": crate::firestore::s("t") })).await.unwrap();
         }
-        disable_account(&fs, "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
 
-        let out = delete_account(&fs, "cli", "victim@example.com").await.unwrap();
+        let out = delete_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
         assert_eq!(out, DeleteOutcome::Deleted(RevocationCounts::default()));
 
         assert!(fs.get_doc("accounts", "victim@example.com").await.unwrap().is_none());
@@ -425,18 +347,18 @@ mod tests {
         let (host, fake) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host.clone());
         register(&fs, "lost@example.com", "acc-lost").await;
-        let store = crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test("proj", host)));
+        let store = crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test("proj", host.clone())));
         store.save_session(Session { sid: "S-LOST".into(), account_id: "acc-lost".into(), auth_time: 0 }).await;
 
         fake.fail_once("PATCH", "accounts", Some("lost@example.com"));
-        assert!(delete_passkeys(&fs, "cli", "lost@example.com").await.is_err());
+        assert!(delete_passkeys(&fs, &fstore(&host), "cli", "lost@example.com").await.is_err());
         assert!(store.get_session("S-LOST").await.is_none(), "セッションが残った");
         let entries = fs.query_eq("auditLog", "action", "delete_passkeys").await.unwrap();
         assert_eq!(entries.len(), 1);
 
         // やり直せば消える。
         fake.clear_failures();
-        assert_eq!(delete_passkeys(&fs, "cli", "lost@example.com").await.unwrap(), Some(1));
+        assert_eq!(delete_passkeys(&fs, &fstore(&host), "cli", "lost@example.com").await.unwrap(), Some(1));
         assert!(!registration::has_passkey(&fs, "lost@example.com").await.unwrap());
     }
 }

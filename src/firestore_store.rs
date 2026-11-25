@@ -5,10 +5,9 @@
 
 use crate::firestore::{self as fs_h, Firestore};
 use crate::model::*;
-use crate::store::{CodeTake, Store, StoreResult};
+use crate::store::{CodeTake, RevocationCounts, Store, StoreResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -469,25 +468,34 @@ impl Store for FirestoreStore {
     }
 
     async fn find_account(&self, sub: &str) -> Account {
-        // sub は account_id(UUID)。profiles/{sub} は accountId をキーとして保存済み編集可能 claim を持つ
-        // （profile_get/profile_put が at.account_id をそのまま渡すため、re-key 不要で自然に対応する）。
-        let saved = crate::registration::get_profile(&*self.fs, sub)
-            .await
-            .unwrap_or_default();
-        // 実データ（sub / email / email_verified / 保存済み編集 claim）のみを返す。
-        // 未設定 claim はダミーで埋めず欠落させる（OP は“真の属性”だけを主張する）。
-        let mut claims: HashMap<String, Value> = HashMap::new();
-        claims.insert("sub".to_string(), json!(sub));
-        // sub(account_id) から email を逆引き（accountsByUuid）。取れた場合のみ email claim を出す。
-        if let Ok(Some(email)) = crate::registration::find_email_by_account_id(&*self.fs, sub).await {
-            claims.insert("email".to_string(), json!(email));
-            // 登録時にメール確認を経ている（registration の email-challenge/verify）。
-            claims.insert("email_verified".to_string(), json!(true));
+        crate::registration::account_from_documents(&*self.fs, sub).await
+    }
+
+    /// account_id → doc の逆引きを別に持たず、accountId の query_eq でその場で探して消す。
+    /// 1 種類の検索が失敗しても他の種類の失効は続け、失敗した種類は query_errors に残す（存否不明）。
+    async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> RevocationCounts {
+        let mut counts = RevocationCounts::default();
+        for (col, n) in [
+            ("sessions", &mut counts.sessions),
+            ("accessTokens", &mut counts.access_tokens),
+            ("refreshTokens", &mut counts.refresh_tokens),
+        ] {
+            match self.fs.query_eq(col, "accountId", account_id).await {
+                Ok(rows) => {
+                    for (id, _) in rows.iter().filter(|(id, _)| col != "sessions" || id != keep_sid) {
+                        match self.fs.delete_doc(col, id).await {
+                            Ok(()) => *n += 1,
+                            Err(e) => tracing::error!("account_admin: {col} revoke failed id={id}: {e}"),
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("account_admin: {col} revocation query failed for {account_id}: {e}");
+                    counts.query_errors.push(col);
+                }
+            }
         }
-        for (k, v) in saved {
-            claims.insert(k, json!(v));
-        }
-        Account { sub: sub.to_string(), claims }
+        counts
     }
 }
 

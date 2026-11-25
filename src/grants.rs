@@ -671,7 +671,7 @@ mod tests {
         assert_no_tokens(&p, &c, &refresh, req_id.as_str()).await;
 
         // 消した後も（逆引きが消えても）出さない。
-        crate::account_admin::delete_account(&*fs, "cli", "u@example.com").await.unwrap();
+        crate::account_admin::delete_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "cli", "u@example.com").await.unwrap();
         let mut code = base_code("C1", "mobile-rp");
         code.account_id = "acc-1".into();
         let p2 = provider().with_firestore(fs.clone());
@@ -1158,6 +1158,7 @@ mod tests {
         async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool { self.inner.complete_interaction(uid, account_id, auth_time).await }
         async fn save_session(&self, s: crate::model::Session) { self.inner.save_session(s).await }
         async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
+        async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> crate::store::RevocationCounts { self.inner.revoke_account(account_id, keep_sid).await }
         async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
         async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> { self.inner.save_code(c).await }
         async fn take_code(&self, code: &str) -> StoreResult<crate::store::CodeTake> { self.inner.take_code(code).await }

@@ -462,7 +462,7 @@ pub(super) async fn delete_passkey(
     }
     match registration::remove_credential(fs, &a.email, &req.id).await {
         Ok(RemoveOutcome::Removed) => {
-            let c = crate::account_admin::revoke_other_sessions(fs, &a.account_id, &me.sid).await;
+            let c = p.store.revoke_account(&a.account_id, &me.sid).await;
             crate::audit_log::record(
                 fs,
                 &a.account_id,

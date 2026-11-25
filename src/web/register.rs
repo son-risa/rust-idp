@@ -521,7 +521,7 @@ pub(super) async fn account_disable(
         }
     }
     let actor = format!("client:{}", client.client_id);
-    let status = match crate::account_admin::disable_account(fs, &actor, &email).await {
+    let status = match crate::account_admin::disable_account(fs, &*p.store, &actor, &email).await {
         Ok(crate::account_admin::DisableOutcome::Disabled(_)) => "disabled",
         Ok(crate::account_admin::DisableOutcome::AlreadyDisabled(_)) => "already_disabled",
         Ok(crate::account_admin::DisableOutcome::NotFound) => "not_found",

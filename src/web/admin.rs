@@ -393,7 +393,7 @@ pub(super) async fn user_disable(
         Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
         Err(e) => return server_error(Lang::from_headers(&headers), "user_disable: find_email", &e),
     };
-    if let Err(e) = crate::account_admin::disable_account(fs, &viewer, &email).await {
+    if let Err(e) = crate::account_admin::disable_account(fs, &*p.store, &viewer, &email).await {
         return server_error(Lang::from_headers(&headers), "user_disable", &e);
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
@@ -446,7 +446,7 @@ pub(super) async fn user_delete_passkeys(
         Ok(None) => return text(StatusCode::NOT_FOUND, lang, "[[User not found]]"),
         Err(e) => return server_error(lang, "user_delete_passkeys: find_email", &e),
     };
-    match crate::account_admin::delete_passkeys(fs, &viewer, &email).await {
+    match crate::account_admin::delete_passkeys(fs, &*p.store, &viewer, &email).await {
         Ok(Some(_)) => redirect(&p, &format!("/admin/users/{account_id}")),
         Ok(None) => text(StatusCode::NOT_FOUND, lang, "[[User not found]]"),
         Err(e) => server_error(lang, "user_delete_passkeys", &e),
@@ -480,7 +480,7 @@ pub(super) async fn user_delete(
         Ok(None) => return text(StatusCode::NOT_FOUND, Lang::from_headers(&headers), "[[User not found]]"),
         Err(e) => return server_error(Lang::from_headers(&headers), "user_delete: find_email", &e),
     };
-    match crate::account_admin::delete_account(fs, &viewer, &email).await {
+    match crate::account_admin::delete_account(fs, &*p.store, &viewer, &email).await {
         Ok(crate::account_admin::DeleteOutcome::Deleted(_)) => redirect(&p, "/admin/users"),
         Ok(crate::account_admin::DeleteOutcome::NotDisabled) => text(
             StatusCode::CONFLICT,
@@ -1381,7 +1381,7 @@ mod tests {
             .unwrap()
             .is_some());
 
-        crate::account_admin::disable_account(&*fs, "cli", "boss@example.com").await.unwrap();
+        crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "cli", "boss@example.com").await.unwrap();
         let jar = login_as(&p, "acc-admin").await;
         let admin = user_delete(
             State(p.clone()),
@@ -1392,7 +1392,7 @@ mod tests {
         .await;
         assert_eq!(admin.status(), StatusCode::CONFLICT, "管理者は消さない");
 
-        crate::account_admin::disable_account(&*fs, "cli", "u@example.com").await.unwrap();
+        crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "cli", "u@example.com").await.unwrap();
         let jar = login_as(&p, "acc-admin").await;
         let resp = user_delete(
             State(p.clone()),

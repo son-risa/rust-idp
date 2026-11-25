@@ -389,7 +389,7 @@ async fn add_and_revoke(
     let fs = p.docs.as_deref().ok_or("no firestore")?;
     registration::mark_recovered(fs, email, &outcome.credential_id).await?;
     registration::save_credential(fs, email, account_id, outcome).await?;
-    let c = crate::account_admin::revoke_other_sessions(fs, account_id, "").await;
+    let c = p.store.revoke_account(account_id, "").await;
     if !c.query_errors.is_empty() {
         tracing::error!("recover_passkey: revocation incomplete for account_id={account_id}: {:?}", c.query_errors);
     }

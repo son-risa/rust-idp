@@ -60,7 +60,7 @@ fn with_came_from(mut fields: serde_json::Value, from: &CameFrom) -> serde_json:
     fields
 }
 
-#[cfg(all(test, feature = "gcp"))]
+#[cfg(test)]
 pub async fn create_email_challenge(fs: &dyn DocumentStore, email: &str) -> Result<String, String> {
     create_email_challenge_from(fs, email, &CameFrom::default()).await
 }
@@ -126,7 +126,7 @@ pub async fn peek_invite(fs: &dyn DocumentStore, token: &str) -> Result<Option<(
 }
 
 /// 復旧のリンク（登録済みの人が、メールで確かめて passkey を 1 本足す）。
-#[cfg(all(test, feature = "gcp"))]
+#[cfg(test)]
 pub async fn create_recovery_challenge(fs: &dyn DocumentStore, email: &str) -> Result<String, String> {
     create_recovery_challenge_from(fs, email, &CameFrom::default()).await
 }
@@ -328,6 +328,30 @@ fn account_from(email: &str, f: &serde_json::Value) -> Account {
         migrated,
         legacy,
     }
+}
+
+/// 文書の保存先に登録された account の claim（sub・email・保存済みの編集できる claim）。
+/// 登録の無い sub には sub だけを返す（値をでっち上げない）。
+pub(crate) async fn account_from_documents(fs: &dyn DocumentStore, sub: &str) -> crate::model::Account {
+    // sub は account_id(UUID)。profiles/{sub} は accountId をキーとして保存済み編集可能 claim を持つ
+    // （profile_get/profile_put が at.account_id をそのまま渡すため、re-key 不要で自然に対応する）。
+    let saved = get_profile(fs, sub)
+        .await
+        .unwrap_or_default();
+    // 実データ（sub / email / email_verified / 保存済み編集 claim）のみを返す。
+    // 未設定 claim はダミーで埋めず欠落させる（OP は“真の属性”だけを主張する）。
+    let mut claims: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    claims.insert("sub".to_string(), json!(sub));
+    // sub(account_id) から email を逆引き（accountsByUuid）。取れた場合のみ email claim を出す。
+    if let Ok(Some(email)) = find_email_by_account_id(fs, sub).await {
+        claims.insert("email".to_string(), json!(email));
+        // 登録時にメール確認を経ている（registration の email-challenge/verify）。
+        claims.insert("email_verified".to_string(), json!(true));
+    }
+    for (k, v) in saved {
+        claims.insert(k, json!(v));
+    }
+    crate::model::Account { sub: sub.to_string(), claims }
 }
 
 pub async fn get_account(fs: &dyn DocumentStore, email: &str) -> Result<Option<Account>, String> {
@@ -723,7 +747,7 @@ pub async fn list_accounts(fs: &dyn DocumentStore) -> Result<Vec<AccountSummary>
 }
 
 /// 試験用: アカウントの passkey が 1 本ならそれを返す（0 本なら None、2 本以上なら panic）。
-#[cfg(all(test, feature = "gcp"))]
+#[cfg(test)]
 pub async fn sole_credential(fs: &dyn DocumentStore, email: &str) -> Option<Credential> {
     let a = get_account(fs, email).await.unwrap()?;
     let mut v = list_credentials(fs, &a).await.unwrap();

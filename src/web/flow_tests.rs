@@ -1,7 +1,6 @@
-//! 登録→ログイン→CIBA承認を fake Firestore（`firestore::fake_firestore`）に対して流し、account_id(UUID)が
-//! 一貫して使われ、email が sub/user.id/CIBA account に漏れないことを検証する。
-//! 以前は実 Firestore エミュレータを前提に `#[ignore]` で、CI では走っていなかった。
-#![cfg(feature = "gcp")]
+//! 登録→ログイン→CIBA承認を流し、account_id(UUID)が一貫して使われ、email が sub/user.id/CIBA account に
+//! 漏れないことを検証する。保存先は gcp 付きなら fake Firestore（`firestore::fake_firestore`）と
+//! FirestoreStore、gcp 無しなら MemoryDocumentStore と MemoryStore（同じ試験で 2 つの実装を確かめる）。
 
 use std::assert_matches;
 use p256::elliptic_curve::Generate;
@@ -16,6 +15,17 @@ use p256::ecdsa::{Signature, SigningKey};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+#[cfg(not(feature = "gcp"))]
+async fn test_provider() -> Arc<Provider> {
+    let docs: Arc<dyn crate::document_store::DocumentStore> = Arc::new(crate::document_store::MemoryDocumentStore::default());
+    with_test_clients(
+        Provider::new("http://localhost:8099".to_string())
+            .with_document_store(docs.clone())
+            .with_store(Arc::new(crate::store::MemoryStore::with_documents(docs))),
+    )
+}
+
+#[cfg(feature = "gcp")]
 async fn test_provider() -> Arc<Provider> {
     let (host, _state) = crate::firestore::fake_firestore::spawn().await;
     let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
@@ -25,7 +35,12 @@ async fn test_provider() -> Arc<Provider> {
     // フォールバックしてしまい、firestore_store.rs の実装を検証できなくなる）。
     let p = Provider::new("http://localhost:8099".to_string())
         .with_firestore(fs.clone())
-        .with_store(Arc::new(crate::firestore_store::FirestoreStore::new(fs)))
+        .with_store(Arc::new(crate::firestore_store::FirestoreStore::new(fs)));
+    with_test_clients(p)
+}
+
+fn with_test_clients(p: Provider) -> Arc<Provider> {
+    let p = p
         .with_client(Client {
             client_id: "test-ciba-rp".into(),
             redirect_uris: vec![],
@@ -333,7 +348,7 @@ async fn disabled_account_cannot_login() {
     let (key, _cred_id, _account_id) = register_test_account(&p, &email).await;
 
     let fs = p.docs.as_deref().unwrap();
-    let out = crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
+    let out = crate::account_admin::disable_account(fs, &*p.store, "test", &email).await.unwrap();
     assert_matches!(out, crate::account_admin::DisableOutcome::Disabled { .. });
 
     let uid = uuid::Uuid::new_v4().to_string();
@@ -584,7 +599,7 @@ async fn disabled_account_cannot_approve_ciba() {
     let auth_req_id = body["auth_req_id"].as_str().unwrap().to_string();
 
     let fs = p.docs.as_deref().unwrap();
-    crate::account_admin::disable_account(fs, "test", &email).await.unwrap();
+    crate::account_admin::disable_account(fs, &*p.store, "test", &email).await.unwrap();
 
     let (h, jar) = ciba_page_of(&p, &account_id).await;
     let opts = body_json(ciba::ciba_approve_options(State(p.clone()), Path(auth_req_id.clone()), h, jar).await).await;
@@ -656,7 +671,7 @@ async fn a_passkey_logs_in_only_its_own_account() {
     assert_eq!(p.store.get_interaction(&uid).await.unwrap().account_id, None);
 
     let fs = p.docs.as_deref().unwrap();
-    crate::account_admin::disable_account(fs, "test", &victim).await.unwrap();
+    crate::account_admin::disable_account(fs, &*p.store, "test", &victim).await.unwrap();
     let (_uid, frozen) = email_login_response(&p, &victim, &attacker, 0).await;
     assert_eq!(frozen.status(), StatusCode::UNAUTHORIZED, "署名が通らないうちは凍結を明かさない");
 }
@@ -743,8 +758,8 @@ async fn deleting_an_account_removes_its_passkeys() {
     let (_, cred1, account_id) = register_test_account(&p, &email).await;
     add_passkey(&p, &email, &account_id, b"second-credential").await;
     let fs = p.docs.as_deref().unwrap();
-    crate::account_admin::disable_account(fs, "cli", &email).await.unwrap();
-    crate::account_admin::delete_account(fs, "cli", &email).await.unwrap();
+    crate::account_admin::disable_account(fs, &*p.store, "cli", &email).await.unwrap();
+    crate::account_admin::delete_account(fs, &*p.store, "cli", &email).await.unwrap();
     for id in [crate::webauthn::b64e(&cred1), crate::webauthn::b64e(b"second-credential")] {
         assert!(fs.get_doc("credentials", &id).await.unwrap().is_none(), "{id} が残った");
     }
@@ -1021,7 +1036,7 @@ async fn admin_removes_passkeys_only_and_the_user_registers_again_as_the_same_pe
     add_passkey(&p, &email, &account_id, b"second").await;
     let jar = session_jar(&p, &account_id, now()).await;
 
-    assert_eq!(crate::account_admin::delete_passkeys(fs, "acc-admin", &email).await.unwrap(), Some(2));
+    assert_eq!(crate::account_admin::delete_passkeys(fs, &*p.store, "acc-admin", &email).await.unwrap(), Some(2));
     let sid = jar.get(SID_COOKIE).unwrap().value().to_string();
     assert!(p.store.get_session(&sid).await.is_none(), "セッションが残った");
     let (_, r) = email_login_with_credential(&p, &email, &cred1, &key1, 1, |s| s).await;
@@ -1099,7 +1114,7 @@ async fn an_add_that_lands_after_the_admin_removed_all_passkeys_is_discarded() {
     let jar = session_jar(&p, &account_id, now()).await;
 
     let opts = body_json(account::add_options(State(p.clone()), jar.clone()).await).await;
-    crate::account_admin::delete_passkeys(fs, "acc-admin", &email).await.unwrap();
+    crate::account_admin::delete_passkeys(fs, &*p.store, "acc-admin", &email).await.unwrap();
     let key = SigningKey::generate();
     let (att, cdj) = make_reg_ceremony(&key, b"late", opts["challenge"].as_str().unwrap(), &p.origin(), &p.rp_id());
     let req: account::AddVerifyReq =
@@ -1206,7 +1221,7 @@ async fn recovery_is_not_offered_to_admins_or_disabled_accounts() {
     let frozen = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     let fid = uuid::Uuid::new_v4().to_string();
     add_passkey(&p, &frozen, &fid, b"frozen-credential").await;
-    crate::account_admin::disable_account(fs, "test", &frozen).await.unwrap();
+    crate::account_admin::disable_account(fs, &*p.store, "test", &frozen).await.unwrap();
     let token = crate::registration::create_recovery_challenge(fs, &frozen).await.unwrap();
     let r = recover_add(&p, &token, CookieJar::default(), b"frozen-recovered").await.unwrap_err();
     assert_eq!(r.status(), StatusCode::CONFLICT);

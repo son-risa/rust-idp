@@ -255,10 +255,10 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
     crate::admin_store::grant_admin(&*fs, "acc-boss", "cli")
         .await
         .unwrap();
-    crate::account_admin::disable_account(&*fs, "acc-me", "u@example.com")
+    crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "acc-me", "u@example.com")
         .await
         .unwrap();
-    crate::account_admin::disable_account(&*fs, "acc-me", "boss@example.com")
+    crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "acc-me", "boss@example.com")
         .await
         .unwrap();
     (p, fs)
