@@ -36,7 +36,9 @@ if ! diff -u <(tail -n +2 expected.tsv | cut -f1 | sort -u) <(printf '%s\n' "${m
 fi
 
 for model in "${models[@]}"; do
-  if ! out=$(tamarin-prover --quit-on-warning --prove --auto-sources "$model" 2>&1); then
+  # 派生の検査（wellformedness の 1 つ）は既定で 5 秒で打ち切られ、打ち切りは警告として赤になる。
+  # composition_code_bearer_*.spthy は手元（Apple Silicon）で 3〜4 秒かかり、CI の runner では 5 秒を超えうるので上げる。
+  if ! out=$(tamarin-prover --quit-on-warning --derivcheck-timeout=60 --prove --auto-sources "$model" 2>&1); then
     echo "$model: tamarin-prover が失敗した（警告を含む）" >&2
     printf '%s\n' "$out" | tail -n 30 >&2
     status=1

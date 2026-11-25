@@ -1,0 +1,150 @@
+theory CompositionBearerNegNoPkce
+begin
+
+/*
+  NEG 版: composition_code_bearer_secret.spthy から、token endpoint の PKCE の検査（Eq(h(v), ch)）だけを外した変種。
+  期待: intercepted_code_unusable と no_injection が falsified。
+    - 横取りした code を、漏れた client の秘密で償還できる（PKCE が無いと client 認証だけが壁になる）。
+    - 攻撃者が自分の要求で得た code を、正直な client の要求に差し込める（PKCE が要求と code を結んでいた）。
+  = client_secret_basic の client では、秘密の保管（P-CSECRET）が崩れたときに PKCE が個別に効く。
+  実行: tamarin-prover --prove --auto-sources formal/composition_bearer_NEG_no_pkce.spthy
+*/
+
+builtins: hashing, signing, asymmetric-encryption, symmetric-encryption
+
+/* ---- AS（rust-idp）。TLS のサーバ鍵 ~tls と ID token の署名鍵 ~sk ----
+   P-TLS: ~tls は漏れない。P-ENVSEP: ~sk は本番の版だけが持つ（漏れの規則は置かない）。 */
+rule Setup_AS:
+    [ Fr(~tls), Fr(~sk) ]
+  --[ OnlyOnce('AS') ]->
+    [ !ASTls(~tls), !ASTlsPub(pk(~tls)), !OPSig(~sk), !OPSigPub(pk(~sk))
+    , Out(pk(~tls)), Out(pk(~sk)) ]
+
+/* ---- 利用者と保護されたリソース（RS = /userinfo などの token で守る口）---- */
+rule Setup_User:
+    [ Fr(~uk), Fr(~res) ]
+  --[ OnlyOnce(<'user', $U>), Protected($U, ~res) ]->
+    [ !UserKey($U, ~uk), !UserPub($U, pk(~uk)), !Resource($U, ~res), Out(pk(~uk)) ]
+
+rule Reveal_User:
+    [ !UserKey(U, ~uk) ] --[ RevealUser(U) ]-> [ Out(~uk) ]
+
+/* ---- client の登録。秘密は client だけが持ち、AS はハッシュだけを持つ（dcr::hash_token）---- */
+rule Register_Client:
+    [ Fr(~cs) ]
+  --[ OnlyOnce(<'client', $C>) ]->
+    [ !ClientSecret($C, ~cs), !ASClientHash($C, h(~cs)) ]
+
+rule Reveal_ClientSecret:
+    [ !ClientSecret(C, ~cs) ] --[ RevealClient(C) ]-> [ Out(~cs) ]
+
+/* ---- client: 認可要求（PKCE S256 の challenge と nonce）。フロントチャネル ---- */
+rule C_AuthReq:
+    [ Fr(~v), Fr(~n), !ClientSecret($C, ~cs) ]
+  --[ ClientStart($C, ~v, ~n) ]->
+    [ St_C1($C, ~v, ~n), Out(<'authreq', $C, h(~v), ~n>) ]
+
+/* ---- 利用者: client C 宛ての要求に passkey で同意する（#4 の束縛）---- */
+rule U_Consent:
+    [ !UserKey(U, ~uk), In(<'authreq', C, ch, n>) ]
+  --[ UserConsent(U, C, ch, n) ]->
+    [ Out(<'consent', U, C, ch, n, sign(<'consent', U, C, ch, n>, ~uk)>) ]
+
+/* ---- AS: 同意を確かめて認可コードを出す。code は (C, U, challenge, nonce) に結び付き、単回 ----
+   redirect はフロントチャネルなので Out（横取りできる）。 */
+rule AS_IssueCode:
+    [ In(<'consent', U, C, ch, n, sig>), !UserPub(U, upk), Fr(~code) ]
+  --[ Eq(verify(sig, <'consent', U, C, ch, n>, upk), true)
+    , IssueCode(C, U, ~code, ch, n) ]->
+    [ AS_Code(C, U, ~code, ch, n), Out(~code) ]
+
+/* ---- client: code を token に換える。TLS の中で client_secret_basic（秘密そのもの）と verifier を送る ---- */
+rule C_Redeem:
+    [ St_C1(C, ~v, ~n), !ClientSecret(C, ~cs), !ASTlsPub(pkAS), In(code), Fr(~k) ]
+  --[ ClientRedeem(C, code, ~v) ]->
+    [ St_C2(C, ~v, ~n, ~k), Out(aenc(<'tokenreq', C, ~cs, code, ~v, ~k>, pkAS)) ]
+
+/* ---- AS: token endpoint。code の単回消費 + client 認証（ハッシュの一致）+ PKCE ----
+   Bearer: access token に鍵の束縛は無い。ID token は (iss, aud=C, sub=U, nonce, at_hash) に署名。 */
+rule AS_IssueToken:
+    let idc = <'idt', 'iss', C, U, n, h(~at)>
+        idt = <idc, sign(idc, ~sk)>
+    in
+    [ AS_Code(C, U, code, ch, n)
+    , !ASTls(~tls), !ASClientHash(C, hs), !OPSig(~sk)
+    , In(aenc(<'tokenreq', C, cs, code, v, k>, pk(~tls)))
+    , Fr(~at)
+    ]
+  --[ Eq(h(cs), hs)                 // client_secret_basic（client_auth::ClientSecretBasic）
+    , ClientAuthed(C, code)
+    , IssueToken(C, U, code, ~at, idt)
+    ]->
+    [ !ATUser(~at, U), TokenReqLog(C, cs), Out(senc(<~at, idt>, k)) ]
+
+/* ---- 漏れ: 処理を終えた token 要求の client 認証の値が記録から漏れる ---- */
+rule Leak_TokenRequestLog:
+    [ TokenReqLog(C, cred) ] --[ RevealLog(C) ]-> [ Out(cred) ]
+
+/* ---- client: 応答を受け取り、ID token の署名・aud・nonce を確かめる ---- */
+rule C_GetTokens:
+    let idc = <'idt', 'iss', C, U, n, h(at)>
+    in
+    [ St_C2(C, v, n, k), !OPSigPub(opk), In(senc(<at, <idc, isig>>, k)) ]
+  --[ Eq(verify(isig, idc, opk), true)
+    , ClientAccept(C, v, n, U, at, <idc, isig>) ]->
+    [ !ClientAT(C, U, at) ]
+
+/* ---- 漏れ: client が持つ Bearer token が漏れる（記録、RP の不具合、端末への持ち出し）---- */
+rule Leak_AT:
+    [ !ClientAT(C, U, at) ] --[ RevealAT(at) ]-> [ Out(at) ]
+
+/* ---- RS: Bearer。token を持って来た者に、その者の TLS の鍵でリソースを返す ---- */
+rule C_UseAT:
+    [ !ClientAT(C, U, at), !ASTlsPub(pkAS), Fr(~k2) ]
+  --[ ClientUse(C, at) ]->
+    [ Out(aenc(<'rsreq', at, ~k2>, pkAS)) ]
+
+rule RS_Accept:
+    [ !ATUser(at, U), !Resource(U, ~res), !ASTls(~tls), In(aenc(<'rsreq', at, k2>, pk(~tls))) ]
+  --[ RS_Grant(at, U) ]->
+    [ Out(senc(~res, k2)) ]
+
+restriction Equality:
+    "All x y #i. Eq(x, y) @ #i ==> x = y"
+restriction OnlyOnce:
+    "All x #i #j. OnlyOnce(x) @ #i & OnlyOnce(x) @ #j ==> #i = #j"
+
+/* ======================== 示す性質 ======================== */
+
+lemma executable:
+  exists-trace
+    "Ex C v n U at idt code #a #b #g.
+        ClientAccept(C, v, n, U, at, idt) @ #a
+      & ClientRedeem(C, code, v) @ #b
+      & RS_Grant(at, U) @ #g
+      & not (Ex X #r. RevealClient(X) @ #r)
+      & not (Ex X #r. RevealUser(X) @ #r)
+      & not (Ex X #r. RevealAT(X) @ #r)
+      & not (Ex X #r. RevealLog(X) @ #r)"
+
+/* PKCE: 正直な client の要求から出た code を横取りしても、token は得られない。
+   client の秘密が漏れていても成り立つ（条件に RevealClient が無い）。 */
+lemma intercepted_code_unusable:
+    "All C v n U code at idt #s #c #t.
+        ClientStart(C, v, n) @ #s
+      & IssueCode(C, U, code, h(v), n) @ #c
+      & IssueToken(C, U, code, at, idt) @ #t
+      ==> (not (Ex #k. K(at) @ #k)) | (Ex #r. RevealAT(at) @ #r)"
+
+/* 注入への耐性: 正直な client がこの要求（v, n）で受け取った access token と ID token は、AS がこの client に、
+   この要求の challenge h(v) と nonce n に結び付いた code に対して出したもの。別の要求の code（攻撃者が自分の
+   要求で得た code を含む）、別の token、偽の ID token を混ぜられない。どの漏れの下でも成り立つ（条件が無い）。 */
+lemma no_injection:
+    "All C v n U at idt #a.
+        ClientAccept(C, v, n, U, at, idt) @ #a
+      ==> Ex code #c #t.
+            IssueCode(C, U, code, h(v), n) @ #c
+          & IssueToken(C, U, code, at, idt) @ #t
+          & #c < #t & #t < #a"
+
+end
