@@ -1449,6 +1449,32 @@ mod tests {
         assert_eq!(shown, 1);
     }
 
+    /// 管理者は自分のアカウントを凍結できない（直接 POST しても 403 で、凍結されない）。ほかの人は凍結できる。
+    #[tokio::test]
+    async fn an_admin_cannot_disable_their_own_account() {
+        let (p, fs) = provider_with_firestore().await;
+        crate::admin_store::grant_admin(&*fs, "acc-admin", "cli").await.unwrap();
+        register(&*fs, "admin@example.com", "acc-admin").await;
+        register(&*fs, "u@example.com", "acc-u").await;
+        let p = Arc::new(p);
+        let disable = |id: &str| {
+            let (p, id) = (p.clone(), id.to_string());
+            async move {
+                let jar = login_as(&p, "acc-admin").await;
+                user_disable(State(p), HeaderMap::new(), jar, Path(id)).await.status()
+            }
+        };
+        let disabled = |email: &'static str| {
+            let fs = fs.clone();
+            async move { crate::registration::get_account(&*fs, email).await.unwrap().unwrap().disabled }
+        };
+
+        assert_eq!(disable("acc-admin").await, StatusCode::FORBIDDEN);
+        assert!(!disabled("admin@example.com").await, "自分を凍結できた");
+        assert_eq!(disable("acc-u").await, StatusCode::SEE_OTHER);
+        assert!(disabled("u@example.com").await);
+    }
+
     /// 「パスキーだけ削除」は、自分と管理者には使えない。ふつうの人には使え、詳細へ戻る。
     #[tokio::test]
     async fn delete_passkeys_refuses_self_and_admins() {

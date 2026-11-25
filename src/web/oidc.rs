@@ -1842,6 +1842,108 @@ mod tests {
         assert_eq!(rs["consumed"], true);
     }
 
+    /// mandate を消費できるのは、token を受けた client 自身か、挙げた RS で、どちらも資格情報で認証できること。
+    /// 持ち主は 1 度だけ消費でき、資格情報を出さない呼び手（public の持ち主を含む）は消費できない。
+    #[tokio::test]
+    async fn the_token_holder_consumes_its_mandate_once_and_a_caller_without_credentials_cannot() {
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_client(crate::model::Client {
+                    client_id: "rp".into(),
+                    client_secret: Some(crate::dcr::hash_token("s3cret")),
+                    ..client("client_secret_basic")
+                })
+                .with_client(crate::model::Client { client_id: "pub-rp".into(), ..client("none") }),
+        );
+        let mut public_token = at(None);
+        public_token.token = "AT-PUB".into();
+        public_token.client_id = "pub-rp".into();
+        p.store.save_access_token(public_token).await.unwrap();
+        p.store.save_access_token(at(None)).await.unwrap();
+        let consume = |headers: HeaderMap, form: &[(&str, &str)]| {
+            let form = Form(form.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>());
+            mandate_consume(State(p.clone()), headers, form)
+        };
+        let consumed = |token: &'static str| {
+            let p = p.clone();
+            async move { p.store.get_access_token(token).await.unwrap().unwrap().mandate_consumed }
+        };
+
+        let public = consume(HeaderMap::new(), &[("token", "AT-PUB"), ("client_id", "pub-rp")]).await;
+        assert_eq!(public.status(), StatusCode::UNAUTHORIZED);
+        assert!(!consumed("AT-PUB").await, "public の持ち主が消費できた");
+        let anonymous = consume(HeaderMap::new(), &[("token", "AT")]).await;
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+        assert!(!consumed("AT").await, "認証の無い呼び手が消費できた");
+
+        let mut holder = HeaderMap::new();
+        holder.insert(header::AUTHORIZATION, format!("Basic {}", B64.encode("rp:s3cret")).parse().unwrap());
+        let body = |r: Response| async move {
+            serde_json::from_slice::<serde_json::Value>(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap()
+        };
+        assert_eq!(body(consume(holder.clone(), &[("token", "AT")]).await).await["consumed"], true);
+        assert!(consumed("AT").await);
+        assert_eq!(body(consume(holder, &[("token", "AT")]).await).await["consumed"], false, "2 度目も消費できた");
+    }
+
+    async fn token_error(p: &Arc<Provider>, headers: HeaderMap, form: &[(&str, &str)]) -> (StatusCode, serde_json::Value) {
+        let form = Form(form.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>());
+        let r = token(State(p.clone()), headers, form).await;
+        let status = r.status();
+        let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null))
+    }
+
+    fn basic_header(id: &str, secret: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, format!("Basic {}", B64.encode(format!("{id}:{secret}"))).parse().unwrap());
+        h
+    }
+
+    /// token の口は、認証できた client でも、その client に許していない grant_type を断る。
+    /// 許した grant_type は門を越え、grant の側の検査（ここでは未知の code）で落ちる。
+    #[tokio::test]
+    async fn the_token_endpoint_refuses_a_grant_type_the_client_was_not_given() {
+        let p = Arc::new(Provider::new("https://op.example").with_client(crate::model::Client {
+            client_id: "rp".into(),
+            client_secret: Some(crate::dcr::hash_token("s3cret")),
+            grant_types: vec!["authorization_code".into()],
+            ..client("client_secret_basic")
+        }));
+        let (status, body) =
+            token_error(&p, basic_header("rp", "s3cret"), &[("grant_type", "refresh_token"), ("refresh_token", "RT")]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "unauthorized_client", "{body}");
+
+        let (_, body) = token_error(
+            &p,
+            basic_header("rp", "s3cret"),
+            &[("grant_type", "authorization_code"), ("code", "UNKNOWN"), ("redirect_uri", "https://rp.example/cb")],
+        )
+        .await;
+        assert_ne!(body["error"], "unauthorized_client", "許した grant_type まで断った: {body}");
+    }
+
+    /// private_key_jwt で登録した client（DCR と同じく secret を持たない）は、client_secret_basic では通らない。
+    #[tokio::test]
+    async fn a_private_key_jwt_client_is_refused_with_client_secret_basic() {
+        let p = Arc::new(Provider::new("https://op.example").with_client(crate::model::Client {
+            client_id: "pk-rp".into(),
+            grant_types: vec!["authorization_code".into()],
+            ..client("private_key_jwt")
+        }));
+        for secret in ["", "s3cret"] {
+            let (status, body) = token_error(
+                &p,
+                basic_header("pk-rp", secret),
+                &[("grant_type", "authorization_code"), ("code", "C"), ("redirect_uri", "https://rp.example/cb")],
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{secret:?}: {body}");
+            assert_eq!(body["error"], "invalid_client");
+        }
+    }
+
     #[test]
     fn introspection_dpop_token_includes_cnf_jkt() {
         let b = introspection_active_body(&at(Some("JKT123")));
