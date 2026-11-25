@@ -27,7 +27,10 @@ pub(super) enum Recovery {
 }
 
 /// メールで passkey を足してよいアカウントか。
-pub(super) async fn recovery_for(fs: &dyn crate::document_store::DocumentStore, email: &str) -> Result<Recovery, String> {
+pub(super) async fn recovery_for(
+    fs: &dyn crate::document_store::DocumentStore,
+    email: &str,
+) -> Result<Recovery, String> {
     let Some(a) = registration::get_account(fs, email).await? else {
         return Ok(Recovery::NoPasskey);
     };
@@ -81,7 +84,10 @@ pub(super) struct RecoverQuery {
 }
 
 fn clean_uid(uid: &str) -> String {
-    uid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect()
+    uid.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect()
 }
 
 /// GET /recover: t が無ければメールアドレスを聞く。t があれば、この端末に passkey を足す画面。
@@ -98,7 +104,10 @@ pub(super) async fn recover_page(
         let back = if uid.is_empty() {
             String::new()
         } else {
-            format!(r#"<p class="small"><a href="{}">[[Back to sign in]]</a></p>"#, p.path(&format!("/login/{uid}")))
+            format!(
+                r#"<p class="small"><a href="{}">[[Back to sign in]]</a></p>"#,
+                p.path(&format!("/login/{uid}"))
+            )
         };
         return page(
             lang,
@@ -129,19 +138,27 @@ pub(super) async fn recover_page(
         }
         Err(e) => return internal("recover_page: peek", &e),
     };
-    let token: String = q.t.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    let token: String =
+        q.t.chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
     // 既にこの端末に passkey があったときは、リンクで画面を移さずにその場でそのパスキーでログインする。
     let from = registration::came_from(fs, &token).await;
     // その場でログインする先。元のログインがこのブラウザでまだ在ればそれを終えてアプリへ、無ければ /account へ。
-    let (login_opt, login_ver, login_done) = if !super::came_from(&p, &jar, &from.uid).await.uid.is_empty() {
-        (
-            p.path(&format!("/login/{}/passkey/options", from.uid)),
-            p.path(&format!("/login/{}/passkey/verify", from.uid)),
-            String::new(),
-        )
-    } else {
-        (p.path("/account/signin/options"), p.path("/account/signin/verify"), super::account_url(&p, &from.client_id, false))
-    };
+    let (login_opt, login_ver, login_done) =
+        if !super::came_from(&p, &jar, &from.uid).await.uid.is_empty() {
+            (
+                p.path(&format!("/login/{}/passkey/options", from.uid)),
+                p.path(&format!("/login/{}/passkey/verify", from.uid)),
+                String::new(),
+            )
+        } else {
+            (
+                p.path("/account/signin/options"),
+                p.path("/account/signin/verify"),
+                super::account_url(&p, &from.client_id, false),
+            )
+        };
     let current = super::signed_in_as_other(&p, &jar, &email).await;
     let body = r##"__SWITCH__<div id="main" __MAIN_HIDDEN__><h1>[[Add a passkey on this device]]</h1>
 <p>{target}</p>
@@ -203,7 +220,14 @@ async function signIn(){
         .replace("__LOGIN_DONE__", &login_done);
     let html = super::fill_switch_notice(html, current.as_deref().unwrap_or(""), &email);
     // ページの URL に token が在る。外へのリンクで Referer に載せない。
-    ([(header::CACHE_CONTROL, "no-store"), (header::REFERRER_POLICY, "no-referrer")], Html(html)).into_response()
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        Html(html),
+    )
+        .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -227,12 +251,23 @@ pub(super) async fn recover_submit(
     };
     let email = form.email.trim().to_lowercase();
     let from = super::came_from(&p, &jar, &form.uid).await;
-    match super::register::issue_register_email(&p, fs, &email, &client_ip(&headers), Some(lang), &from).await {
+    match super::register::issue_register_email(
+        &p,
+        fs,
+        &email,
+        &client_ip(&headers),
+        Some(lang),
+        &from,
+    )
+    .await
+    {
         Ok(()) => page(
             lang,
             "<h1>[[Email sent]]</h1><p>[[If this address is registered, we sent a link to add a passkey on this device. Open it on the device you want to use (the link expires in 15 minutes).]]</p>",
         ),
-        Err(e) if e == "invalid email" => plain_error(&localize("[[Enter a valid email address.]]", lang)),
+        Err(e) if e == "invalid email" => {
+            plain_error(&localize("[[Enter a valid email address.]]", lang))
+        }
         Err(e) if e == "rate_limited" => (
             StatusCode::TOO_MANY_REQUESTS,
             localize("[[Too many requests. Please try again later.]]", lang),
@@ -240,7 +275,11 @@ pub(super) async fn recover_submit(
             .into_response(),
         Err(e) => {
             tracing::error!("recover_submit: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, localize("[[Something went wrong. Please try again.]]", lang)).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                localize("[[Something went wrong. Please try again.]]", lang),
+            )
+                .into_response()
         }
     }
 }
@@ -250,7 +289,10 @@ pub(super) struct RecoverOptionsReq {
     token: String,
 }
 
-pub(super) async fn recover_options(State(p): State<Arc<Provider>>, Json(req): Json<RecoverOptionsReq>) -> Response {
+pub(super) async fn recover_options(
+    State(p): State<Arc<Provider>>,
+    Json(req): Json<RecoverOptionsReq>,
+) -> Response {
     let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
@@ -274,12 +316,26 @@ pub(super) async fn recover_options(State(p): State<Arc<Provider>>, Json(req): J
         Ok(c) => c,
         Err(e) => return internal("recover_options: list_credentials", &e),
     };
-    let challenge =
-        match registration::create_webauthn_challenge(fs, &email, ChallengeKind::Reg, CEREMONY_UID, &account.account_id).await {
-            Ok(c) => c,
-            Err(e) => return internal("recover_options: create challenge", &e),
-        };
-    Json(super::register::creation_options(&p, &challenge, &account.account_id, &email, &creds)).into_response()
+    let challenge = match registration::create_webauthn_challenge(
+        fs,
+        &email,
+        ChallengeKind::Reg,
+        CEREMONY_UID,
+        &account.account_id,
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => return internal("recover_options: create challenge", &e),
+    };
+    Json(super::register::creation_options(
+        &p,
+        &challenge,
+        &account.account_id,
+        &email,
+        &creds,
+    ))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -309,11 +365,14 @@ pub(super) async fn recover_verify(
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
     };
-    let (email2, kind, uid, account_id) = match registration::consume_webauthn_challenge(fs, &challenge).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
-        Err(e) => return internal("recover_verify: consume challenge", &e),
-    };
+    let (email2, kind, uid, account_id) =
+        match registration::consume_webauthn_challenge(fs, &challenge).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response();
+            }
+            Err(e) => return internal("recover_verify: consume challenge", &e),
+        };
     if kind != ChallengeKind::Reg || uid != CEREMONY_UID || email2 != email {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
@@ -375,7 +434,14 @@ pub(super) async fn recover_verify(
     tracing::info!(event = "recover_passkey", sub = %pseudonymize_sub(&account_id));
     let redirect = super::continue_after_email(&p, &jar, &from, &account_id, true).await;
     let jar = start_session(&p, jar, account_id, now()).await;
-    (jar, (StatusCode::CREATED, Json(serde_json::json!({ "ok": true, "redirect": redirect })))).into_response()
+    (
+        jar,
+        (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "ok": true, "redirect": redirect })),
+        ),
+    )
+        .into_response()
 }
 
 /// 復旧の時刻を残して passkey を足し、全部のセッションとトークンを失効させ、監査ログに残す。
@@ -391,7 +457,10 @@ async fn add_and_revoke(
     registration::save_credential(fs, email, account_id, outcome).await?;
     let c = p.store.revoke_account(account_id, "").await;
     if !c.query_errors.is_empty() {
-        tracing::error!("recover_passkey: revocation incomplete for account_id={account_id}: {:?}", c.query_errors);
+        tracing::error!(
+            "recover_passkey: revocation incomplete for account_id={account_id}: {:?}",
+            c.query_errors
+        );
     }
     crate::audit_log::record(
         fs,

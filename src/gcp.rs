@@ -23,121 +23,135 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
     if use_firestore {
         let fs = std::sync::Arc::new(firestore::Firestore::new(resolve_project()));
         if std::env::var("K_SERVICE").is_ok() {
-        // 署名鍵 ES256: KMS_ES256_KEY があれば Cloud KMS（秘密鍵をプロセスに展開しない）、
-        // 無ければ Secret Manager の固定鍵。本番(K_SERVICE)ではどちらからも正規鍵を
-        // ロードできなければ起動を中止する（起動ごとの一時鍵での縮退運用を禁止）。
-        let es_kms: Option<std::sync::Arc<dyn jws::JwsSigner>> = match std::env::var("KMS_ES256_KEY") {
-            Ok(key) => match kms::KmsSigner::es256(fs.clone(), &key).await {
-                Ok(s) => {
-                    tracing::info!("ES256 signing via Cloud KMS");
-                    Some(std::sync::Arc::new(s))
-                }
-                Err(e) => {
-                    tracing::error!("KMS ES256 init failed ({e}); falling back to Secret Manager");
-                    None
-                }
-            },
-            Err(_) => None,
-        };
-        let es_loaded = if let Some(s) = es_kms {
-            provider = provider.with_signer(s);
-            true
-        } else {
-            match fs.access_secret("oidc-signing-key-es256").await {
-                Ok(Some(scalar)) => match jws::Es256Signer::from_scalar_b64(&scalar) {
-                    Ok(signer) => {
-                        tracing::info!("loaded ES256 signing key from Secret Manager");
-                        provider = provider.with_signer(std::sync::Arc::new(signer));
-                        true
-                    }
-                    Err(e) => {
-                        tracing::error!("ES256 key from Secret Manager invalid: {e}");
+            // 署名鍵 ES256: KMS_ES256_KEY があれば Cloud KMS（秘密鍵をプロセスに展開しない）、
+            // 無ければ Secret Manager の固定鍵。本番(K_SERVICE)ではどちらからも正規鍵を
+            // ロードできなければ起動を中止する（起動ごとの一時鍵での縮退運用を禁止）。
+            let es_kms: Option<std::sync::Arc<dyn jws::JwsSigner>> =
+                match std::env::var("KMS_ES256_KEY") {
+                    Ok(key) => match kms::KmsSigner::es256(fs.clone(), &key).await {
+                        Ok(s) => {
+                            tracing::info!("ES256 signing via Cloud KMS");
+                            Some(std::sync::Arc::new(s))
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "KMS ES256 init failed ({e}); falling back to Secret Manager"
+                            );
+                            None
+                        }
+                    },
+                    Err(_) => None,
+                };
+            let es_loaded = if let Some(s) = es_kms {
+                provider = provider.with_signer(s);
+                true
+            } else {
+                match fs.access_secret("oidc-signing-key-es256").await {
+                    Ok(Some(scalar)) => match jws::Es256Signer::from_scalar_b64(&scalar) {
+                        Ok(signer) => {
+                            tracing::info!("loaded ES256 signing key from Secret Manager");
+                            provider = provider.with_signer(std::sync::Arc::new(signer));
+                            true
+                        }
+                        Err(e) => {
+                            tracing::error!("ES256 key from Secret Manager invalid: {e}");
+                            false
+                        }
+                    },
+                    Ok(None) => {
+                        tracing::error!("ES256 signing key not found in KMS or Secret Manager");
                         false
                     }
-                },
-                Ok(None) => {
-                    tracing::error!("ES256 signing key not found in KMS or Secret Manager");
-                    false
-                }
-                Err(e) => {
-                    tracing::error!("ES256 secret access failed: {e}");
-                    false
-                }
-            }
-        };
-        if !es_loaded {
-            tracing::error!(
-                "FATAL: no production ES256 signing key available; refusing to start with an ephemeral key"
-            );
-            std::process::exit(1);
-        }
-        // RS256（OIDC Core §15.1 必須）: KMS_RS256_KEY 優先、無ければ Secret Manager。
-        // ES256 と同じく、本番では正規鍵をロードできなければ起動を中止する。
-        let rs_kms: Option<std::sync::Arc<dyn jws::JwsSigner>> = match std::env::var("KMS_RS256_KEY") {
-            Ok(key) => match kms::KmsSigner::rs256(fs.clone(), &key).await {
-                Ok(s) => {
-                    tracing::info!("RS256 signing via Cloud KMS");
-                    Some(std::sync::Arc::new(s))
-                }
-                Err(e) => {
-                    tracing::error!("KMS RS256 init failed ({e}); falling back to Secret Manager");
-                    None
-                }
-            },
-            Err(_) => None,
-        };
-        let rs_loaded = if let Some(s) = rs_kms {
-            provider = provider.add_signer(s);
-            true
-        } else {
-            match fs.access_secret("oidc-signing-key-rs256").await {
-                Ok(Some(pem)) => match jws::Rs256Signer::from_pkcs8_pem(&pem) {
-                    Ok(signer) => {
-                        tracing::info!("loaded RS256 signing key from Secret Manager");
-                        provider = provider.add_signer(std::sync::Arc::new(signer));
-                        true
-                    }
                     Err(e) => {
-                        tracing::error!("RS256 key from Secret Manager invalid: {e}");
+                        tracing::error!("ES256 secret access failed: {e}");
                         false
                     }
-                },
-                Ok(None) => {
-                    tracing::error!("RS256 signing key not found in KMS or Secret Manager");
-                    false
                 }
-                Err(e) => {
-                    tracing::error!("RS256 secret access failed: {e}");
-                    false
-                }
+            };
+            if !es_loaded {
+                tracing::error!(
+                    "FATAL: no production ES256 signing key available; refusing to start with an ephemeral key"
+                );
+                std::process::exit(1);
             }
-        };
-        if !rs_loaded {
-            tracing::error!(
-                "FATAL: no production RS256 signing key available; refusing to start with an ephemeral key"
-            );
-            std::process::exit(1);
-        }
+            // RS256（OIDC Core §15.1 必須）: KMS_RS256_KEY 優先、無ければ Secret Manager。
+            // ES256 と同じく、本番では正規鍵をロードできなければ起動を中止する。
+            let rs_kms: Option<std::sync::Arc<dyn jws::JwsSigner>> =
+                match std::env::var("KMS_RS256_KEY") {
+                    Ok(key) => match kms::KmsSigner::rs256(fs.clone(), &key).await {
+                        Ok(s) => {
+                            tracing::info!("RS256 signing via Cloud KMS");
+                            Some(std::sync::Arc::new(s))
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "KMS RS256 init failed ({e}); falling back to Secret Manager"
+                            );
+                            None
+                        }
+                    },
+                    Err(_) => None,
+                };
+            let rs_loaded = if let Some(s) = rs_kms {
+                provider = provider.add_signer(s);
+                true
+            } else {
+                match fs.access_secret("oidc-signing-key-rs256").await {
+                    Ok(Some(pem)) => match jws::Rs256Signer::from_pkcs8_pem(&pem) {
+                        Ok(signer) => {
+                            tracing::info!("loaded RS256 signing key from Secret Manager");
+                            provider = provider.add_signer(std::sync::Arc::new(signer));
+                            true
+                        }
+                        Err(e) => {
+                            tracing::error!("RS256 key from Secret Manager invalid: {e}");
+                            false
+                        }
+                    },
+                    Ok(None) => {
+                        tracing::error!("RS256 signing key not found in KMS or Secret Manager");
+                        false
+                    }
+                    Err(e) => {
+                        tracing::error!("RS256 secret access failed: {e}");
+                        false
+                    }
+                }
+            };
+            if !rs_loaded {
+                tracing::error!(
+                    "FATAL: no production RS256 signing key available; refusing to start with an ephemeral key"
+                );
+                std::process::exit(1);
+            }
         } // K_SERVICE 限定(KMS/Secret Manager 署名鍵)ここまで。
 
         // jti リプレイ防止を Firestore に分散化（インスタンス跨ぎで単回を保証）。
         // ここから下は use_firestore（K_SERVICE または FIRESTORE_EMULATOR_HOST）で共通。
-        provider =
-            provider.with_dpop(std::sync::Arc::new(dpop::Es256Dpop::with_store(fs.clone())));
+        provider = provider.with_dpop(std::sync::Arc::new(dpop::Es256Dpop::with_store(fs.clone())));
         provider.client_auth.insert(
             "private_key_jwt".into(),
             std::sync::Arc::new(client_auth::PrivateKeyJwt::with_store(fs.clone())),
         );
         // セッション/コード/トークンも Firestore に永続化（インスタンス跨ぎ）。
         provider = provider
-            .with_store(std::sync::Arc::new(firestore_store::FirestoreStore::new(fs.clone())))
-            .with_ciba(std::sync::Arc::new(ciba::FirestoreCibaStore::new(fs.clone())))
+            .with_store(std::sync::Arc::new(firestore_store::FirestoreStore::new(
+                fs.clone(),
+            )))
+            .with_ciba(std::sync::Arc::new(ciba::FirestoreCibaStore::new(
+                fs.clone(),
+            )))
             .with_firestore(fs);
         if let Ok(key) = std::env::var("RESEND_API_KEY") {
             // 差出人が無ければ Resend は使わず、メールはログに出す（リンクはそこから拾える）。
             match std::env::var("MAIL_FROM") {
-                Ok(from) => provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from))),
-                Err(_) => tracing::warn!("RESEND_API_KEY is set but MAIL_FROM is not; mail goes to the log instead of Resend"),
+                Ok(from) => {
+                    provider = provider
+                        .with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from)))
+                }
+                Err(_) => tracing::warn!(
+                    "RESEND_API_KEY is set but MAIL_FROM is not; mail goes to the log instead of Resend"
+                ),
             }
         }
     }
@@ -323,7 +337,9 @@ pub(crate) fn resolve_project() -> String {
     match std::env::var("GCLOUD_PROJECT").or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT")) {
         Ok(project) => project,
         Err(_) => {
-            tracing::error!("FATAL: set GCLOUD_PROJECT or GOOGLE_CLOUD_PROJECT to the GCP project id");
+            tracing::error!(
+                "FATAL: set GCLOUD_PROJECT or GOOGLE_CLOUD_PROJECT to the GCP project id"
+            );
             std::process::exit(2);
         }
     }
@@ -347,7 +363,9 @@ async fn revoke_client(args: &[String]) {
     match dcr_store::revoke_client(&fs, &client_id).await {
         Ok(true) => {
             audit_log::record(&fs, "cli", "revoke_client", &client_id, "").await;
-            println!("revoked: {client_id}（新規認可・refresh は即停止、発行済み AT は ≤15 分で失効）")
+            println!(
+                "revoked: {client_id}（新規認可・refresh は即停止、発行済み AT は ≤15 分で失効）"
+            )
         }
         Ok(false) => {
             eprintln!("revoke-client: not found: {client_id}");
@@ -388,7 +406,14 @@ async fn grant_admin_cmd(args: &[String]) {
     let account_id = resolve_account_id("grant-admin", &fs, &email).await;
     match admin_store::grant_admin(&fs, &account_id, "cli").await {
         Ok(admin_store::GrantAdminResult::Granted) => {
-            audit_log::record(&fs, "cli", "grant_admin", &account_id, &format!("email={email}")).await;
+            audit_log::record(
+                &fs,
+                "cli",
+                "grant_admin",
+                &account_id,
+                &format!("email={email}"),
+            )
+            .await;
             println!("granted: {email} (account_id={account_id})")
         }
         Ok(admin_store::GrantAdminResult::AlreadyAdmin) => {
@@ -437,7 +462,14 @@ async fn revoke_admin_cmd(args: &[String]) {
     let account_id = resolve_account_id("revoke-admin", &fs, &email).await;
     match admin_store::revoke_admin(&fs, &account_id).await {
         Ok(admin_store::RevokeAdminResult::Revoked) => {
-            audit_log::record(&fs, "cli", "revoke_admin", &account_id, &format!("email={email}")).await;
+            audit_log::record(
+                &fs,
+                "cli",
+                "revoke_admin",
+                &account_id,
+                &format!("email={email}"),
+            )
+            .await;
             println!("revoked: {email} (account_id={account_id})")
         }
         Ok(admin_store::RevokeAdminResult::NotAdmin) => {
@@ -449,7 +481,9 @@ async fn revoke_admin_cmd(args: &[String]) {
             std::process::exit(1);
         }
         Ok(admin_store::RevokeAdminResult::Conflict) => {
-            eprintln!("revoke-admin: 他の書き込みと競合しました。もう一度実行してください: {email}");
+            eprintln!(
+                "revoke-admin: 他の書き込みと競合しました。もう一度実行してください: {email}"
+            );
             std::process::exit(1);
         }
         Err(e) => {
@@ -546,7 +580,10 @@ fn require_env(name: &str) -> String {
 /// 誤ったハッシュをFirestoreへ書き込むと、save_client が create_if_absent のため事後修正も
 /// 手動削除が要る）。ローカル実行では通常env var未設定なので、その場合はSecret Manager
 /// の値をそのまま信頼する。
-async fn secret_hash_from_manager_verified(fs: &firestore::Firestore, name: &'static str) -> String {
+async fn secret_hash_from_manager_verified(
+    fs: &firestore::Firestore,
+    name: &'static str,
+) -> String {
     let raw = match fs.access_secret(name).await {
         Ok(Some(v)) => v,
         Ok(None) => {
@@ -629,11 +666,17 @@ async fn migrate_static_clients_cmd(args: &[String]) {
                     println!("migrated (verified): {}", c.client_id)
                 }
                 Some(_) => {
-                    eprintln!("migrate-static-clients: {}: 書き込み後の読み戻しが一致しません", c.client_id);
+                    eprintln!(
+                        "migrate-static-clients: {}: 書き込み後の読み戻しが一致しません",
+                        c.client_id
+                    );
                     had_error = true;
                 }
                 None => {
-                    eprintln!("migrate-static-clients: {}: 書き込み後に読み戻せません", c.client_id);
+                    eprintln!(
+                        "migrate-static-clients: {}: 書き込み後に読み戻せません",
+                        c.client_id
+                    );
                     had_error = true;
                 }
             },
@@ -644,7 +687,9 @@ async fn migrate_static_clients_cmd(args: &[String]) {
         }
     }
     if had_error {
-        eprintln!("migrate-static-clients: 一部のクライアントで失敗しました。上記を確認してください。");
+        eprintln!(
+            "migrate-static-clients: 一部のクライアントで失敗しました。上記を確認してください。"
+        );
         std::process::exit(1);
     }
 }

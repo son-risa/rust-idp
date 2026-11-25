@@ -47,9 +47,11 @@ pub async fn verify(
         .iter()
         .find(|k| k.kid == kid)
         .ok_or_else(|| bad("no client key matches request object kid"))?;
-    let vk = crate::es256::verifying_key_from_xy(&dec(&jwk.x)?, &dec(&jwk.y)?).map_err(|e| bad(&e))?;
+    let vk =
+        crate::es256::verifying_key_from_xy(&dec(&jwk.x)?, &dec(&jwk.y)?).map_err(|e| bad(&e))?;
     let signing_input = format!("{}.{}", parts[0], parts[1]);
-    let sig = p256::ecdsa::Signature::from_slice(&dec(parts[2])?).map_err(|_| bad("request object sig"))?;
+    let sig = p256::ecdsa::Signature::from_slice(&dec(parts[2])?)
+        .map_err(|_| bad("request object sig"))?;
     use p256::ecdsa::signature::Verifier;
     vk.verify(signing_input.as_bytes(), &sig)
         .map_err(|_| bad("request object signature invalid"))?;
@@ -80,7 +82,9 @@ pub async fn verify(
         return Err(bad("request object expired"));
     }
     if exp > now + 3600 {
-        return Err(bad("request object exp is more than 60 minutes in the future"));
+        return Err(bad(
+            "request object exp is more than 60 minutes in the future",
+        ));
     }
     let nbf = payload
         .get("nbf")
@@ -90,7 +94,9 @@ pub async fn verify(
         return Err(bad("request object nbf is in the future"));
     }
     if nbf < now - 3600 {
-        return Err(bad("request object nbf is more than 60 minutes in the past"));
+        return Err(bad(
+            "request object nbf is more than 60 minutes in the past",
+        ));
     }
     if payload.get("iat").and_then(|v| v.as_i64()).is_none() {
         return Err(bad("request object missing iat"));
@@ -112,7 +118,9 @@ pub async fn verify(
     // 非文字列は JSON 文字列へシリアライズして保持する。as_str だけだと黙って欠落し、FAPI
     // クライアントの mandate(authorization_details) が署名経路で失われていた。非署名(フォーム)
     // 経路でもこれらは JSON 文字列で渡るため、ダウンストリームの扱いと整合する。
-    let obj = payload.as_object().ok_or_else(|| bad("request object payload not an object"))?;
+    let obj = payload
+        .as_object()
+        .ok_or_else(|| bad("request object payload not an object"))?;
     let mut params = HashMap::new();
     for (k, v) in obj {
         if ENVELOPE_CLAIMS.contains(&k.as_str()) {
@@ -139,12 +147,12 @@ pub async fn verify(
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
     use crate::es256::b64url_encode as b64e;
     use crate::model::JwkPub;
-    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-    use serde_json::{json, Value};
+    use p256::ecdsa::{Signature, SigningKey, signature::Signer};
+    use p256::elliptic_curve::Generate;
+    use serde_json::{Value, json};
 
     const ISS: &str = "https://op.example/oidc";
 
@@ -182,7 +190,11 @@ mod tests {
     }
 
     /// テスト用: 毎回新しい memory jti ストアで verify を同期実行するラッパ。
-    fn verify_t(c: &Client, jwt: &str, issuer: &str) -> Result<HashMap<String, String>, OAuthError> {
+    fn verify_t(
+        c: &Client,
+        jwt: &str,
+        issuer: &str,
+    ) -> Result<HashMap<String, String>, OAuthError> {
         let store = NonceStore::memory();
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -227,12 +239,16 @@ mod tests {
         pl["max_age"] = json!(300);
         let p = verify_t(&c, &sign(&key, &good_header(), &pl), ISS).unwrap();
         // authorization_details は JSON 文字列として保持され、配列へパースし直せる。
-        let ad: Value =
-            serde_json::from_str(p.get("authorization_details").expect("authz_details preserved")).unwrap();
+        let ad: Value = serde_json::from_str(
+            p.get("authorization_details")
+                .expect("authz_details preserved"),
+        )
+        .unwrap();
         assert_eq!(ad[0]["type"], "payment_initiation");
         assert_eq!(ad[0]["amount"], 100);
         // claims(オブジェクト)も保持される。
-        let claims: Value = serde_json::from_str(p.get("claims").expect("claims preserved")).unwrap();
+        let claims: Value =
+            serde_json::from_str(p.get("claims").expect("claims preserved")).unwrap();
         assert!(claims["userinfo"].is_object());
         // 数値(max_age)も保持される。
         assert_eq!(p.get("max_age").map(String::as_str), Some("300"));
@@ -268,7 +284,9 @@ mod tests {
         let c = client_with_key(&key);
         let jwt = sign(&key, &good_header(), &good_payload());
         let parts: Vec<&str> = jwt.split('.').collect();
-        let forged = b64e(json!({"iss":"cli-1","aud":ISS,"exp":now()+300,"scope":"openid admin"}).to_string());
+        let forged = b64e(
+            json!({"iss":"cli-1","aud":ISS,"exp":now()+300,"scope":"openid admin"}).to_string(),
+        );
         let tampered = format!("{}.{}.{}", parts[0], forged, parts[2]);
         assert!(verify_t(&c, &tampered, ISS).is_err());
     }

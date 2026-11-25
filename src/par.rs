@@ -2,8 +2,8 @@
 //! クライアントが認可リクエストを事前 POST し request_uri を受け取る。
 //! authorize はその request_uri からパラメータを復元する。FAPI 2.0 で必須。
 
-use crate::firestore;
 use crate::document_store::DocumentStore;
+use crate::firestore;
 #[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
 use crate::jws::b64url;
@@ -15,7 +15,10 @@ const COL: &str = "parRequests";
 pub const URN_PREFIX: &str = "urn:ietf:params:oauth:request_uri:";
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// PAR の request_uri。auth_req_id 等と取り違えないよう newtype。
@@ -23,7 +26,11 @@ fn now() -> u64 {
 pub struct RequestUri(pub String);
 
 /// 認可リクエストを保存し request_uri を返す。params は元の urlencoded クエリ。
-pub async fn create(fs: &dyn DocumentStore, client_id: &str, params: &str) -> Result<RequestUri, String> {
+pub async fn create(
+    fs: &dyn DocumentStore,
+    client_id: &str,
+    params: &str,
+) -> Result<RequestUri, String> {
     let mut buf = [0u8; 32];
     getrandom::fill(&mut buf).expect("OS の乱数源");
     let id = b64url(buf);
@@ -43,7 +50,10 @@ pub async fn create(fs: &dyn DocumentStore, client_id: &str, params: &str) -> Re
 /// request_uri を読むが削除しない (client_id, params)。期限切れ・不正は None。
 /// 認可完了前は再利用可能とするため /authorize ではこちらを使い、
 /// コード発行時に delete で単回化する（RFC 9126: 完了後の再利用は不可）。
-pub async fn peek(fs: &dyn DocumentStore, request_uri: &str) -> Result<Option<(String, String)>, String> {
+pub async fn peek(
+    fs: &dyn DocumentStore,
+    request_uri: &str,
+) -> Result<Option<(String, String)>, String> {
     let id = match request_uri.strip_prefix(URN_PREFIX) {
         Some(id) if (20..=100).contains(&id.len()) => id,
         _ => return Ok(None),
@@ -61,8 +71,12 @@ pub async fn peek(fs: &dyn DocumentStore, request_uri: &str) -> Result<Option<(S
     if expires < now() {
         return Ok(None);
     }
-    let client_id = firestore::field_str(&fields, "clientId").unwrap_or("").to_string();
-    let params = firestore::field_str(&fields, "params").unwrap_or("").to_string();
+    let client_id = firestore::field_str(&fields, "clientId")
+        .unwrap_or("")
+        .to_string();
+    let params = firestore::field_str(&fields, "params")
+        .unwrap_or("")
+        .to_string();
     Ok(Some((client_id, params)))
 }
 
@@ -84,12 +98,20 @@ mod tests {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
 
-        let uri = create(&fs, "client-1", "response_type=code&scope=openid").await.unwrap();
+        let uri = create(&fs, "client-1", "response_type=code&scope=openid")
+            .await
+            .unwrap();
         assert!(uri.0.starts_with(URN_PREFIX));
 
         // peek は削除しない(認可完了前は何度でも読める)。
         let first = peek(&fs, &uri.0).await.unwrap().unwrap();
-        assert_eq!(first, ("client-1".to_string(), "response_type=code&scope=openid".to_string()));
+        assert_eq!(
+            first,
+            (
+                "client-1".to_string(),
+                "response_type=code&scope=openid".to_string()
+            )
+        );
         let second = peek(&fs, &uri.0).await.unwrap();
         assert!(second.is_some(), "peek はドキュメントを消費しない");
     }
@@ -101,8 +123,14 @@ mod tests {
 
         let uri = create(&fs, "client-1", "p=1").await.unwrap();
         assert!(consume(&fs, &uri.0).await.unwrap());
-        assert!(!consume(&fs, &uri.0).await.unwrap(), "2 度目の消費は通らない");
-        assert!(peek(&fs, &uri.0).await.unwrap().is_none(), "消費の後は再利用できない");
+        assert!(
+            !consume(&fs, &uri.0).await.unwrap(),
+            "2 度目の消費は通らない"
+        );
+        assert!(
+            peek(&fs, &uri.0).await.unwrap().is_none(),
+            "消費の後は再利用できない"
+        );
     }
 
     #[tokio::test]
@@ -145,6 +173,12 @@ mod tests {
         let fs = Firestore::new_for_test("proj", host);
 
         assert!(peek(&fs, "not-a-valid-uri").await.unwrap().is_none());
-        assert!(peek(&fs, &format!("{URN_PREFIX}short")).await.unwrap().is_none(), "20文字未満のIDは拒否");
+        assert!(
+            peek(&fs, &format!("{URN_PREFIX}short"))
+                .await
+                .unwrap()
+                .is_none(),
+            "20文字未満のIDは拒否"
+        );
     }
 }

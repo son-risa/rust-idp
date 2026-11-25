@@ -8,7 +8,7 @@
 //! 実装は 2 つ。既定の [`MemoryDocumentStore`]（1 つの process の中だけ）と、`gcp` の feature の Firestore。
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -21,27 +21,64 @@ pub trait DocumentStore: Send + Sync {
     /// 文書を丸ごと置き換える（無ければ作る）。
     async fn set_doc(&self, col: &str, id: &str, fields: Value) -> Result<(), String>;
     /// 1 つの field だけを書く。文書が無ければ誤り。
-    async fn update_field(&self, col: &str, id: &str, field: &str, value: Value) -> Result<(), String>;
+    async fn update_field(
+        &self,
+        col: &str,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<(), String>;
     /// `fields` の各 key だけを書く。文書が無ければ誤り。
     async fn update_fields(&self, col: &str, id: &str, fields: Value) -> Result<(), String>;
     /// `fields` の各 key を書き、`remove` の field を消す。他の field は残す。文書が無ければ作る。
-    async fn merge_fields(&self, col: &str, id: &str, fields: Value, remove: &[String]) -> Result<(), String>;
+    async fn merge_fields(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        remove: &[String],
+    ) -> Result<(), String>;
     /// 文書の fields（無ければ None）。
     async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String>;
     /// 文書の fields と update_time（無ければ None）。
-    async fn get_doc_with_update_time(&self, col: &str, id: &str) -> Result<Option<(Value, String)>, String>;
+    async fn get_doc_with_update_time(
+        &self,
+        col: &str,
+        id: &str,
+    ) -> Result<Option<(Value, String)>, String>;
     /// update_time が一致するときだけ丸ごと置き換える。負けたら Ok(false)。
-    async fn set_doc_if_unchanged(&self, col: &str, id: &str, fields: Value, update_time: &str) -> Result<bool, String>;
+    async fn set_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        update_time: &str,
+    ) -> Result<bool, String>;
     /// 文書が無いときだけ作る。既に在れば Ok(false)。
     async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String>;
     /// update_time が一致するときだけ消す。負けたら（消えていたら）Ok(false)。
-    async fn delete_doc_if_unchanged(&self, col: &str, id: &str, update_time: &str) -> Result<bool, String>;
+    async fn delete_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        update_time: &str,
+    ) -> Result<bool, String>;
     /// 文書を 1 度だけ取り出して消す。並んで呼ばれても Some を返すのは高々 1 回。
     async fn take_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String>;
     /// 文字列の field が `value` に等しい文書の (id, fields)。
-    async fn query_eq(&self, col: &str, field: &str, value: &str) -> Result<Vec<(String, Value)>, String>;
+    async fn query_eq(
+        &self,
+        col: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<(String, Value)>, String>;
     /// `order_field`（時刻か文字列）の新しい順、同じなら id の大きい順に `limit` 件。
-    async fn list_recent_ordered(&self, col: &str, order_field: &str, limit: u32) -> Result<Vec<(String, Value)>, String>;
+    async fn list_recent_ordered(
+        &self,
+        col: &str,
+        order_field: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, Value)>, String>;
     /// 集まりの全ての文書の (id, fields, update_time)。数十件の集まりにだけ使う。
     async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String>;
     /// 文書を消す。無くても誤りにしない。
@@ -70,16 +107,23 @@ impl Inner {
     fn put(&mut self, col: &str, id: &str, fields: Value) {
         self.next_version += 1;
         let version = self.next_version;
-        self.docs.insert((col.to_string(), id.to_string()), Doc { fields, version });
+        self.docs
+            .insert((col.to_string(), id.to_string()), Doc { fields, version });
     }
 
     fn version_matches(&self, col: &str, id: &str, update_time: &str) -> bool {
-        self.docs.get(&key(col, id)).is_some_and(|d| version_str(d.version) == update_time)
+        self.docs
+            .get(&key(col, id))
+            .is_some_and(|d| version_str(d.version) == update_time)
     }
 
     /// 在る文書の fields に `fields` の各 key を書き、`remove` を消したもの。無ければ空から。
     fn merged(&self, col: &str, id: &str, fields: &Value, remove: &[String]) -> Value {
-        let mut base = self.docs.get(&key(col, id)).map(|d| d.fields.clone()).unwrap_or_else(|| json!({}));
+        let mut base = self
+            .docs
+            .get(&key(col, id))
+            .map(|d| d.fields.clone())
+            .unwrap_or_else(|| json!({}));
         if let Some(obj) = base.as_object_mut() {
             for (k, v) in fields.as_object().into_iter().flatten() {
                 obj.insert(k.clone(), v.clone());
@@ -125,7 +169,13 @@ impl DocumentStore for MemoryDocumentStore {
         Ok(())
     }
 
-    async fn update_field(&self, col: &str, id: &str, field: &str, value: Value) -> Result<(), String> {
+    async fn update_field(
+        &self,
+        col: &str,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<(), String> {
         self.update_fields(col, id, json!({ field: value })).await
     }
 
@@ -139,7 +189,13 @@ impl DocumentStore for MemoryDocumentStore {
         Ok(())
     }
 
-    async fn merge_fields(&self, col: &str, id: &str, fields: Value, remove: &[String]) -> Result<(), String> {
+    async fn merge_fields(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        remove: &[String],
+    ) -> Result<(), String> {
         let mut g = self.lock();
         let merged = g.merged(col, id, &fields, remove);
         g.put(col, id, merged);
@@ -147,14 +203,32 @@ impl DocumentStore for MemoryDocumentStore {
     }
 
     async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
-        Ok(self.lock().docs.get(&key(col, id)).map(|d| d.fields.clone()))
+        Ok(self
+            .lock()
+            .docs
+            .get(&key(col, id))
+            .map(|d| d.fields.clone()))
     }
 
-    async fn get_doc_with_update_time(&self, col: &str, id: &str) -> Result<Option<(Value, String)>, String> {
-        Ok(self.lock().docs.get(&key(col, id)).map(|d| (d.fields.clone(), version_str(d.version))))
+    async fn get_doc_with_update_time(
+        &self,
+        col: &str,
+        id: &str,
+    ) -> Result<Option<(Value, String)>, String> {
+        Ok(self
+            .lock()
+            .docs
+            .get(&key(col, id))
+            .map(|d| (d.fields.clone(), version_str(d.version))))
     }
 
-    async fn set_doc_if_unchanged(&self, col: &str, id: &str, fields: Value, update_time: &str) -> Result<bool, String> {
+    async fn set_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        update_time: &str,
+    ) -> Result<bool, String> {
         let mut g = self.lock();
         if !g.version_matches(col, id, update_time) {
             return Ok(false);
@@ -172,7 +246,12 @@ impl DocumentStore for MemoryDocumentStore {
         Ok(true)
     }
 
-    async fn delete_doc_if_unchanged(&self, col: &str, id: &str, update_time: &str) -> Result<bool, String> {
+    async fn delete_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        update_time: &str,
+    ) -> Result<bool, String> {
         let mut g = self.lock();
         if !g.version_matches(col, id, update_time) {
             return Ok(false);
@@ -185,13 +264,23 @@ impl DocumentStore for MemoryDocumentStore {
         Ok(self.lock().docs.remove(&key(col, id)).map(|d| d.fields))
     }
 
-    async fn query_eq(&self, col: &str, field: &str, value: &str) -> Result<Vec<(String, Value)>, String> {
+    async fn query_eq(
+        &self,
+        col: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<(String, Value)>, String> {
         let g = self.lock();
         let mut rows: Vec<(String, Value)> = g
             .docs
             .iter()
             .filter(|((c, _), d)| {
-                c == col && d.fields.get(field).and_then(|v| v.get("stringValue")).and_then(Value::as_str) == Some(value)
+                c == col
+                    && d.fields
+                        .get(field)
+                        .and_then(|v| v.get("stringValue"))
+                        .and_then(Value::as_str)
+                        == Some(value)
             })
             .map(|((_, id), d)| (id.clone(), d.fields.clone()))
             .collect();
@@ -199,7 +288,12 @@ impl DocumentStore for MemoryDocumentStore {
         Ok(rows)
     }
 
-    async fn list_recent_ordered(&self, col: &str, order_field: &str, limit: u32) -> Result<Vec<(String, Value)>, String> {
+    async fn list_recent_ordered(
+        &self,
+        col: &str,
+        order_field: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, Value)>, String> {
         let g = self.lock();
         let mut rows: Vec<(String, Value)> = g
             .docs
@@ -208,7 +302,9 @@ impl DocumentStore for MemoryDocumentStore {
             .map(|((_, id), d)| (id.clone(), d.fields.clone()))
             .collect();
         rows.sort_by(|a, b| {
-            sort_key(&b.1, order_field).cmp(&sort_key(&a.1, order_field)).then_with(|| b.0.cmp(&a.0))
+            sort_key(&b.1, order_field)
+                .cmp(&sort_key(&a.1, order_field))
+                .then_with(|| b.0.cmp(&a.0))
         });
         rows.truncate(limit as usize);
         Ok(rows)

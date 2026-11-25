@@ -4,9 +4,9 @@
 
 use super::*;
 #[cfg(feature = "gcp")]
-use crate::firestore::fake_firestore;
-#[cfg(feature = "gcp")]
 use crate::firestore::Firestore;
+#[cfg(feature = "gcp")]
+use crate::firestore::fake_firestore;
 use crate::web::i18n::has_japanese;
 use std::future::Future;
 
@@ -169,7 +169,12 @@ async fn login_page(h: HeaderMap) -> String {
         .await;
     let q: login::LoginQuery = serde_urlencoded::from_str("").unwrap();
     let mut ch = HeaderMap::new();
-    ch.insert(header::COOKIE, format!("{}=b-1", super::browser_cookie_name("uid-1")).parse().unwrap());
+    ch.insert(
+        header::COOKIE,
+        format!("{}=b-1", super::browser_cookie_name("uid-1"))
+            .parse()
+            .unwrap(),
+    );
     let jar = CookieJar::from_headers(&ch);
     body_of(login::login_form(State(p), h, jar, Path("uid-1".into()), Query(q)).await).await
 }
@@ -180,7 +185,10 @@ async fn login_page(h: HeaderMap) -> String {
 async fn login_page_drops_prefetched_challenge_before_the_server_expires_it() {
     let html = login_page(accept(Some("en"))).await;
     let ttl = crate::registration::CEREMONY_TTL_SECS;
-    assert!(html.contains(&format!("const OPT_FRESH_MS=({ttl}-60)*1000;")), "{html}");
+    assert!(
+        html.contains(&format!("const OPT_FRESH_MS=({ttl}-60)*1000;")),
+        "{html}"
+    );
     assert!(html.contains("let o=fresh()?cachedOpts:null;"));
     assert!(!html.contains("__CEREMONY_TTL_SECS__"));
 }
@@ -255,12 +263,22 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
     crate::admin_store::grant_admin(&*fs, "acc-boss", "cli")
         .await
         .unwrap();
-    crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "acc-me", "u@example.com")
-        .await
-        .unwrap();
-    crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "acc-me", "boss@example.com")
-        .await
-        .unwrap();
+    crate::account_admin::disable_account(
+        &*fs,
+        &crate::firestore_store::FirestoreStore::new(fs.clone()),
+        "acc-me",
+        "u@example.com",
+    )
+    .await
+    .unwrap();
+    crate::account_admin::disable_account(
+        &*fs,
+        &crate::firestore_store::FirestoreStore::new(fs.clone()),
+        "acc-me",
+        "boss@example.com",
+    )
+    .await
+    .unwrap();
     (p, fs)
 }
 
@@ -316,7 +334,9 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
 #[tokio::test]
 async fn registration_pages_follow_the_browser_language() {
     check_page("signup form", "ユーザー登録", |h| async move {
-        register::register_form(State(plain()), h, Query(Default::default())).await.0
+        register::register_form(State(plain()), h, Query(Default::default()))
+            .await
+            .0
     })
     .await;
     check_page("signup sent", "確認メールを送信しました", |h| async move {
@@ -330,7 +350,10 @@ async fn registration_pages_follow_the_browser_language() {
         "パスキーを作成",
         |h| async move {
             let q = serde_urlencoded::from_str("t=abc").unwrap();
-            body_of(register::magic_redirect(State(plain()), h, CookieJar::default(), Query(q)).await).await
+            body_of(
+                register::magic_redirect(State(plain()), h, CookieJar::default(), Query(q)).await,
+            )
+            .await
         },
     )
     .await;
@@ -339,7 +362,8 @@ async fn registration_pages_follow_the_browser_language() {
         "パスキーを作成",
         |h| async move {
             let q = serde_urlencoded::from_str("token=abc").unwrap();
-            body_of(register::verify_form(State(plain()), h, CookieJar::default(), Query(q)).await).await
+            body_of(register::verify_form(State(plain()), h, CookieJar::default(), Query(q)).await)
+                .await
         },
     )
     .await;
@@ -350,7 +374,11 @@ async fn registration_pages_follow_the_browser_language() {
     })
     .await;
     let ja = body_of(
-        register::magic_redirect(State(plain()), accept(Some("ja")), CookieJar::default(), Query(serde_urlencoded::from_str("t=a").unwrap()),
+        register::magic_redirect(
+            State(plain()),
+            accept(Some("ja")),
+            CookieJar::default(),
+            Query(serde_urlencoded::from_str("t=a").unwrap()),
         )
         .await,
     )
@@ -604,26 +632,40 @@ async fn admin_messages_follow_the_browser_language() {
         let p = p.clone();
         let jar = jar.clone();
         move |h| async move {
-            let form = Form(serde_urlencoded::from_str(&format!("initiate_login_uri={value}")).unwrap());
+            let form =
+                Form(serde_urlencoded::from_str(&format!("initiate_login_uri={value}")).unwrap());
             admin::client_set_initiate_login(State(p), h, jar, Path("rp-1".into()), form).await
         }
     };
-    check_text("foreign sign-in start address", "同じホストにしてください: evil.example.net", |h| {
-        let f = set_entry("https%3A%2F%2Fevil.example.net%2Flogin");
-        async move {
-            let resp = f(h).await;
-            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-            body_of(resp).await
-        }
-    })
+    check_text(
+        "foreign sign-in start address",
+        "同じホストにしてください: evil.example.net",
+        |h| {
+            let f = set_entry("https%3A%2F%2Fevil.example.net%2Flogin");
+            async move {
+                let resp = f(h).await;
+                assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+                body_of(resp).await
+            }
+        },
+    )
     .await;
     let resp = set_entry("+https%3A%2F%2Frp.example.com%2Fauth%2Flogin+")(accept(Some("ja"))).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     let stored = crate::dcr_store::load_client(&*fs, "rp-1").await.unwrap();
-    assert_eq!(stored.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
+    assert_eq!(
+        stored.initiate_login_uri.as_deref(),
+        Some("https://rp.example.com/auth/login")
+    );
     let resp = set_entry("")(accept(Some("ja"))).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert!(crate::dcr_store::load_client(&*fs, "rp-1").await.unwrap().initiate_login_uri.is_none());
+    assert!(
+        crate::dcr_store::load_client(&*fs, "rp-1")
+            .await
+            .unwrap()
+            .initiate_login_uri
+            .is_none()
+    );
 }
 
 #[cfg(feature = "gcp")]
@@ -715,9 +757,7 @@ async fn the_admin_navigation_and_badges_follow_the_browser_language() {
 #[cfg(feature = "gcp")]
 #[tokio::test]
 async fn passkey_pages_translate_the_api_failures_they_show() {
-    let login = |h| async move {
-        login_page(h).await
-    };
+    let login = |h| async move { login_page(h).await };
     let en = login(accept(Some("en"))).await;
     assert!(en.contains("'account disabled':'This account is disabled.'"));
     assert!(en.contains("msgEl.textContent=await errorText(v)"));
@@ -763,7 +803,8 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
         "最初からやり直してください",
         |h| async move {
             let q = HashMap::from([("uid".to_string(), "missing".to_string())]);
-            body_of(oidc::authorize_resume(State(plain()), h, CookieJar::default(), Query(q)).await).await
+            body_of(oidc::authorize_resume(State(plain()), h, CookieJar::default(), Query(q)).await)
+                .await
         },
     )
     .await;
@@ -771,7 +812,16 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
         "cancel of an unknown sign-in",
         "最初からやり直してください",
         |h| async move {
-            body_of(oidc::authorize_cancel(State(plain()), h, CookieJar::default(), Path("missing".into())).await).await
+            body_of(
+                oidc::authorize_cancel(
+                    State(plain()),
+                    h,
+                    CookieJar::default(),
+                    Path("missing".into()),
+                )
+                .await,
+            )
+            .await
         },
     )
     .await;
@@ -1101,11 +1151,12 @@ async fn own_errors_and_rp_facing_rejections_pass_through_unchanged() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 415);
-    assert!(resp
-        .text()
-        .await
-        .unwrap()
-        .starts_with("Form requests must have"));
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .starts_with("Form requests must have")
+    );
 }
 
 /// 期限切れのログイン画面: 入口のある client ならそこへ iss つきで送り直し、
@@ -1123,7 +1174,14 @@ async fn expired_sign_in_is_sent_back_to_the_client_login_entry() {
         let p = p.clone();
         async move {
             let q: login::LoginQuery = serde_urlencoded::from_str(query).unwrap();
-            login::login_form(State(p), accept(lang), CookieJar::default(), Path("gone".into()), Query(q)).await
+            login::login_form(
+                State(p),
+                accept(lang),
+                CookieJar::default(),
+                Path("gone".into()),
+                Query(q),
+            )
+            .await
         }
     };
 
@@ -1135,9 +1193,21 @@ async fn expired_sign_in_is_sent_back_to_the_client_login_entry() {
     );
 
     for (query, lang, want) in [
-        ("client_id=rp-plain", Some("ja"), "ログインの有効期限が切れました。最初からやり直してください。"),
-        ("client_id=unknown", Some("en"), "This sign-in has expired. Please start again."),
-        ("", Some("en"), "This sign-in has expired. Please start again."),
+        (
+            "client_id=rp-plain",
+            Some("ja"),
+            "ログインの有効期限が切れました。最初からやり直してください。",
+        ),
+        (
+            "client_id=unknown",
+            Some("en"),
+            "This sign-in has expired. Please start again.",
+        ),
+        (
+            "",
+            Some("en"),
+            "This sign-in has expired. Please start again.",
+        ),
     ] {
         let r = open(query, lang).await;
         assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{query}");
@@ -1173,10 +1243,27 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
         .send()
         .await
         .unwrap();
-    let to = resp.headers()[reqwest::header::LOCATION].to_str().unwrap().to_string();
-    assert!(to.starts_with("/oidc/login/") && to.ends_with("?client_id=rp-entry"), "{to}");
-    let ix = resp.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_string();
-    let live = http.get(format!("http://{addr}{to}")).header("cookie", &ix).send().await.unwrap();
+    let to = resp.headers()[reqwest::header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        to.starts_with("/oidc/login/") && to.ends_with("?client_id=rp-entry"),
+        "{to}"
+    );
+    let ix = resp.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let live = http
+        .get(format!("http://{addr}{to}"))
+        .header("cookie", &ix)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(live.status(), 200);
 
     // 名前を %-符号で書いた cookie は、`__Host-` の印として読まない（別のサブドメインから植えられるため）。
@@ -1184,7 +1271,17 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     let sign_in = |cookie: String| {
         let http = http.clone();
         let url = format!("http://{addr}{to}");
-        async move { http.get(url).header("cookie", cookie).send().await.unwrap().text().await.unwrap().contains("passkey/verify") }
+        async move {
+            http.get(url)
+                .header("cookie", cookie)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+                .contains("passkey/verify")
+        }
     };
     let (name, value) = ix.split_once('=').unwrap();
     assert!(!sign_in(format!("{}={value}", name.replacen("__", "%5F%5F", 1))).await);
@@ -1193,31 +1290,87 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     assert!(sign_in(format!("{}=planted; {ix}", name.replacen('-', "%2D", 1))).await);
     // 名前の前の Unicode の空白も、削って `__Host-` の名前にしない。
     for sp in ['\u{a0}', '\u{2000}', '\u{3000}'] {
-        let planted = reqwest::header::HeaderValue::from_bytes(format!("{ix}; {sp}{name}=planted").as_bytes()).unwrap();
-        let page = http.get(format!("http://{addr}{to}")).header("cookie", planted).send().await.unwrap().text().await.unwrap();
+        let planted = reqwest::header::HeaderValue::from_bytes(
+            format!("{ix}; {sp}{name}=planted").as_bytes(),
+        )
+        .unwrap();
+        let page = http
+            .get(format!("http://{addr}{to}"))
+            .header("cookie", planted)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
         assert!(page.contains("passkey/verify"), "{sp:?}");
-        let alone = reqwest::header::HeaderValue::from_bytes(format!("{sp}{ix}").as_bytes()).unwrap();
-        let page = http.get(format!("http://{addr}{to}")).header("cookie", alone).send().await.unwrap().text().await.unwrap();
+        let alone =
+            reqwest::header::HeaderValue::from_bytes(format!("{sp}{ix}").as_bytes()).unwrap();
+        let page = http
+            .get(format!("http://{addr}{to}"))
+            .header("cookie", alone)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
         assert!(!page.contains("passkey/verify"), "{sp:?}");
     }
     // ASCII でない cookie が並んでも、本物の印は読む。見出しが 2 行に分かれて来ても、どちらの行も読む。
     let (url, h) = (format!("http://{addr}{to}"), http.clone());
-    let raw = reqwest::header::HeaderValue::from_bytes(format!("x=\u{e9}; {ix}").as_bytes()).unwrap();
-    let mixed = h.get(&url).header("cookie", raw).send().await.unwrap().text().await.unwrap();
+    let raw =
+        reqwest::header::HeaderValue::from_bytes(format!("x=\u{e9}; {ix}").as_bytes()).unwrap();
+    let mixed = h
+        .get(&url)
+        .header("cookie", raw)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(mixed.contains("passkey/verify"), "{mixed}");
-    let split = h.get(&url).header("cookie", format!("{}=planted", name.replacen('-', "%2D", 1))).header("cookie", ix.as_str());
-    assert!(split.send().await.unwrap().text().await.unwrap().contains("passkey/verify"));
+    let split = h
+        .get(&url)
+        .header(
+            "cookie",
+            format!("{}=planted", name.replacen('-', "%2D", 1)),
+        )
+        .header("cookie", ix.as_str());
+    assert!(
+        split
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+            .contains("passkey/verify")
+    );
 
     // 別のブラウザ（印の cookie が無い）で同じ URL を開くと、ログイン画面の代わりに入口へのリンクを出す。
     // 自動では送らない（cookie を保存しないブラウザで回り続けないため）。
     // URL の client_id を書き換えても、リンクは interaction の要求の client の入口。
     let tampered = to.replace("client_id=rp-entry", "client_id=other");
-    let elsewhere = http.get(format!("http://{addr}{tampered}")).send().await.unwrap();
+    let elsewhere = http
+        .get(format!("http://{addr}{tampered}"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(elsewhere.status(), StatusCode::OK);
     assert!(elsewhere.headers().get(reqwest::header::LOCATION).is_none());
     let body = elsewhere.text().await.unwrap();
-    assert!(body.contains(r#"href="https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc""#), "{body}");
-    assert!(!body.contains("passkey/verify"), "ログイン画面を出していない");
+    assert!(
+        body.contains(
+            r#"href="https://rp.example.com/auth/login?iss=https%3A%2F%2Fidp.example%2Foidc""#
+        ),
+        "{body}"
+    );
+    assert!(
+        !body.contains("passkey/verify"),
+        "ログイン画面を出していない"
+    );
 
     let expired = http
         .get(format!("http://{addr}/oidc/login/gone?client_id=rp-entry"))
@@ -1242,17 +1395,45 @@ async fn the_account_page_is_in_the_viewers_language() {
         sign_count: 0,
         aaguid: String::new(),
     };
-    crate::registration::save_credential(&*fs, "u@example.com", "acc-u", &second).await.unwrap();
+    crate::registration::save_credential(&*fs, "u@example.com", "acc-u", &second)
+        .await
+        .unwrap();
     check_page("account (signed out)", "パスキーでログイン", |h| {
         let p = p.clone();
-        async move { body_of(account::account_page(State(p), h, CookieJar::default(), Query(account::AccountQuery::default())).await).await }
+        async move {
+            body_of(
+                account::account_page(
+                    State(p),
+                    h,
+                    CookieJar::default(),
+                    Query(account::AccountQuery::default()),
+                )
+                .await,
+            )
+            .await
+        }
     })
     .await;
     let jar = login_as(&p, "acc-u").await;
-    check_page("account (signed in)", "この端末のパスキーを追加", |h| {
-        let (p, jar) = (p.clone(), jar.clone());
-        async move { body_of(account::account_page(State(p), h, jar, Query(account::AccountQuery::default())).await).await }
-    })
+    check_page(
+        "account (signed in)",
+        "この端末のパスキーを追加",
+        |h| {
+            let (p, jar) = (p.clone(), jar.clone());
+            async move {
+                body_of(
+                    account::account_page(
+                        State(p),
+                        h,
+                        jar,
+                        Query(account::AccountQuery::default()),
+                    )
+                    .await,
+                )
+                .await
+            }
+        },
+    )
     .await;
 }
 
@@ -1270,22 +1451,41 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
         sign_count: 0,
         aaguid: String::new(),
     };
-    crate::registration::save_credential(&*fs, "u@example.com", "acc-u", &legacy).await.unwrap();
-    let mut f = fs.get_doc("credentials", "cred-legacy").await.unwrap().unwrap();
+    crate::registration::save_credential(&*fs, "u@example.com", "acc-u", &legacy)
+        .await
+        .unwrap();
+    let mut f = fs
+        .get_doc("credentials", "cred-legacy")
+        .await
+        .unwrap()
+        .unwrap();
     f.as_object_mut().unwrap().remove("createdAt");
     fs.set_doc("credentials", "cred-legacy", f).await.unwrap();
 
     let logout = format!(r#"action="{}""#, p.path("/end-session"));
     let out = body_of(
-        account::account_page(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(account::AccountQuery::default())).await,
+        account::account_page(
+            State(p.clone()),
+            accept(Some("ja")),
+            CookieJar::default(),
+            Query(account::AccountQuery::default()),
+        )
+        .await,
     )
     .await;
     assert!(!out.contains(&logout), "未ログインでログアウトを出した");
 
     let jar = login_as(&p, "acc-u").await;
-    let html =
-        body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar, Query(account::AccountQuery::default())).await)
-            .await;
+    let html = body_of(
+        account::account_page(
+            State(p.clone()),
+            accept(Some("ja")),
+            jar,
+            Query(account::AccountQuery::default()),
+        )
+        .await,
+    )
+    .await;
     assert!(html.contains(&logout), "ログアウトが無い");
     assert!(!html.contains(r#"data-ts="0""#), "登録日 0 を日付にした");
 
@@ -1293,13 +1493,34 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
     let mut h = HeaderMap::new();
     h.insert(axum::http::header::COOKIE, "__Host-sid=x".parse().unwrap());
     let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
-    let out = oidc::end_session(State(p.clone()), accept(None), CookieJar::from_headers(&h), Query(q)).await;
-    let set = out.headers()[axum::http::header::SET_COOKIE].to_str().unwrap().to_string();
+    let out = oidc::end_session(
+        State(p.clone()),
+        accept(None),
+        CookieJar::from_headers(&h),
+        Query(q),
+    )
+    .await;
+    let set = out.headers()[axum::http::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string();
     assert!(set.starts_with("__Host-sid=;"), "{set}");
     super::assert_host_cookie(&set);
     let q: oidc::EndSessionQuery = serde_urlencoded::from_str("").unwrap();
-    let done = body_of(oidc::end_session(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(q)).await).await;
-    assert!(done.contains(&format!(r#"href="{}""#, p.path("/account"))), "{done}");
+    let done = body_of(
+        oidc::end_session(
+            State(p.clone()),
+            accept(Some("ja")),
+            CookieJar::default(),
+            Query(q),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        done.contains(&format!(r#"href="{}""#, p.path("/account"))),
+        "{done}"
+    );
 }
 
 /// パソコンのログイン画面には QR コードでスマホのパスキーを使う案内を、メールのリンクで作り終えた
@@ -1314,17 +1535,35 @@ async fn sign_in_screens_explain_using_a_phone_passkey_by_qr_code() {
     let (p, fs) = with_firestore().await;
     register(&fs, "q@example.com", "acc-q").await;
     let out = body_of(
-        account::account_page(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(account::AccountQuery::default())).await,
+        account::account_page(
+            State(p.clone()),
+            accept(Some("ja")),
+            CookieJar::default(),
+            Query(account::AccountQuery::default()),
+        )
+        .await,
     )
     .await;
     assert!(out.contains(qr), "{out}");
 
     let jar = login_as(&p, "acc-q").await;
-    let plain =
-        body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar.clone(), Query(account::AccountQuery::default())).await)
-            .await;
-    assert!(!plain.contains(phone), "メールから来ていないのに続け方を出した");
+    let plain = body_of(
+        account::account_page(
+            State(p.clone()),
+            accept(Some("ja")),
+            jar.clone(),
+            Query(account::AccountQuery::default()),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        !plain.contains(phone),
+        "メールから来ていないのに続け方を出した"
+    );
     let q: account::AccountQuery = serde_urlencoded::from_str("recovered=1").unwrap();
-    let after = body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar, Query(q)).await).await;
+    let after =
+        body_of(account::account_page(State(p.clone()), accept(Some("ja")), jar, Query(q)).await)
+            .await;
     assert!(after.contains(phone), "{after}");
 }

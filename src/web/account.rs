@@ -35,7 +35,11 @@ impl Me {
     }
 }
 
-async fn me(p: &Provider, fs: &dyn crate::document_store::DocumentStore, jar: &CookieJar) -> Result<Option<Me>, String> {
+async fn me(
+    p: &Provider,
+    fs: &dyn crate::document_store::DocumentStore,
+    jar: &CookieJar,
+) -> Result<Option<Me>, String> {
     let Some(sid) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) else {
         return Ok(None);
     };
@@ -51,7 +55,11 @@ async fn me(p: &Provider, fs: &dyn crate::document_store::DocumentStore, jar: &C
     if account.disabled || account.account_id != s.account_id {
         return Ok(None);
     }
-    Ok(Some(Me { sid, auth_time: s.auth_time, account }))
+    Ok(Some(Me {
+        sid,
+        auth_time: s.auth_time,
+        account,
+    }))
 }
 
 fn internal(context: &str, e: &str) -> Response {
@@ -313,7 +321,15 @@ pub(super) async fn signin_options(State(p): State<Arc<Provider>>, jar: CookieJa
         },
         None => (vec![], String::new()),
     };
-    let challenge = match registration::create_webauthn_challenge(fs, &email, ChallengeKind::Auth, CEREMONY_UID, "").await {
+    let challenge = match registration::create_webauthn_challenge(
+        fs,
+        &email,
+        ChallengeKind::Auth,
+        CEREMONY_UID,
+        "",
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => return internal("signin_options: create challenge", &e),
     };
@@ -363,11 +379,26 @@ pub(super) async fn add_options(State(p): State<Arc<Provider>>, jar: CookieJar) 
         return (StatusCode::CONFLICT, "too many passkeys").into_response();
     }
     let a = &me.account;
-    let challenge = match registration::create_webauthn_challenge(fs, &a.email, ChallengeKind::Reg, CEREMONY_UID, &a.account_id).await {
+    let challenge = match registration::create_webauthn_challenge(
+        fs,
+        &a.email,
+        ChallengeKind::Reg,
+        CEREMONY_UID,
+        &a.account_id,
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => return internal("add_options: create challenge", &e),
     };
-    Json(super::register::creation_options(&p, &challenge, &a.account_id, &a.email, &creds)).into_response()
+    Json(super::register::creation_options(
+        &p,
+        &challenge,
+        &a.account_id,
+        &a.email,
+        &creds,
+    ))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -389,12 +420,19 @@ pub(super) async fn add_verify(
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
     };
-    let (email, kind, uid, account_id) = match registration::consume_webauthn_challenge(fs, &challenge).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
-        Err(e) => return internal("add_verify: consume challenge", &e),
-    };
-    if kind != ChallengeKind::Reg || uid != CEREMONY_UID || email != me.account.email || account_id != me.account.account_id {
+    let (email, kind, uid, account_id) =
+        match registration::consume_webauthn_challenge(fs, &challenge).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response();
+            }
+            Err(e) => return internal("add_verify: consume challenge", &e),
+        };
+    if kind != ChallengeKind::Reg
+        || uid != CEREMONY_UID
+        || email != me.account.email
+        || account_id != me.account.account_id
+    {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
     let outcome = match crate::webauthn::verify_registration(
@@ -411,7 +449,9 @@ pub(super) async fn add_verify(
         }
     };
     match registration::list_credentials(fs, &me.account).await {
-        Ok(c) if c.len() >= MAX_PASSKEYS => return (StatusCode::CONFLICT, "too many passkeys").into_response(),
+        Ok(c) if c.len() >= MAX_PASSKEYS => {
+            return (StatusCode::CONFLICT, "too many passkeys").into_response();
+        }
         Ok(_) => {}
         Err(e) => return internal("add_verify: list_credentials", &e),
     }
@@ -431,7 +471,10 @@ pub(super) async fn add_verify(
         &account_id,
         "add_passkey",
         &account_id,
-        &format!("credential_id={} aaguid={}", outcome.credential_id, outcome.aaguid),
+        &format!(
+            "credential_id={} aaguid={}",
+            outcome.credential_id, outcome.aaguid
+        ),
     )
     .await;
     (StatusCode::CREATED, Json(serde_json::json!({ "ok": true }))).into_response()
@@ -454,7 +497,11 @@ pub(super) async fn delete_passkey(
     let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let a = &me.account;
     match registration::list_credentials(fs, a).await {
-        Ok(creds) if creds.iter().any(|c| c.credential_id == req.id && held_by_recovery(a, c)) => {
+        Ok(creds)
+            if creds
+                .iter()
+                .any(|c| c.credential_id == req.id && held_by_recovery(a, c)) =>
+        {
             return (StatusCode::CONFLICT, "recently recovered").into_response();
         }
         Ok(_) => {}
@@ -491,7 +538,11 @@ pub(super) struct ProfileReq {
 /// 名前（profiles の name）を変える。検査は save_profile のもの（RP の `PUT /me/profile` と同じ）。
 /// 空にすれば name を消す。保存した値（前後の空白を除いたもの）を返す。
 /// 画面の saveName() は、確かめが切れて 401 なら確かめ直して 1 度だけ送り直す。打った値は残す。
-pub(super) async fn save_name(State(p): State<Arc<Provider>>, jar: CookieJar, Json(f): Json<ProfileReq>) -> Response {
+pub(super) async fn save_name(
+    State(p): State<Arc<Provider>>,
+    jar: CookieJar,
+    Json(f): Json<ProfileReq>,
+) -> Response {
     let me = match me_confirmed(&p, &jar).await {
         Ok(m) => m,
         Err(r) => return r,
@@ -501,7 +552,9 @@ pub(super) async fn save_name(State(p): State<Arc<Provider>>, jar: CookieJar, Js
     let updates = HashMap::from([("name".to_string(), f.name)]);
     match registration::save_profile(fs, &me.account.account_id, &updates).await {
         Ok(()) => Json(serde_json::json!({ "ok": true, "name": saved })).into_response(),
-        Err(registration::ProfileError::Invalid(_)) => (StatusCode::BAD_REQUEST, "invalid name").into_response(),
+        Err(registration::ProfileError::Invalid(_)) => {
+            (StatusCode::BAD_REQUEST, "invalid name").into_response()
+        }
         Err(e) => internal("save_name", &e.to_string()),
     }
 }
@@ -509,7 +562,7 @@ pub(super) async fn save_name(State(p): State<Arc<Provider>>, jar: CookieJar, Js
 #[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
-    use crate::firestore::{fake_firestore, Firestore};
+    use crate::firestore::{Firestore, fake_firestore};
     use tower::ServiceExt;
 
     const ORIGIN: &str = "https://idp.example";
@@ -532,24 +585,37 @@ mod tests {
             sign_count: 0,
             aaguid: String::new(),
         };
-        registration::save_credential(&*fs, "u@example.com", "acc-u", &outcome).await.unwrap();
+        registration::save_credential(&*fs, "u@example.com", "acc-u", &outcome)
+            .await
+            .unwrap();
         let p = Provider::new(format!("{ORIGIN}/oidc"))
             .with_base_path("/oidc")
             .with_firestore(fs.clone())
             .with_store(store.clone());
-        World { app: router(p), fs, store }
+        World {
+            app: router(p),
+            fs,
+            store,
+        }
     }
 
     impl World {
         async fn session(&self, auth_time: u64) -> String {
             use crate::store::Store;
             let sid = Uuid::new_v4().to_string();
-            self.store.save_session(Session { sid: sid.clone(), account_id: "acc-u".into(), auth_time }).await;
+            self.store
+                .save_session(Session {
+                    sid: sid.clone(),
+                    account_id: "acc-u".into(),
+                    auth_time,
+                })
+                .await;
             sid
         }
 
         async fn post(&self, sid: Option<&str>, origin: Option<&str>, name: &str) -> Response {
-            let mut req = axum::http::Request::post("/oidc/account/profile").header(header::CONTENT_TYPE, "application/json");
+            let mut req = axum::http::Request::post("/oidc/account/profile")
+                .header(header::CONTENT_TYPE, "application/json");
             if let Some(s) = sid {
                 req = req.header(header::COOKIE, format!("{SID_COOKIE}={s}"));
             }
@@ -557,29 +623,45 @@ mod tests {
                 req = req.header(header::ORIGIN, o);
             }
             let body = serde_json::json!({ "name": name }).to_string();
-            self.app.clone().oneshot(req.body(axum::body::Body::from(body)).unwrap()).await.unwrap()
+            self.app
+                .clone()
+                .oneshot(req.body(axum::body::Body::from(body)).unwrap())
+                .await
+                .unwrap()
         }
 
         async fn page(&self, sid: &str) -> String {
             let req = axum::http::Request::get("/oidc/account")
                 .header(header::COOKIE, format!("{SID_COOKIE}={sid}"))
                 .header(header::ACCEPT_LANGUAGE, "ja");
-            let resp = self.app.clone().oneshot(req.body(axum::body::Body::empty()).unwrap()).await.unwrap();
+            let resp = self
+                .app
+                .clone()
+                .oneshot(req.body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
             body(resp).await
         }
 
         async fn name(&self) -> Option<String> {
-            registration::get_profile(&*self.fs, "acc-u").await.unwrap().remove("name")
+            registration::get_profile(&*self.fs, "acc-u")
+                .await
+                .unwrap()
+                .remove("name")
         }
 
         async fn claims(&self) -> HashMap<String, serde_json::Value> {
-            crate::store::Store::find_account(&*self.store, "acc-u").await.claims
+            crate::store::Store::find_account(&*self.store, "acc-u")
+                .await
+                .claims
         }
     }
 
     async fn body(r: Response) -> String {
-        let b = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        let b = axum::body::to_bytes(r.into_body(), usize::MAX)
+            .await
+            .unwrap();
         String::from_utf8(b.to_vec()).unwrap()
     }
 
@@ -593,12 +675,21 @@ mod tests {
         let sid = w.session(now()).await;
         let r = w.post(Some(&sid), Some(ORIGIN), " 山田　太郎 ").await;
         assert_eq!(r.status(), StatusCode::OK);
-        assert_eq!(json(r).await, serde_json::json!({ "ok": true, "name": "山田　太郎" }));
+        assert_eq!(
+            json(r).await,
+            serde_json::json!({ "ok": true, "name": "山田　太郎" })
+        );
         assert_eq!(w.name().await.as_deref(), Some("山田　太郎"));
         let html = w.page(&sid).await;
         assert!(html.contains(r#"value="山田　太郎""#), "{html}");
-        assert!(html.contains(r#"PROFILE="/oidc/account/profile""#), "{html}");
-        assert!(html.contains("m.textContent='氏名を保存しました。'"), "{html}");
+        assert!(
+            html.contains(r#"PROFILE="/oidc/account/profile""#),
+            "{html}"
+        );
+        assert!(
+            html.contains("m.textContent='氏名を保存しました。'"),
+            "{html}"
+        );
     }
 
     /// 空にすると name の field を消し、RP に空の name を渡さない。他の field には触れない。
@@ -607,14 +698,23 @@ mod tests {
         let w = world().await;
         let sid = w.session(now()).await;
         let nick = HashMap::from([("nickname".to_string(), "taro".to_string())]);
-        registration::save_profile(&*w.fs, "acc-u", &nick).await.unwrap();
-        assert_eq!(w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(), StatusCode::OK);
+        registration::save_profile(&*w.fs, "acc-u", &nick)
+            .await
+            .unwrap();
+        assert_eq!(
+            w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(),
+            StatusCode::OK
+        );
         let r = w.post(Some(&sid), Some(ORIGIN), "   ").await;
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(json(r).await, serde_json::json!({ "ok": true, "name": "" }));
         let doc = w.fs.get_doc("profiles", "acc-u").await.unwrap().unwrap();
         assert_eq!(crate::firestore::field_str(&doc, "name"), None, "{doc}");
-        assert_eq!(crate::firestore::field_str(&doc, "nickname"), Some("taro"), "{doc}");
+        assert_eq!(
+            crate::firestore::field_str(&doc, "nickname"),
+            Some("taro"),
+            "{doc}"
+        );
         let claims = w.claims().await;
         assert!(!claims.contains_key("name"), "{claims:?}");
         assert_eq!(claims["nickname"], "taro");
@@ -648,7 +748,12 @@ mod tests {
         let r = w.post(None, Some(ORIGIN), "x").await;
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(body(r).await, "sign-in required");
-        assert_eq!(w.post(Some("no-such-sid"), Some(ORIGIN), "x").await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            w.post(Some("no-such-sid"), Some(ORIGIN), "x")
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
         let old = w.session(now() - RECENT_AUTH_SECS - 1).await;
         let r = w.post(Some(&old), Some(ORIGIN), "x").await;
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
@@ -665,7 +770,10 @@ mod tests {
     async fn a_name_that_is_too_long_or_has_control_characters_is_not_saved() {
         let w = world().await;
         let sid = w.session(now()).await;
-        assert_eq!(w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(), StatusCode::OK);
+        assert_eq!(
+            w.post(Some(&sid), Some(ORIGIN), "Taro").await.status(),
+            StatusCode::OK
+        );
         let long = "あ".repeat(81);
         for bad in [long.as_str(), "a\u{0007}b", "a\nb", "a\u{202E}b"] {
             let r = w.post(Some(&sid), Some(ORIGIN), bad).await;
@@ -673,8 +781,17 @@ mod tests {
             assert_eq!(body(r).await, "invalid name", "{bad:?}");
             assert_eq!(w.name().await.as_deref(), Some("Taro"), "{bad:?}");
         }
-        assert!(w.page(&sid).await.contains("'invalid name':'氏名が長すぎるか、使えない文字が入っています。'"));
-        assert_eq!(w.post(Some(&sid), Some(ORIGIN), &"あ".repeat(80)).await.status(), StatusCode::OK);
+        assert!(
+            w.page(&sid)
+                .await
+                .contains("'invalid name':'氏名が長すぎるか、使えない文字が入っています。'")
+        );
+        assert_eq!(
+            w.post(Some(&sid), Some(ORIGIN), &"あ".repeat(80))
+                .await
+                .status(),
+            StatusCode::OK
+        );
         assert_eq!(w.name().await.map(|n| n.chars().count()), Some(80));
     }
 
@@ -685,7 +802,9 @@ mod tests {
         let sid = w.session(now()).await;
         let evil = r#""><script>alert(1)</script>'[[Passkeys]]__DEL____WEBAUTHN_JS__"#;
         let updates = HashMap::from([("name".to_string(), evil.to_string())]);
-        registration::save_profile(&*w.fs, "acc-u", &updates).await.unwrap();
+        registration::save_profile(&*w.fs, "acc-u", &updates)
+            .await
+            .unwrap();
         let html = w.page(&sid).await;
         assert!(!html.contains("<script>alert"), "{html}");
         assert!(

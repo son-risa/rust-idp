@@ -13,7 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "gcp")]
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// jti / nonce の単回 claim を提供する。

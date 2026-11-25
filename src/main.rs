@@ -11,10 +11,13 @@ async fn main() {
     // 内の tracing::error!/warn! がサブスクライバ未設置のまま呼ばれ、実行時に完全に
     // 握りつぶされていた(server起動パスの request handler には影響しない——そちらは
     // 元々この初期化より後にしか到達しないため)。
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info".into());
+    let env_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     if std::env::var("K_SERVICE").is_ok() {
-        tracing_subscriber::fmt().json().with_env_filter(env_filter).init();
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
     } else {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     }
@@ -26,8 +29,13 @@ async fn main() {
         return;
     }
     #[cfg(not(feature = "gcp"))]
-    if let Some(cmd) = argv.get(1).filter(|c| rust_idp::AdminCommand::from_name(c).is_some()) {
-        eprintln!("{cmd}: Firestore を使うので、gcp の feature を付けて build した binary でだけ使えます");
+    if let Some(cmd) = argv
+        .get(1)
+        .filter(|c| rust_idp::AdminCommand::from_name(c).is_some())
+    {
+        eprintln!(
+            "{cmd}: Firestore を使うので、gcp の feature を付けて build した binary でだけ使えます"
+        );
         std::process::exit(2);
     }
 
@@ -80,14 +88,20 @@ async fn main() {
     #[cfg(not(feature = "gcp"))]
     let provider = {
         let docs = std::sync::Arc::new(rust_idp::MemoryDocumentStore::default());
-        provider.with_document_store(docs.clone()).with_store(std::sync::Arc::new(rust_idp::MemoryStore::with_documents(docs)))
+        provider
+            .with_document_store(docs.clone())
+            .with_store(std::sync::Arc::new(rust_idp::MemoryStore::with_documents(
+                docs,
+            )))
     };
     let app = rust_idp::router(provider);
 
     if std::env::var("K_SERVICE").is_ok() {
         // Cloud Run は $PORT を 0.0.0.0 で待ち受ける。
         let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+            .await
+            .unwrap();
         tracing::info!("rust-idp listening on 0.0.0.0:{port} (issuer={issuer})");
         axum::serve(listener, app).await.unwrap();
     } else {
@@ -98,15 +112,16 @@ async fn main() {
             .and_then(|a| a.rsplit(':').next().map(|s| s.to_string()))
             .or_else(|| std::env::var("PORT").ok())
             .unwrap_or_else(|| "8080".into());
-        let v4 = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
+        let v4 = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
         let app2 = app.clone();
-        tracing::info!("rust-idp local listening on 127.0.0.1:{port} and [::1]:{port} (issuer={issuer})");
+        tracing::info!(
+            "rust-idp local listening on 127.0.0.1:{port} and [::1]:{port} (issuer={issuer})"
+        );
         match tokio::net::TcpListener::bind(format!("[::1]:{port}")).await {
             Ok(v6) => {
-                let _ = tokio::join!(
-                    axum::serve(v4, app),
-                    axum::serve(v6, app2),
-                );
+                let _ = tokio::join!(axum::serve(v4, app), axum::serve(v6, app2),);
             }
             Err(e) => {
                 tracing::warn!("IPv6 loopback bind failed ({e}); IPv4 only");
@@ -144,8 +159,9 @@ fn fapi_client_from_env(client_id: &str, prefix: &str) -> Option<Client> {
     let x = std::env::var(format!("{prefix}_X")).ok()?;
     let y = std::env::var(format!("{prefix}_Y")).ok()?;
     let kid = std::env::var(format!("{prefix}_KID")).ok()?;
-    let callback = std::env::var("CONFORMANCE_FAPI_CALLBACK")
-        .unwrap_or_else(|_| "https://www.certification.openid.net/test/a/rustop-fapi2/callback".into());
+    let callback = std::env::var("CONFORMANCE_FAPI_CALLBACK").unwrap_or_else(|_| {
+        "https://www.certification.openid.net/test/a/rustop-fapi2/callback".into()
+    });
     Some(Client {
         client_id: client_id.into(),
         redirect_uris: vec![callback],

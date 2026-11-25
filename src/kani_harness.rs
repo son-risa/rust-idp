@@ -133,10 +133,17 @@ fn strip_query_fragment_safe() {
     let r = crate::dpop::strip_query_fragment(u); // 到達＝多バイト境界スライス panic 無し
     assert!(u.starts_with(r), "結果は入力の接頭辞");
     if tail == b'?' || tail == b'#' {
-        assert_eq!(r.len(), 2, "区切りの直前＝多バイト境界(index 2)でちょうど切る");
+        assert_eq!(
+            r.len(),
+            2,
+            "区切りの直前＝多バイト境界(index 2)でちょうど切る"
+        );
     } else {
         assert_eq!(r.len(), 3, "区切りが無ければ全長を保つ");
-        assert!(!r.contains('?') && !r.contains('#'), "本当に区切りを含まない");
+        assert!(
+            !r.contains('?') && !r.contains('#'),
+            "本当に区切りを含まない"
+        );
     }
 }
 
@@ -194,7 +201,10 @@ fn parse_auth_data_safe() {
         Ok(adata) => {
             // 健全性: 受理は len>=37 のときに限る。到達＝後続スライスが全て OOB panic 無し。
             assert!(len >= 37, "Ok は len>=37 のときのみ");
-            assert!(adata.rp_id_hash.len() == 32, "rp_id_hash は ad[0..32]＝32 バイト");
+            assert!(
+                adata.rp_id_hash.len() == 32,
+                "rp_id_hash は ad[0..32]＝32 バイト"
+            );
             assert!(adata.rest.len() == len - 37, "rest は ad[37..]＝残り全部");
             assert!(adata.flags == buf[32], "flags は ad[32]");
             // sign_count は ad[33..37] の big-endian（index 33..36 が読まれている証拠）。
@@ -202,7 +212,10 @@ fn parse_auth_data_safe() {
                 | ((buf[34] as u32) << 16)
                 | ((buf[35] as u32) << 8)
                 | (buf[36] as u32);
-            assert!(adata.sign_count == sc, "sign_count は ad[33..37] の big-endian");
+            assert!(
+                adata.sign_count == sc,
+                "sign_count は ad[33..37] の big-endian"
+            );
         }
     }
 }
@@ -225,7 +238,10 @@ fn attested_cred_id_end_safe() {
         None => {
             // 拒否はヘッダ不足、または credId が rest を超えるときに限る。
             let n = ((buf[16] as usize) << 8) | (buf[17] as usize);
-            assert!(len < 18 || len < 18 + n, "None はヘッダ<18 か credId 超過のときのみ");
+            assert!(
+                len < 18 || len < 18 + n,
+                "None はヘッダ<18 か credId 超過のときのみ"
+            );
         }
         Some(end) => {
             assert!(len >= 18, "Some はヘッダ>=18 が必要");
@@ -265,12 +281,18 @@ fn refresh_family_walk_terminates() {
         steps += 1;
         cur = next[cur];
     }
-    assert!(steps <= N, "訪れた集合により高々 N 歩で停止する（ハングしない）");
+    assert!(
+        steps <= N,
+        "訪れた集合により高々 N 歩で停止する（ハングしない）"
+    );
 
     let mut reach = start;
     let mut k = 0;
     while k < N && reach < N {
-        assert!(seen[reach], "start から辿れるノードは全部訪れている（取りこぼさない）");
+        assert!(
+            seen[reach],
+            "start から辿れるノードは全部訪れている（取りこぼさない）"
+        );
         reach = next[reach];
         k += 1;
     }

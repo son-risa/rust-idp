@@ -5,8 +5,8 @@ use crate::ciba::CibaStatus;
 use crate::error::OAuthError;
 use crate::jws::b64url;
 use crate::model::{AccessToken, AuthorizationCode, Client, RefreshToken, TokenResponse};
-use crate::store::CodeTake;
 use crate::provider::Provider;
+use crate::store::CodeTake;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -25,7 +25,10 @@ pub trait GrantHandler: Send + Sync {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn opaque() -> String {
@@ -146,7 +149,11 @@ async fn discard_unissued(p: &Provider, refresh: Option<&str>, access: Option<&s
     if let Some(t) = refresh
         && let Err(e) = p.store.revoke_refresh_token(t).await
     {
-        tracing::warn!(event = "unissued_token_not_removed", kind = "refresh", "{e}");
+        tracing::warn!(
+            event = "unissued_token_not_removed",
+            kind = "refresh",
+            "{e}"
+        );
     }
     if let Some(t) = access
         && let Err(e) = p.store.revoke_access_token(t).await
@@ -166,9 +173,18 @@ async fn ensure_account_active(p: &Provider, account_id: &str) -> Result<(), OAu
     };
     // accountsByUuid の逆引きは書き損ねても登録を通す作りで、消したアカウントでは先に消えるので使わない。
     // accounts を accountId で直に引き、無ければ（消した後も）断る。
-    let found = fs.query_eq("accounts", "accountId", account_id).await.map_err(OAuthError::ServerError)?;
-    if found.is_empty() || found.iter().any(|(_, f)| crate::firestore::field_bool(f, "disabled").unwrap_or(false)) {
-        return Err(OAuthError::InvalidGrant("account is disabled or deleted".into()));
+    let found = fs
+        .query_eq("accounts", "accountId", account_id)
+        .await
+        .map_err(OAuthError::ServerError)?;
+    if found.is_empty()
+        || found
+            .iter()
+            .any(|(_, f)| crate::firestore::field_bool(f, "disabled").unwrap_or(false))
+    {
+        return Err(OAuthError::InvalidGrant(
+            "account is disabled or deleted".into(),
+        ));
     }
     Ok(())
 }
@@ -181,10 +197,14 @@ fn check_code_request(
     dpop_jkt: Option<&str>,
 ) -> Result<(), OAuthError> {
     if code.client_id != client.client_id {
-        return Err(OAuthError::InvalidGrant("code issued to another client".into()));
+        return Err(OAuthError::InvalidGrant(
+            "code issued to another client".into(),
+        ));
     }
     if code.expires_at < now() {
-        return Err(OAuthError::InvalidGrant("authorization code expired".into()));
+        return Err(OAuthError::InvalidGrant(
+            "authorization code expired".into(),
+        ));
     }
 
     let redirect_uri = form
@@ -213,7 +233,7 @@ fn check_code_request(
             _ => {
                 return Err(OAuthError::InvalidDpopProof(
                     "DPoP proof jkt does not match dpop_jkt bound at authorization".into(),
-                ))
+                ));
             }
         }
     }
@@ -239,19 +259,27 @@ impl GrantHandler for AuthorizationCodeGrant {
         let (code, reused) = match p.store.take_code(code_val).await? {
             CodeTake::Fresh(c) => (c, false),
             CodeTake::Reused(c) => (c, true),
-            CodeTake::Unknown => return Err(OAuthError::InvalidGrant("code not found or already used".into())),
+            CodeTake::Unknown => {
+                return Err(OAuthError::InvalidGrant(
+                    "code not found or already used".into(),
+                ));
+            }
         };
         // 再利用の失効は、client・redirect_uri・PKCE・DPoP がすべて合ってから。漏れたコードだけでは
         // （公開 client は client_id を名乗るだけで通るので）正規の利用者の RT を消せないようにする。
         // 再利用のときは、照合のどの段で落ちたかを文言で明かさない。
         let checked = check_code_request(&code, client, form, dpop_jkt.as_deref());
         if reused && checked.is_err() {
-            return Err(OAuthError::InvalidGrant("code not found or already used".into()));
+            return Err(OAuthError::InvalidGrant(
+                "code not found or already used".into(),
+            ));
         }
         checked?;
         if reused {
             p.store.revoke_code_tokens(code_val).await;
-            return Err(OAuthError::InvalidGrant("code not found or already used".into()));
+            return Err(OAuthError::InvalidGrant(
+                "code not found or already used".into(),
+            ));
         }
         ensure_account_active(p, &code.account_id).await?;
 
@@ -322,14 +350,14 @@ impl GrantHandler for RefreshTokenGrant {
 
         // 消費前に所有者と DPoP 束縛を検証する。検証失敗で被害者の RT をローテーション消費
         // （=失効）させないため、まず get で参照して通過したものだけ take で単回消費する。
-        let pre = p
-            .store
-            .get_refresh_token(rt_val)
-            .await?
-            .ok_or_else(|| OAuthError::InvalidGrant("refresh_token not found or already used".into()))?;
+        let pre = p.store.get_refresh_token(rt_val).await?.ok_or_else(|| {
+            OAuthError::InvalidGrant("refresh_token not found or already used".into())
+        })?;
 
         if pre.client_id != client.client_id {
-            return Err(OAuthError::InvalidGrant("refresh_token issued to another client".into()));
+            return Err(OAuthError::InvalidGrant(
+                "refresh_token issued to another client".into(),
+            ));
         }
 
         // DPoP 束縛 (RFC 9449 §5): 発行時に鍵束縛された RT は、提示 proof の jkt が一致必須。
@@ -340,12 +368,12 @@ impl GrantHandler for RefreshTokenGrant {
             (Some(_), _) => {
                 return Err(OAuthError::InvalidDpopProof(
                     "DPoP proof jkt does not match the key bound to this refresh token".into(),
-                ))
+                ));
             }
             (None, _) if client.is_public() => {
                 return Err(OAuthError::InvalidGrant(
                     "refresh token for a public client must be DPoP-bound".into(),
-                ))
+                ));
             }
             (None, _) => {}
         }
@@ -353,10 +381,14 @@ impl GrantHandler for RefreshTokenGrant {
         // 系列の失効の札を見る。familyId を持たない RT（familyId を書く前、2026-06-11 より前に始まった鎖）は
         // 札を置く系列が無いので、ローテーションさせずにログインし直させる。
         if pre.family_id.is_empty() {
-            return Err(OAuthError::InvalidGrant("refresh token has no family; sign in again".into()));
+            return Err(OAuthError::InvalidGrant(
+                "refresh token has no family; sign in again".into(),
+            ));
         }
         if p.store.refresh_family_revoked(&pre.family_id).await? {
-            return Err(OAuthError::InvalidGrant("refresh token family revoked".into()));
+            return Err(OAuthError::InvalidGrant(
+                "refresh token family revoked".into(),
+            ));
         }
 
         // B-4 再利用検知（OAuth Security BCP）: 消費済み(used)の RT が再提示されたら盗難
@@ -374,8 +406,13 @@ impl GrantHandler for RefreshTokenGrant {
                 "refresh token reuse detected; token family revoked".into(),
             ));
         }
-        if pre.auth_time.is_some_and(|t| t.saturating_add(crate::store::REFRESH_ABSOLUTE_MAX_SECS) < now()) {
-            return Err(OAuthError::InvalidGrant("refresh token is past its absolute lifetime; sign in again".into()));
+        if pre
+            .auth_time
+            .is_some_and(|t| t.saturating_add(crate::store::REFRESH_ABSOLUTE_MAX_SECS) < now())
+        {
+            return Err(OAuthError::InvalidGrant(
+                "refresh token is past its absolute lifetime; sign in again".into(),
+            ));
         }
         ensure_account_active(p, &pre.account_id).await?;
 
@@ -386,7 +423,9 @@ impl GrantHandler for RefreshTokenGrant {
                 if req.split_whitespace().all(|s| original.contains(&s)) {
                     req.clone()
                 } else {
-                    return Err(OAuthError::InvalidScope("scope must not exceed original".into()));
+                    return Err(OAuthError::InvalidScope(
+                        "scope must not exceed original".into(),
+                    ));
                 }
             }
             None => pre.scope.clone(),
@@ -419,7 +458,21 @@ impl GrantHandler for RefreshTokenGrant {
         // RP が古い RT で試し直したときに再利用として系列ごと失効する。
         let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
         // auth_time は再認証しないので元の RT から引き継ぐ。acr は出さない（A2: 満たしたと言える値が無い）。
-        let (access_token, id_token) = match issue_access_and_id(p, &client.client_id, &pre.account_id, &scope, None, pre.auth_time, None, dpop_jkt, client.id_token_signed_response_alg.as_deref(), pre.resource.as_deref(), None).await {
+        let (access_token, id_token) = match issue_access_and_id(
+            p,
+            &client.client_id,
+            &pre.account_id,
+            &scope,
+            None,
+            pre.auth_time,
+            None,
+            dpop_jkt,
+            client.id_token_signed_response_alg.as_deref(),
+            pre.resource.as_deref(),
+            None,
+        )
+        .await
+        {
             Ok(x) => x,
             Err(e) => {
                 discard_unissued(p, new_refresh.as_deref(), None).await;
@@ -428,7 +481,11 @@ impl GrantHandler for RefreshTokenGrant {
         };
         let unissued = |p| discard_unissued(p, new_refresh.as_deref(), Some(access_token.as_str()));
 
-        let marked = match p.store.mark_refresh_used(rt_val, new_refresh.as_deref()).await {
+        let marked = match p
+            .store
+            .mark_refresh_used(rt_val, new_refresh.as_deref())
+            .await
+        {
             Ok(m) => m,
             Err(e) => {
                 // 古い RT が使われた印を書けたかどうか分からない。新しいトークンは誰にも渡していないので消し、
@@ -494,7 +551,9 @@ impl GrantHandler for CibaGrant {
             .ok_or_else(|| OAuthError::InvalidGrant("unknown auth_req_id".into()))?;
 
         if req.client_id != client.client_id {
-            return Err(OAuthError::InvalidGrant("auth_req_id issued to another client".into()));
+            return Err(OAuthError::InvalidGrant(
+                "auth_req_id issued to another client".into(),
+            ));
         }
         if req.expired() {
             p.ciba.delete(auth_req_id).await.ok();
@@ -508,7 +567,9 @@ impl GrantHandler for CibaGrant {
             )),
             CibaStatus::Denied => {
                 p.ciba.delete(auth_req_id).await.ok();
-                Err(OAuthError::AccessDenied("end-user denied the request".into()))
+                Err(OAuthError::AccessDenied(
+                    "end-user denied the request".into(),
+                ))
             }
             CibaStatus::Approved => {
                 // CIBA は単回。Approved→削除を CAS で原子化し、並行 poll での二重発行を防ぐ。
@@ -522,9 +583,20 @@ impl GrantHandler for CibaGrant {
                     .map_err(OAuthError::ServerError)?
                     .ok_or_else(|| OAuthError::InvalidGrant("auth_req_id already used".into()))?;
                 let token_type = if dpop_jkt.is_some() { "DPoP" } else { "Bearer" };
-                let (access_token, id_token) =
-                    issue_access_and_id(p, &client.client_id, &req.account, &req.scope, None, None, None, dpop_jkt, client.id_token_signed_response_alg.as_deref(), None, req.authorization_details.as_deref())
-                        .await?;
+                let (access_token, id_token) = issue_access_and_id(
+                    p,
+                    &client.client_id,
+                    &req.account,
+                    &req.scope,
+                    None,
+                    None,
+                    None,
+                    dpop_jkt,
+                    client.id_token_signed_response_alg.as_deref(),
+                    None,
+                    req.authorization_details.as_deref(),
+                )
+                .await?;
                 // 承認時の authorization_details を JSON 配列としてレスポンスへ載せる（RFC 9396）。
                 let ad_value = req
                     .authorization_details
@@ -611,7 +683,10 @@ mod tests {
 
     /// DPoP 鍵に束縛された refresh token（public client の通常経路）。
     fn rt_bound(token: &str, client_id: &str, scope: &str, jkt: &str) -> RefreshToken {
-        RefreshToken { jkt: Some(jkt.into()), ..rt(token, client_id, scope) }
+        RefreshToken {
+            jkt: Some(jkt.into()),
+            ..rt(token, client_id, scope)
+        }
     }
 
     /// A2: 前に要求の写しで acr が入った RT を回しても、新しい RT・AT に acr を引き継がない。
@@ -619,12 +694,36 @@ mod tests {
     async fn refresh_does_not_carry_over_an_old_acr() {
         let p = provider();
         let c = client("mobile-rp");
-        let old = RefreshToken { acr: Some("urn:mace:incommon:iap:bronze".into()), ..rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A") };
+        let old = RefreshToken {
+            acr: Some("urn:mace:incommon:iap:bronze".into()),
+            ..rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A")
+        };
         p.store.save_refresh_token(old).await.unwrap();
-        let r = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT0")]), Some("KEY-A".into())).await.unwrap();
-        let new_rt = p.store.get_refresh_token(r.refresh_token.as_deref().unwrap()).await.unwrap().unwrap();
+        let r = RefreshTokenGrant
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", "RT0")]),
+                Some("KEY-A".into()),
+            )
+            .await
+            .unwrap();
+        let new_rt = p
+            .store
+            .get_refresh_token(r.refresh_token.as_deref().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(new_rt.acr, None);
-        assert_eq!(p.store.get_access_token(&r.access_token).await.unwrap().unwrap().acr, None);
+        assert_eq!(
+            p.store
+                .get_access_token(&r.access_token)
+                .await
+                .unwrap()
+                .unwrap()
+                .acr,
+            None
+        );
     }
 
     /// A3: ログインから 90 日を過ぎた RT は、回し続けていても使えない。
@@ -633,10 +732,23 @@ mod tests {
         let p = provider();
         let c = client("mobile-rp");
         let limit = crate::store::REFRESH_ABSOLUTE_MAX_SECS;
-        for (tok, age, ok) in [("RT-young", limit - 3600, true), ("RT-old", limit + 3600, false)] {
-            let t = RefreshToken { auth_time: Some(now() - age), ..rt_bound(tok, "mobile-rp", "openid offline_access", "KEY-A") };
+        for (tok, age, ok) in [
+            ("RT-young", limit - 3600, true),
+            ("RT-old", limit + 3600, false),
+        ] {
+            let t = RefreshToken {
+                auth_time: Some(now() - age),
+                ..rt_bound(tok, "mobile-rp", "openid offline_access", "KEY-A")
+            };
             p.store.save_refresh_token(t).await.unwrap();
-            let r = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", tok)]), Some("KEY-A".into())).await;
+            let r = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &c,
+                    &form(&[("refresh_token", tok)]),
+                    Some("KEY-A".into()),
+                )
+                .await;
             assert_eq!(r.is_ok(), ok, "{tok}: {:?}", r.err());
         }
     }
@@ -647,51 +759,140 @@ mod tests {
     async fn a_disabled_account_gets_no_tokens_from_a_code_a_refresh_token_or_ciba() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
-        let outcome = crate::webauthn::RegOutcome { credential_id: "cred-1".into(), pub_x: "x".into(), pub_y: "y".into(), sign_count: 0, aaguid: String::new() };
-        crate::registration::save_credential(&*fs, "u@example.com", "acc-1", &outcome).await.unwrap();
+        let outcome = crate::webauthn::RegOutcome {
+            credential_id: "cred-1".into(),
+            pub_x: "x".into(),
+            pub_y: "y".into(),
+            sign_count: 0,
+            aaguid: String::new(),
+        };
+        crate::registration::save_credential(&*fs, "u@example.com", "acc-1", &outcome)
+            .await
+            .unwrap();
         use crate::ciba::CibaStore;
         let ciba = std::sync::Arc::new(crate::ciba::MemoryCibaStore::default());
-        let req_id = ciba.create("mobile-rp", "acc-1", "openid", "msg", None).await.unwrap();
-        ciba.transition_if_pending(req_id.as_str(), CibaStatus::Approved).await.unwrap();
+        let req_id = ciba
+            .create("mobile-rp", "acc-1", "openid", "msg", None)
+            .await
+            .unwrap();
+        ciba.transition_if_pending(req_id.as_str(), CibaStatus::Approved)
+            .await
+            .unwrap();
         let p = provider().with_firestore(fs.clone()).with_ciba(ciba);
         let c = client("mobile-rp");
 
         let mut code = base_code("C1", "mobile-rp");
         code.account_id = "acc-1".into();
         p.store.save_code(code).await.unwrap();
-        let rt = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A") };
+        let rt = RefreshToken {
+            account_id: "acc-1".into(),
+            auth_time: Some(now()),
+            ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A")
+        };
         p.store.save_refresh_token(rt).await.unwrap();
         let refresh = form(&[("refresh_token", "RT1")]);
         // 凍結の前は使える（RT は回さずに確かめるため、別の RT で見る）。
-        let rt2 = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT2", "mobile-rp", "openid offline_access", "KEY-A") };
+        let rt2 = RefreshToken {
+            account_id: "acc-1".into(),
+            auth_time: Some(now()),
+            ..rt_bound("RT2", "mobile-rp", "openid offline_access", "KEY-A")
+        };
         p.store.save_refresh_token(rt2).await.unwrap();
-        assert!(RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT2")]), Some("KEY-A".into())).await.is_ok());
+        assert!(
+            RefreshTokenGrant
+                .handle(
+                    &p,
+                    &c,
+                    &form(&[("refresh_token", "RT2")]),
+                    Some("KEY-A".into())
+                )
+                .await
+                .is_ok()
+        );
 
-        crate::registration::set_disabled(&*fs, "u@example.com", true).await.unwrap();
+        crate::registration::set_disabled(&*fs, "u@example.com", true)
+            .await
+            .unwrap();
         assert_no_tokens(&p, &c, &refresh, req_id.as_str()).await;
 
         // 消した後も（逆引きが消えても）出さない。
-        crate::account_admin::delete_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "cli", "u@example.com").await.unwrap();
+        crate::account_admin::delete_account(
+            &*fs,
+            &crate::firestore_store::FirestoreStore::new(fs.clone()),
+            "cli",
+            "u@example.com",
+        )
+        .await
+        .unwrap();
         let mut code = base_code("C1", "mobile-rp");
         code.account_id = "acc-1".into();
         let p2 = provider().with_firestore(fs.clone());
         p2.store.save_code(code).await.unwrap();
-        let rt = RefreshToken { account_id: "acc-1".into(), auth_time: Some(now()), ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A") };
+        let rt = RefreshToken {
+            account_id: "acc-1".into(),
+            auth_time: Some(now()),
+            ..rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A")
+        };
         p2.store.save_refresh_token(rt).await.unwrap();
-        let code_r = AuthorizationCodeGrant.handle(&p2, &c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
-        assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "deleted code: {:?}", code_r.map(|r| r.access_token));
-        let rt_r = RefreshTokenGrant.handle(&p2, &c, &refresh, Some("KEY-A".into())).await;
-        assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "deleted refresh: {:?}", rt_r.map(|r| r.access_token));
+        let code_r = AuthorizationCodeGrant
+            .handle(
+                &p2,
+                &c,
+                &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]),
+                None,
+            )
+            .await;
+        assert!(
+            matches!(code_r, Err(OAuthError::InvalidGrant(_))),
+            "deleted code: {:?}",
+            code_r.map(|r| r.access_token)
+        );
+        let rt_r = RefreshTokenGrant
+            .handle(&p2, &c, &refresh, Some("KEY-A".into()))
+            .await;
+        assert!(
+            matches!(rt_r, Err(OAuthError::InvalidGrant(_))),
+            "deleted refresh: {:?}",
+            rt_r.map(|r| r.access_token)
+        );
     }
 
     #[cfg(feature = "gcp")]
-    async fn assert_no_tokens(p: &Provider, c: &Client, refresh: &HashMap<String, String>, req_id: &str) {
-        let code_r = AuthorizationCodeGrant.handle(p, c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
-        assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "code: {:?}", code_r.map(|r| r.access_token));
-        let rt_r = RefreshTokenGrant.handle(p, c, refresh, Some("KEY-A".into())).await;
-        assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "refresh: {:?}", rt_r.map(|r| r.access_token));
-        let ciba_r = CibaGrant.handle(p, c, &form(&[("auth_req_id", req_id)]), None).await;
-        assert!(matches!(ciba_r, Err(OAuthError::InvalidGrant(_))), "ciba: {:?}", ciba_r.map(|r| r.access_token));
+    async fn assert_no_tokens(
+        p: &Provider,
+        c: &Client,
+        refresh: &HashMap<String, String>,
+        req_id: &str,
+    ) {
+        let code_r = AuthorizationCodeGrant
+            .handle(
+                p,
+                c,
+                &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]),
+                None,
+            )
+            .await;
+        assert!(
+            matches!(code_r, Err(OAuthError::InvalidGrant(_))),
+            "code: {:?}",
+            code_r.map(|r| r.access_token)
+        );
+        let rt_r = RefreshTokenGrant
+            .handle(p, c, refresh, Some("KEY-A".into()))
+            .await;
+        assert!(
+            matches!(rt_r, Err(OAuthError::InvalidGrant(_))),
+            "refresh: {:?}",
+            rt_r.map(|r| r.access_token)
+        );
+        let ciba_r = CibaGrant
+            .handle(p, c, &form(&[("auth_req_id", req_id)]), None)
+            .await;
+        assert!(
+            matches!(ciba_r, Err(OAuthError::InvalidGrant(_))),
+            "ciba: {:?}",
+            ciba_r.map(|r| r.access_token)
+        );
     }
 
     /// client_secret_basic の confidential client（client 認証が防壁。DPoP 束縛は任意）。
@@ -704,7 +905,10 @@ mod tests {
     }
 
     fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     /// ストアに書けない・読めないときは server_error。invalid_grant にすると RP はコードや RT を捨て、
@@ -712,7 +916,11 @@ mod tests {
     #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_store_failure_is_a_server_error_not_a_grant_error() {
-        for (method, col) in [("PATCH", "accessTokens"), ("PATCH", "authCodes"), ("GET", "authCodes")] {
+        for (method, col) in [
+            ("PATCH", "accessTokens"),
+            ("PATCH", "authCodes"),
+            ("GET", "authCodes"),
+        ] {
             let (store, fake) = fake_store_and_state().await;
             let p = provider().with_store(store);
             p.store.save_code(base_code("C1", "rp")).await.unwrap();
@@ -722,18 +930,49 @@ mod tests {
             }
             fake.fail_once(method, col, None);
             let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-            let r = AuthorizationCodeGrant.handle(&p, &client("rp"), &f, None).await;
-            assert!(matches!(r, Err(OAuthError::ServerError(_))), "{method} {col}: {:?}", r.err());
+            let r = AuthorizationCodeGrant
+                .handle(&p, &client("rp"), &f, None)
+                .await;
+            assert!(
+                matches!(r, Err(OAuthError::ServerError(_))),
+                "{method} {col}: {:?}",
+                r.err()
+            );
         }
 
         let (store, fake) = fake_store_and_state().await;
         let p = provider().with_store(store);
-        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
+        p.store
+            .save_refresh_token(rt("RT0", "rp", "openid offline_access"))
+            .await
+            .unwrap();
         fake.fail_once("GET", "refreshTokens", Some("RT0"));
-        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
-        assert!(matches!(r, Err(OAuthError::ServerError(_))), "{:?}", r.err());
-        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
-        assert!(again.is_ok(), "障害が明けたら同じ RT で続けられる: {:?}", again.err());
+        let r = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "RT0")]),
+                None,
+            )
+            .await;
+        assert!(
+            matches!(r, Err(OAuthError::ServerError(_))),
+            "{:?}",
+            r.err()
+        );
+        let again = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "RT0")]),
+                None,
+            )
+            .await;
+        assert!(
+            again.is_ok(),
+            "障害が明けたら同じ RT で続けられる: {:?}",
+            again.err()
+        );
     }
 
     #[tokio::test]
@@ -742,7 +981,10 @@ mod tests {
         let c = client("rp");
         p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await.unwrap();
+        let r = AuthorizationCodeGrant
+            .handle(&p, &c, &f, None)
+            .await
+            .unwrap();
         assert!(!r.access_token.is_empty());
         assert_eq!(r.token_type, "Bearer");
         assert!(r.id_token.is_some());
@@ -757,9 +999,18 @@ mod tests {
     #[tokio::test]
     async fn id_token_names_the_issuer_the_client_and_the_request_nonce() {
         let p = provider();
-        p.store.save_code(AuthorizationCode { nonce: Some("n-0S6".into()), ..base_code("C1", "rp") }).await.unwrap();
+        p.store
+            .save_code(AuthorizationCode {
+                nonce: Some("n-0S6".into()),
+                ..base_code("C1", "rp")
+            })
+            .await
+            .unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
+        let r = AuthorizationCodeGrant
+            .handle(&p, &client("rp"), &f, None)
+            .await
+            .unwrap();
         let claims = id_token_claims(&r.id_token.unwrap());
         assert_eq!(claims["iss"], "https://op.example.com");
         assert_eq!(claims["aud"], "rp");
@@ -777,19 +1028,36 @@ mod tests {
 
         // 被害者の RT は発行時に被害者の鍵へ束縛済み（mobile-rp は dpop_bound ゆえ常に束縛）。
         p.store
-            .save_refresh_token(rt_bound("STOLEN_RT", "mobile-rp", "openid offline_access", "VICTIM-KEY"))
-            .await.unwrap();
+            .save_refresh_token(rt_bound(
+                "STOLEN_RT",
+                "mobile-rp",
+                "openid offline_access",
+                "VICTIM-KEY",
+            ))
+            .await
+            .unwrap();
 
         // 攻撃者は自分の鍵の proof を提示（token endpoint が検証して注入する jkt は攻撃者鍵）。
         let r = RefreshTokenGrant
-            .handle(&p, &c, &form(&[("refresh_token", "STOLEN_RT")]), Some("ATTACKER-KEY".into()))
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", "STOLEN_RT")]),
+                Some("ATTACKER-KEY".into()),
+            )
             .await;
         assert!(
             matches!(r, Err(OAuthError::InvalidDpopProof(_))),
             "別鍵への付け替えは拒否されるべき"
         );
         // 被害者の RT は消費されていない（DoS 防止）。正規の鍵でなら依然使える。
-        assert!(p.store.get_refresh_token("STOLEN_RT").await.unwrap().is_some());
+        assert!(
+            p.store
+                .get_refresh_token("STOLEN_RT")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     // 正規経路: 一致する鍵なら成功し、ローテーション後の RT も同じ鍵束縛を引き継ぐ。
@@ -799,19 +1067,44 @@ mod tests {
         let mut c = client("mobile-rp");
         c.dpop_bound = true;
         p.store
-            .save_refresh_token(rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A"))
-            .await.unwrap();
+            .save_refresh_token(rt_bound(
+                "RT1",
+                "mobile-rp",
+                "openid offline_access",
+                "KEY-A",
+            ))
+            .await
+            .unwrap();
         let r = RefreshTokenGrant
-            .handle(&p, &c, &form(&[("refresh_token", "RT1")]), Some("KEY-A".into()))
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", "RT1")]),
+                Some("KEY-A".into()),
+            )
             .await
             .unwrap();
         assert_eq!(r.token_type, "DPoP");
         // 発行された access token が同じ鍵に cnf.jkt 束縛されている。
-        let at = p.store.get_access_token(&r.access_token).await.unwrap().unwrap();
+        let at = p
+            .store
+            .get_access_token(&r.access_token)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at.jkt.as_deref(), Some("KEY-A"));
         // ローテーションした新 RT も KEY-A 束縛を引き継ぐ。
         let new_rt = r.refresh_token.unwrap();
-        assert_eq!(p.store.get_refresh_token(&new_rt).await.unwrap().unwrap().jkt.as_deref(), Some("KEY-A"));
+        assert_eq!(
+            p.store
+                .get_refresh_token(&new_rt)
+                .await
+                .unwrap()
+                .unwrap()
+                .jkt
+                .as_deref(),
+            Some("KEY-A")
+        );
     }
 
     // public client の束縛なし RT は拒否（client 認証が無く bearer 長命資格情報になるため）。
@@ -819,7 +1112,10 @@ mod tests {
     async fn refresh_unbound_for_public_client_rejected() {
         let p = provider();
         let c = client("mobile-rp"); // public(none)
-        p.store.save_refresh_token(rt("RT1", "mobile-rp", "openid offline_access")).await.unwrap();
+        p.store
+            .save_refresh_token(rt("RT1", "mobile-rp", "openid offline_access"))
+            .await
+            .unwrap();
         let r = RefreshTokenGrant
             .handle(&p, &c, &form(&[("refresh_token", "RT1")]), None)
             .await;
@@ -831,7 +1127,10 @@ mod tests {
     async fn refresh_unbound_for_confidential_client_allowed() {
         let p = provider();
         let c = confidential_client("conf-rp");
-        p.store.save_refresh_token(rt("RT1", "conf-rp", "openid offline_access")).await.unwrap();
+        p.store
+            .save_refresh_token(rt("RT1", "conf-rp", "openid offline_access"))
+            .await
+            .unwrap();
         let r = RefreshTokenGrant
             .handle(&p, &c, &form(&[("refresh_token", "RT1")]), None)
             .await
@@ -860,7 +1159,12 @@ mod tests {
         let c = client("rp");
         p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        assert!(AuthorizationCodeGrant.handle(&p, &c, &f, None).await.is_ok());
+        assert!(
+            AuthorizationCodeGrant
+                .handle(&p, &c, &f, None)
+                .await
+                .is_ok()
+        );
         let again = AuthorizationCodeGrant.handle(&p, &c, &f, None).await;
         assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
     }
@@ -872,19 +1176,40 @@ mod tests {
         code.scope = "openid offline_access".into();
         p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let first = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
+        let first = AuthorizationCodeGrant
+            .handle(&p, &c, &f, Some("KEY-A".into()))
+            .await
+            .unwrap();
         let rt0 = first.refresh_token.unwrap();
         let rotated = RefreshTokenGrant
-            .handle(&p, &c, &form(&[("refresh_token", rt0.as_str())]), Some("KEY-A".into()))
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", rt0.as_str())]),
+                Some("KEY-A".into()),
+            )
             .await
             .unwrap()
             .refresh_token
             .unwrap();
 
-        let again = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await;
+        let again = AuthorizationCodeGrant
+            .handle(&p, &c, &f, Some("KEY-A".into()))
+            .await;
         assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
-        let after = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", rotated.as_str())]), Some("KEY-A".into())).await;
-        assert!(matches!(after, Err(OAuthError::InvalidGrant(_))), "回された後の RT が使えた: {:?}", after.map(|r| r.refresh_token));
+        let after = RefreshTokenGrant
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", rotated.as_str())]),
+                Some("KEY-A".into()),
+            )
+            .await;
+        assert!(
+            matches!(after, Err(OAuthError::InvalidGrant(_))),
+            "回された後の RT が使えた: {:?}",
+            after.map(|r| r.refresh_token)
+        );
     }
 
     /// 漏れた使用済みのコードを、別の client が出し直しても、同じ client を名乗って verifier 無しで出し直しても、
@@ -897,11 +1222,22 @@ mod tests {
             code.expires_at = now() + expires_in;
             code.code_challenge = Some(b64url(Sha256::digest(b"VERIFIER")));
             p.store.save_code(code).await.unwrap();
-            let f = form(&[("code", code_id), ("redirect_uri", "https://rp/cb"), ("code_verifier", "VERIFIER")]);
-            let rt = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap().refresh_token.unwrap();
+            let f = form(&[
+                ("code", code_id),
+                ("redirect_uri", "https://rp/cb"),
+                ("code_verifier", "VERIFIER"),
+            ]);
+            let rt = AuthorizationCodeGrant
+                .handle(&p, &c, &f, Some("KEY-A".into()))
+                .await
+                .unwrap()
+                .refresh_token
+                .unwrap();
             if code_id == "C-expired" {
                 tokio::time::sleep(std::time::Duration::from_millis(3100)).await;
-                let again = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await;
+                let again = AuthorizationCodeGrant
+                    .handle(&p, &c, &f, Some("KEY-A".into()))
+                    .await;
                 assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
             } else if code_id == "C-no-verifier" {
                 // 公開 client は client_id を名乗るだけで通る。コードだけ持つ第三者は verifier を出せない。
@@ -909,11 +1245,24 @@ mod tests {
                 let evil = AuthorizationCodeGrant.handle(&p, &c, &bare, None).await;
                 assert!(matches!(evil, Err(OAuthError::InvalidGrant(_))));
             } else {
-                let evil = AuthorizationCodeGrant.handle(&p, &client("evil"), &f, None).await;
+                let evil = AuthorizationCodeGrant
+                    .handle(&p, &client("evil"), &f, None)
+                    .await;
                 assert!(matches!(evil, Err(OAuthError::InvalidGrant(_))));
             }
-            let still = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", rt.as_str())]), Some("KEY-A".into())).await;
-            assert!(still.is_ok(), "{code_id}: 正規の利用者の RT が消えた: {:?}", still.err());
+            let still = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &c,
+                    &form(&[("refresh_token", rt.as_str())]),
+                    Some("KEY-A".into()),
+                )
+                .await;
+            assert!(
+                still.is_ok(),
+                "{code_id}: 正規の利用者の RT が消えた: {:?}",
+                still.err()
+            );
         }
     }
 
@@ -928,7 +1277,8 @@ mod tests {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
-        a_leaked_used_code_cannot_revoke_the_owners_refresh_token(provider().with_store(store)).await;
+        a_leaked_used_code_cannot_revoke_the_owners_refresh_token(provider().with_store(store))
+            .await;
     }
 
     #[tokio::test]
@@ -942,7 +1292,8 @@ mod tests {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let store = std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs));
-        code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider().with_store(store)).await;
+        code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider().with_store(store))
+            .await;
     }
 
     #[tokio::test]
@@ -950,7 +1301,9 @@ mod tests {
         let p = provider();
         p.store.save_code(base_code("C1", "rp")).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &client("evil"), &f, None).await;
+        let r = AuthorizationCodeGrant
+            .handle(&p, &client("evil"), &f, None)
+            .await;
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
     }
 
@@ -974,7 +1327,11 @@ mod tests {
         let mut code = base_code("C1", "rp");
         code.code_challenge = Some(challenge.clone());
         p.store.save_code(code).await.unwrap();
-        let bad = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb"), ("code_verifier", "wrong")]);
+        let bad = form(&[
+            ("code", "C1"),
+            ("redirect_uri", "https://rp/cb"),
+            ("code_verifier", "wrong"),
+        ]);
         assert!(matches!(
             AuthorizationCodeGrant.handle(&p, &c, &bad, None).await,
             Err(OAuthError::InvalidGrant(_))
@@ -983,8 +1340,17 @@ mod tests {
         let mut code2 = base_code("C1", "rp");
         code2.code_challenge = Some(challenge);
         p.store.save_code(code2).await.unwrap();
-        let ok = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb"), ("code_verifier", verifier)]);
-        assert!(AuthorizationCodeGrant.handle(&p, &c, &ok, None).await.is_ok());
+        let ok = form(&[
+            ("code", "C1"),
+            ("redirect_uri", "https://rp/cb"),
+            ("code_verifier", verifier),
+        ]);
+        assert!(
+            AuthorizationCodeGrant
+                .handle(&p, &c, &ok, None)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -997,14 +1363,19 @@ mod tests {
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
         // 束縛済み jkt と proof jkt 不一致は拒否。
         assert!(matches!(
-            AuthorizationCodeGrant.handle(&p, &c, &f, Some("JKT-B".into())).await,
+            AuthorizationCodeGrant
+                .handle(&p, &c, &f, Some("JKT-B".into()))
+                .await,
             Err(OAuthError::InvalidDpopProof(_))
         ));
         // 一致なら DPoP トークンを発行。
         let mut code2 = base_code("C1", "rp");
         code2.dpop_jkt = Some("JKT-A".into());
         p.store.save_code(code2).await.unwrap();
-        let r = AuthorizationCodeGrant.handle(&p, &c, &f, Some("JKT-A".into())).await.unwrap();
+        let r = AuthorizationCodeGrant
+            .handle(&p, &c, &f, Some("JKT-A".into()))
+            .await
+            .unwrap();
         assert_eq!(r.token_type, "DPoP");
     }
 
@@ -1018,7 +1389,10 @@ mod tests {
         code.dpop_jkt = Some("KEY-A".into());
         p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
+        let r = AuthorizationCodeGrant
+            .handle(&p, &c, &f, Some("KEY-A".into()))
+            .await
+            .unwrap();
         assert!(r.refresh_token.is_some());
     }
 
@@ -1031,7 +1405,10 @@ mod tests {
         code.scope = "openid offline_access".into();
         p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await.unwrap();
+        let r = AuthorizationCodeGrant
+            .handle(&p, &c, &f, None)
+            .await
+            .unwrap();
         assert!(r.refresh_token.is_none());
     }
 
@@ -1044,7 +1421,10 @@ mod tests {
         code.scope = "openid offline_access".into();
         p.store.save_code(code).await.unwrap();
         let f = form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]);
-        let r = AuthorizationCodeGrant.handle(&p, &c, &f, None).await.unwrap();
+        let r = AuthorizationCodeGrant
+            .handle(&p, &c, &f, None)
+            .await
+            .unwrap();
         assert!(r.refresh_token.is_some());
     }
 
@@ -1054,18 +1434,31 @@ mod tests {
         let p = provider();
         let c = client("mobile-rp");
         p.store
-            .save_refresh_token(rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A"))
-            .await.unwrap();
+            .save_refresh_token(rt_bound(
+                "RT1",
+                "mobile-rp",
+                "openid offline_access",
+                "KEY-A",
+            ))
+            .await
+            .unwrap();
         let f = form(&[("refresh_token", "RT1")]);
         // 正常ローテーション: RT1 -> RT2（RT1 は used、replaced_by=RT2）。
-        let r1 = RefreshTokenGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
+        let r1 = RefreshTokenGrant
+            .handle(&p, &c, &f, Some("KEY-A".into()))
+            .await
+            .unwrap();
         let rt2 = r1.refresh_token.clone().unwrap();
         // RT1 を再提示 → 再利用検知 → invalid_grant。
-        let reuse = RefreshTokenGrant.handle(&p, &c, &f, Some("KEY-A".into())).await;
+        let reuse = RefreshTokenGrant
+            .handle(&p, &c, &f, Some("KEY-A".into()))
+            .await;
         assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
         // 系列失効: 後継 RT2 も無効化されている。
         let f2 = form(&[("refresh_token", rt2.as_str())]);
-        let after = RefreshTokenGrant.handle(&p, &c, &f2, Some("KEY-A".into())).await;
+        let after = RefreshTokenGrant
+            .handle(&p, &c, &f2, Some("KEY-A".into()))
+            .await;
         assert!(matches!(after, Err(OAuthError::InvalidGrant(_))));
     }
 
@@ -1076,13 +1469,24 @@ mod tests {
             let p = provider();
             let c = client("mobile-rp");
             p.store
-                .save_refresh_token(rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A"))
-                .await.unwrap();
+                .save_refresh_token(rt_bound(
+                    "RT0",
+                    "mobile-rp",
+                    "openid offline_access",
+                    "KEY-A",
+                ))
+                .await
+                .unwrap();
             let mut current = "RT0".to_string();
             let mut chain = vec!["RT0".to_string()];
             for _ in 0..n {
                 let r = RefreshTokenGrant
-                    .handle(&p, &c, &form(&[("refresh_token", current.as_str())]), Some("KEY-A".into()))
+                    .handle(
+                        &p,
+                        &c,
+                        &form(&[("refresh_token", current.as_str())]),
+                        Some("KEY-A".into()),
+                    )
                     .await
                     .unwrap();
                 current = r.refresh_token.unwrap();
@@ -1090,30 +1494,62 @@ mod tests {
             }
             // 最古 RT0（used 済）を再提示 → 再利用検知 → invalid_grant。
             let reuse = RefreshTokenGrant
-                .handle(&p, &c, &form(&[("refresh_token", "RT0")]), Some("KEY-A".into()))
+                .handle(
+                    &p,
+                    &c,
+                    &form(&[("refresh_token", "RT0")]),
+                    Some("KEY-A".into()),
+                )
                 .await;
             assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))), "n={n}");
             for t in &chain {
-                assert!(p.store.get_refresh_token(t).await.unwrap().is_none(), "n={n} {t} 残存");
+                assert!(
+                    p.store.get_refresh_token(t).await.unwrap().is_none(),
+                    "n={n} {t} 残存"
+                );
             }
         }
     }
 
     async fn reuse_after_many_rotations_revokes_the_whole_family(p: Provider) {
         let c = client("mobile-rp");
-        p.store.save_refresh_token(rt_bound("RT0", "mobile-rp", "openid offline_access", "KEY-A")).await.unwrap();
+        p.store
+            .save_refresh_token(rt_bound(
+                "RT0",
+                "mobile-rp",
+                "openid offline_access",
+                "KEY-A",
+            ))
+            .await
+            .unwrap();
         let mut chain = vec!["RT0".to_string()];
         for _ in 0..100 {
             let r = RefreshTokenGrant
-                .handle(&p, &c, &form(&[("refresh_token", chain.last().unwrap().as_str())]), Some("KEY-A".into()))
+                .handle(
+                    &p,
+                    &c,
+                    &form(&[("refresh_token", chain.last().unwrap().as_str())]),
+                    Some("KEY-A".into()),
+                )
                 .await
                 .unwrap();
             chain.push(r.refresh_token.unwrap());
         }
-        let reuse = RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT0")]), Some("KEY-A".into())).await;
+        let reuse = RefreshTokenGrant
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", "RT0")]),
+                Some("KEY-A".into()),
+            )
+            .await;
         assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
         for t in &chain {
-            assert!(p.store.get_refresh_token(t).await.unwrap().is_none(), "{t} が残っている（最新は {}）", chain.last().unwrap());
+            assert!(
+                p.store.get_refresh_token(t).await.unwrap().is_none(),
+                "{t} が残っている（最新は {}）",
+                chain.last().unwrap()
+            );
         }
     }
 
@@ -1152,59 +1588,148 @@ mod tests {
 
     #[async_trait]
     impl Store for Interleaving {
-        async fn save_interaction(&self, i: crate::model::Interaction) { self.inner.save_interaction(i).await }
-        async fn get_interaction(&self, uid: &str) -> Option<crate::model::Interaction> { self.inner.get_interaction(uid).await }
-        async fn consume_interaction(&self, uid: &str) -> bool { self.inner.consume_interaction(uid).await }
-        async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool { self.inner.complete_interaction(uid, account_id, auth_time).await }
-        async fn save_session(&self, s: crate::model::Session) { self.inner.save_session(s).await }
-        async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
-        async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> crate::store::RevocationCounts { self.inner.revoke_account(account_id, keep_sid).await }
-        async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
-        async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> { self.inner.save_code(c).await }
-        async fn take_code(&self, code: &str) -> StoreResult<crate::store::CodeTake> { self.inner.take_code(code).await }
-        async fn revoke_code_tokens(&self, code: &str) { self.inner.revoke_code_tokens(code).await }
-        async fn link_issued_tokens(&self, code: &str, at: &str, rt: Option<&str>) -> StoreResult<()> { self.inner.link_issued_tokens(code, at, rt).await }
-        async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> { self.inner.save_access_token(t).await }
-        async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> { self.inner.get_access_token(token).await }
-        async fn revoke_access_token(&self, token: &str) -> StoreResult<()> { self.inner.revoke_access_token(token).await }
-        async fn consume_mandate_if_unused(&self, token: &str) -> Result<bool, String> { self.inner.consume_mandate_if_unused(token).await }
+        async fn save_interaction(&self, i: crate::model::Interaction) {
+            self.inner.save_interaction(i).await
+        }
+        async fn get_interaction(&self, uid: &str) -> Option<crate::model::Interaction> {
+            self.inner.get_interaction(uid).await
+        }
+        async fn consume_interaction(&self, uid: &str) -> bool {
+            self.inner.consume_interaction(uid).await
+        }
+        async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool {
+            self.inner
+                .complete_interaction(uid, account_id, auth_time)
+                .await
+        }
+        async fn save_session(&self, s: crate::model::Session) {
+            self.inner.save_session(s).await
+        }
+        async fn get_session(&self, sid: &str) -> Option<crate::model::Session> {
+            self.inner.get_session(sid).await
+        }
+        async fn revoke_account(
+            &self,
+            account_id: &str,
+            keep_sid: &str,
+        ) -> crate::store::RevocationCounts {
+            self.inner.revoke_account(account_id, keep_sid).await
+        }
+        async fn delete_session(&self, sid: &str) {
+            self.inner.delete_session(sid).await
+        }
+        async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> {
+            self.inner.save_code(c).await
+        }
+        async fn take_code(&self, code: &str) -> StoreResult<crate::store::CodeTake> {
+            self.inner.take_code(code).await
+        }
+        async fn revoke_code_tokens(&self, code: &str) {
+            self.inner.revoke_code_tokens(code).await
+        }
+        async fn link_issued_tokens(
+            &self,
+            code: &str,
+            at: &str,
+            rt: Option<&str>,
+        ) -> StoreResult<()> {
+            self.inner.link_issued_tokens(code, at, rt).await
+        }
+        async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> {
+            self.inner.save_access_token(t).await
+        }
+        async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> {
+            self.inner.get_access_token(token).await
+        }
+        async fn revoke_access_token(&self, token: &str) -> StoreResult<()> {
+            self.inner.revoke_access_token(token).await
+        }
+        async fn consume_mandate_if_unused(&self, token: &str) -> Result<bool, String> {
+            self.inner.consume_mandate_if_unused(token).await
+        }
         async fn save_refresh_token(&self, t: RefreshToken) -> StoreResult<()> {
             self.saved.lock().unwrap().push(t.token.clone());
             self.inner.save_refresh_token(t).await
         }
-        async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> { self.inner.get_refresh_token(token).await }
-        async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()> { self.inner.revoke_refresh_token(token).await }
-        async fn mark_refresh_used(&self, token: &str, replaced_by: Option<&str>) -> StoreResult<bool> {
+        async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> {
+            self.inner.get_refresh_token(token).await
+        }
+        async fn revoke_refresh_token(&self, token: &str) -> StoreResult<()> {
+            self.inner.revoke_refresh_token(token).await
+        }
+        async fn mark_refresh_used(
+            &self,
+            token: &str,
+            replaced_by: Option<&str>,
+        ) -> StoreResult<bool> {
             match self.mode {
                 Interleave::LoseTheCas => {
-                    assert!(self.inner.mark_refresh_used(token, Some("WINNER")).await.unwrap());
+                    assert!(
+                        self.inner
+                            .mark_refresh_used(token, Some("WINNER"))
+                            .await
+                            .unwrap()
+                    );
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
                 Interleave::RevokeBeforeMark => {
-                    let family = self.inner.get_refresh_token(token).await.unwrap().map_or_default(|t| t.family_id);
+                    let family = self
+                        .inner
+                        .get_refresh_token(token)
+                        .await
+                        .unwrap()
+                        .map_or_default(|t| t.family_id);
                     self.inner.revoke_refresh_family(&family, token).await;
                     self.inner.mark_refresh_used(token, replaced_by).await
                 }
                 Interleave::RevokeAfterMark => {
                     let won = self.inner.mark_refresh_used(token, replaced_by).await;
-                    let family = self.inner.get_refresh_token(token).await.unwrap().map_or_default(|t| t.family_id);
+                    let family = self
+                        .inner
+                        .get_refresh_token(token)
+                        .await
+                        .unwrap()
+                        .map_or_default(|t| t.family_id);
                     self.inner.revoke_refresh_family(&family, token).await;
                     won
                 }
             }
         }
         async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
-            self.inner.revoke_refresh_family(family_id, start_token).await
+            self.inner
+                .revoke_refresh_family(family_id, start_token)
+                .await
         }
-        async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> { self.inner.refresh_family_revoked(family_id).await }
-        async fn find_account(&self, sub: &str) -> crate::model::Account { self.inner.find_account(sub).await }
+        async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> {
+            self.inner.refresh_family_revoked(family_id).await
+        }
+        async fn find_account(&self, sub: &str) -> crate::model::Account {
+            self.inner.find_account(sub).await
+        }
     }
 
-    async fn rotate_rt0_with(inner: std::sync::Arc<dyn Store>, mode: Interleave) -> (Provider, Result<TokenResponse, OAuthError>, Vec<String>) {
-        inner.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
-        let store = std::sync::Arc::new(Interleaving { inner, mode, saved: std::sync::Mutex::new(vec![]) });
+    async fn rotate_rt0_with(
+        inner: std::sync::Arc<dyn Store>,
+        mode: Interleave,
+    ) -> (Provider, Result<TokenResponse, OAuthError>, Vec<String>) {
+        inner
+            .save_refresh_token(rt("RT0", "rp", "openid offline_access"))
+            .await
+            .unwrap();
+        let store = std::sync::Arc::new(Interleaving {
+            inner,
+            mode,
+            saved: std::sync::Mutex::new(vec![]),
+        });
         let p = provider().with_store(store.clone());
-        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        let r = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "RT0")]),
+                None,
+            )
+            .await;
         let saved = store.saved.lock().unwrap().clone();
         (p, r, saved)
     }
@@ -1212,10 +1737,23 @@ mod tests {
     /// ローテーションの CAS の直後に古い RT の再利用で系列が失効しても、新しい RT は系列から外れて生き残らない。
     async fn a_revoke_right_after_the_cas_reaches_the_new_rt(inner: std::sync::Arc<dyn Store>) {
         let (p, r, saved) = rotate_rt0_with(inner, Interleave::RevokeAfterMark).await;
-        assert!(matches!(r, Err(OAuthError::InvalidGrant(_))), "書き込みの後の札の確かめで断る");
+        assert!(
+            matches!(r, Err(OAuthError::InvalidGrant(_))),
+            "書き込みの後の札の確かめで断る"
+        );
         for t in saved.iter().filter(|t| t.as_str() != "RT0") {
-            assert!(p.store.get_refresh_token(t).await.unwrap().is_none(), "系列の失効の後に新しい RT {t} が生き残っている");
-            let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", t.as_str())]), None).await;
+            assert!(
+                p.store.get_refresh_token(t).await.unwrap().is_none(),
+                "系列の失効の後に新しい RT {t} が生き残っている"
+            );
+            let again = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &confidential_client("rp"),
+                    &form(&[("refresh_token", t.as_str())]),
+                    None,
+                )
+                .await;
             assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
         }
     }
@@ -1226,7 +1764,14 @@ mod tests {
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
         let new_rts: Vec<&String> = saved.iter().filter(|t| t.as_str() != "RT0").collect();
         assert_eq!(new_rts.len(), 1, "新しい RT は先に 1 つ保存される");
-        assert!(p.store.get_refresh_token(new_rts[0]).await.unwrap().is_none(), "負けたローテーションの新しい RT が残っている");
+        assert!(
+            p.store
+                .get_refresh_token(new_rts[0])
+                .await
+                .unwrap()
+                .is_none(),
+            "負けたローテーションの新しい RT が残っている"
+        );
     }
 
     #[cfg(feature = "gcp")]
@@ -1235,10 +1780,16 @@ mod tests {
     }
 
     #[cfg(feature = "gcp")]
-    async fn fake_store_and_state() -> (std::sync::Arc<dyn Store>, std::sync::Arc<crate::firestore::fake_firestore::FakeState>) {
+    async fn fake_store_and_state() -> (
+        std::sync::Arc<dyn Store>,
+        std::sync::Arc<crate::firestore::fake_firestore::FakeState>,
+    ) {
         let (host, state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
-        (std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs)), state)
+        (
+            std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs)),
+            state,
+        )
     }
 
     /// 新しい RT を保存した後、古い RT の CAS の前に失効が走っても（main の順では F3 の窓）、
@@ -1248,12 +1799,21 @@ mod tests {
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
         let new_rts: Vec<&String> = saved.iter().filter(|t| t.as_str() != "RT0").collect();
         assert_eq!(new_rts.len(), 1);
-        assert!(p.store.get_refresh_token(new_rts[0]).await.unwrap().is_none());
+        assert!(
+            p.store
+                .get_refresh_token(new_rts[0])
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn a_revoke_between_the_save_and_the_cas_is_caught_in_memory() {
-        a_revoke_between_the_save_and_the_cas_is_caught(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
+        a_revoke_between_the_save_and_the_cas_is_caught(std::sync::Arc::new(
+            crate::store::MemoryStore::default(),
+        ))
+        .await;
     }
 
     #[cfg(feature = "gcp")]
@@ -1269,18 +1829,45 @@ mod tests {
         for (method, target) in [("DELETE", "RT1"), ("GET", "RT0")] {
             let (store, fake) = fake_store_and_state().await;
             let p = provider().with_store(store);
-            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
-            let r1 = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+            p.store
+                .save_refresh_token(rt("RT0", "rp", "openid offline_access"))
+                .await
+                .unwrap();
+            let r1 = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &confidential_client("rp"),
+                    &form(&[("refresh_token", "RT0")]),
+                    None,
+                )
+                .await;
             let rt1 = r1.unwrap().refresh_token.unwrap();
-            let target = if target == "RT1" { rt1.clone() } else { target.to_string() };
+            let target = if target == "RT1" {
+                rt1.clone()
+            } else {
+                target.to_string()
+            };
             for _ in 0..8 {
                 fake.fail_once(method, "refreshTokens", Some(&target));
             }
             // 失効そのもの（札＋後片付け）を store で走らせる。grants を通すと、grants の読みが先に誤りを受け取る。
             p.store.revoke_refresh_family("fam-test", "RT0").await;
-            assert!(p.store.get_refresh_token(&rt1).await.unwrap().is_some(), "{method} の誤りで後片付けが {rt1} を消せていない前提");
-            let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", rt1.as_str())]), None).await;
-            assert!(matches!(again, Err(OAuthError::InvalidGrant(_))), "{method}: 消し残った {rt1} でローテーションできた");
+            assert!(
+                p.store.get_refresh_token(&rt1).await.unwrap().is_some(),
+                "{method} の誤りで後片付けが {rt1} を消せていない前提"
+            );
+            let again = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &confidential_client("rp"),
+                    &form(&[("refresh_token", rt1.as_str())]),
+                    None,
+                )
+                .await;
+            assert!(
+                matches!(again, Err(OAuthError::InvalidGrant(_))),
+                "{method}: 消し残った {rt1} でローテーションできた"
+            );
         }
     }
 
@@ -1291,12 +1878,40 @@ mod tests {
     async fn a_failed_tombstone_lookup_refuses_the_rotation() {
         let (store, fake) = fake_store_and_state().await;
         let p = provider().with_store(store);
-        p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
+        p.store
+            .save_refresh_token(rt("RT0", "rp", "openid offline_access"))
+            .await
+            .unwrap();
         fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
-        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
-        assert!(matches!(r, Err(OAuthError::ServerError(_))), "{:?}", r.err());
-        assert!(!p.store.get_refresh_token("RT0").await.unwrap().unwrap().used);
-        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
+        let r = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "RT0")]),
+                None,
+            )
+            .await;
+        assert!(
+            matches!(r, Err(OAuthError::ServerError(_))),
+            "{:?}",
+            r.err()
+        );
+        assert!(
+            !p.store
+                .get_refresh_token("RT0")
+                .await
+                .unwrap()
+                .unwrap()
+                .used
+        );
+        let again = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "RT0")]),
+                None,
+            )
+            .await;
         assert!(again.is_ok(), "{:?}", again.err());
     }
 
@@ -1308,18 +1923,42 @@ mod tests {
         for case in ["mark", "second lookup"] {
             let (store, fake) = fake_store_and_state().await;
             let p = provider().with_store(store);
-            p.store.save_refresh_token(rt("RT0", "rp", "openid offline_access")).await.unwrap();
+            p.store
+                .save_refresh_token(rt("RT0", "rp", "openid offline_access"))
+                .await
+                .unwrap();
             match case {
                 "mark" => fake.fail_once("PATCH", "refreshTokens", Some("RT0")),
                 _ => {
                     // 1 回目は「札は無い」（404）で通し、2 回目を落とす。
-                    fake.fail_once_with("GET", "refreshFamilyRevocations", Some("fam-test"), axum::http::StatusCode::NOT_FOUND);
+                    fake.fail_once_with(
+                        "GET",
+                        "refreshFamilyRevocations",
+                        Some("fam-test"),
+                        axum::http::StatusCode::NOT_FOUND,
+                    );
                     fake.fail_once("GET", "refreshFamilyRevocations", Some("fam-test"));
                 }
             }
-            let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "RT0")]), None).await;
-            assert!(matches!(r, Err(OAuthError::ServerError(_))), "{case}: {:?}", r.err());
-            let left = |col: &str| fake.doc_ids(col).into_iter().filter(|id| id != "RT0").count();
+            let r = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &confidential_client("rp"),
+                    &form(&[("refresh_token", "RT0")]),
+                    None,
+                )
+                .await;
+            assert!(
+                matches!(r, Err(OAuthError::ServerError(_))),
+                "{case}: {:?}",
+                r.err()
+            );
+            let left = |col: &str| {
+                fake.doc_ids(col)
+                    .into_iter()
+                    .filter(|id| id != "RT0")
+                    .count()
+            };
             assert_eq!(left("refreshTokens"), 0, "{case}: 渡していない RT が残った");
             assert_eq!(left("accessTokens"), 0, "{case}: 渡していない AT が残った");
         }
@@ -1329,12 +1968,35 @@ mod tests {
     #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn an_rt_without_a_family_is_not_rotated() {
-        for store in [std::sync::Arc::new(crate::store::MemoryStore::default()) as std::sync::Arc<dyn Store>, fake_store().await] {
+        for store in [
+            std::sync::Arc::new(crate::store::MemoryStore::default()) as std::sync::Arc<dyn Store>,
+            fake_store().await,
+        ] {
             let p = provider().with_store(store);
-            p.store.save_refresh_token(RefreshToken { family_id: String::new(), ..rt("LEGACY", "rp", "openid offline_access") }).await.unwrap();
-            let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "LEGACY")]), None).await;
+            p.store
+                .save_refresh_token(RefreshToken {
+                    family_id: String::new(),
+                    ..rt("LEGACY", "rp", "openid offline_access")
+                })
+                .await
+                .unwrap();
+            let r = RefreshTokenGrant
+                .handle(
+                    &p,
+                    &confidential_client("rp"),
+                    &form(&[("refresh_token", "LEGACY")]),
+                    None,
+                )
+                .await;
             assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-            assert!(!p.store.get_refresh_token("LEGACY").await.unwrap().unwrap().used);
+            assert!(
+                !p.store
+                    .get_refresh_token("LEGACY")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .used
+            );
         }
     }
 
@@ -1358,10 +2020,26 @@ mod tests {
         )
         .await
         .unwrap();
-        let p = provider().with_store(std::sync::Arc::new(crate::firestore_store::FirestoreStore::new(fs)));
-        let r = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "OLD")]), None).await;
+        let p = provider().with_store(std::sync::Arc::new(
+            crate::firestore_store::FirestoreStore::new(fs),
+        ));
+        let r = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "OLD")]),
+                None,
+            )
+            .await;
         assert!(matches!(r, Err(OAuthError::InvalidGrant(_))));
-        assert!(!p.store.get_refresh_token("OLD").await.unwrap().unwrap().used);
+        assert!(
+            !p.store
+                .get_refresh_token("OLD")
+                .await
+                .unwrap()
+                .unwrap()
+                .used
+        );
     }
 
     /// 後片付けは 1 回の失効で扱う RT の数に上限があり（F6）、上限を超えた鎖でも必ず終わる。残った RT も札で使えない。
@@ -1378,17 +2056,37 @@ mod tests {
             t.replaced_by = next;
             p.store.save_refresh_token(t).await.unwrap();
         }
-        let reuse = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", "C0")]), None).await;
+        let reuse = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", "C0")]),
+                None,
+            )
+            .await;
         assert!(matches!(reuse, Err(OAuthError::InvalidGrant(_))));
         let last = format!("C{}", n - 1);
-        assert!(p.store.get_refresh_token(&last).await.unwrap().is_some(), "上限を超えた所は後片付けで消えていない前提");
-        let again = RefreshTokenGrant.handle(&p, &confidential_client("rp"), &form(&[("refresh_token", last.as_str())]), None).await;
+        assert!(
+            p.store.get_refresh_token(&last).await.unwrap().is_some(),
+            "上限を超えた所は後片付けで消えていない前提"
+        );
+        let again = RefreshTokenGrant
+            .handle(
+                &p,
+                &confidential_client("rp"),
+                &form(&[("refresh_token", last.as_str())]),
+                None,
+            )
+            .await;
         assert!(matches!(again, Err(OAuthError::InvalidGrant(_))));
     }
 
     #[tokio::test]
     async fn rotation_racing_a_family_revoke_in_memory() {
-        a_revoke_right_after_the_cas_reaches_the_new_rt(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
+        a_revoke_right_after_the_cas_reaches_the_new_rt(std::sync::Arc::new(
+            crate::store::MemoryStore::default(),
+        ))
+        .await;
     }
 
     #[cfg(feature = "gcp")]
@@ -1399,7 +2097,10 @@ mod tests {
 
     #[tokio::test]
     async fn rotation_losing_the_cas_leaves_no_new_rt_in_memory() {
-        a_rotation_that_loses_the_cas_leaves_no_new_rt(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
+        a_rotation_that_loses_the_cas_leaves_no_new_rt(std::sync::Arc::new(
+            crate::store::MemoryStore::default(),
+        ))
+        .await;
     }
 
     #[cfg(feature = "gcp")]
@@ -1414,28 +2115,61 @@ mod tests {
         let p = provider();
         let c = client("mobile-rp");
         p.store
-            .save_refresh_token(rt_bound("RT1", "mobile-rp", "openid offline_access", "KEY-A"))
-            .await.unwrap();
-        let fam = p.store.get_refresh_token("RT1").await.unwrap().unwrap().family_id;
+            .save_refresh_token(rt_bound(
+                "RT1",
+                "mobile-rp",
+                "openid offline_access",
+                "KEY-A",
+            ))
+            .await
+            .unwrap();
+        let fam = p
+            .store
+            .get_refresh_token("RT1")
+            .await
+            .unwrap()
+            .unwrap()
+            .family_id;
         let r = RefreshTokenGrant
-            .handle(&p, &c, &form(&[("refresh_token", "RT1")]), Some("KEY-A".into()))
+            .handle(
+                &p,
+                &c,
+                &form(&[("refresh_token", "RT1")]),
+                Some("KEY-A".into()),
+            )
             .await
             .unwrap();
         let rt2 = r.refresh_token.unwrap();
-        assert_eq!(p.store.get_refresh_token(&rt2).await.unwrap().unwrap().family_id, fam);
+        assert_eq!(
+            p.store
+                .get_refresh_token(&rt2)
+                .await
+                .unwrap()
+                .unwrap()
+                .family_id,
+            fam
+        );
     }
 
     #[tokio::test]
     async fn refresh_rotates_and_reuse_rejected() {
         let p = provider();
         let c = client("rp");
-        p.store.save_refresh_token(rt_bound("RT1", "rp", "openid offline_access", "KEY-A")).await.unwrap();
+        p.store
+            .save_refresh_token(rt_bound("RT1", "rp", "openid offline_access", "KEY-A"))
+            .await
+            .unwrap();
         let f = form(&[("refresh_token", "RT1")]);
-        let r = RefreshTokenGrant.handle(&p, &c, &f, Some("KEY-A".into())).await.unwrap();
+        let r = RefreshTokenGrant
+            .handle(&p, &c, &f, Some("KEY-A".into()))
+            .await
+            .unwrap();
         assert!(r.refresh_token.is_some());
         assert_ne!(r.refresh_token.as_deref(), Some("RT1")); // ローテーション
         assert!(matches!(
-            RefreshTokenGrant.handle(&p, &c, &f, Some("KEY-A".into())).await,
+            RefreshTokenGrant
+                .handle(&p, &c, &f, Some("KEY-A".into()))
+                .await,
             Err(OAuthError::InvalidGrant(_))
         )); // 旧 RT 再利用は拒否
     }
@@ -1443,10 +2177,15 @@ mod tests {
     #[tokio::test]
     async fn refresh_issued_to_another_client_rejected() {
         let p = provider();
-        p.store.save_refresh_token(rt("RT1", "rp", "openid")).await.unwrap();
+        p.store
+            .save_refresh_token(rt("RT1", "rp", "openid"))
+            .await
+            .unwrap();
         let f = form(&[("refresh_token", "RT1")]);
         assert!(matches!(
-            RefreshTokenGrant.handle(&p, &client("evil"), &f, None).await,
+            RefreshTokenGrant
+                .handle(&p, &client("evil"), &f, None)
+                .await,
             Err(OAuthError::InvalidGrant(_))
         ));
     }
@@ -1455,15 +2194,26 @@ mod tests {
     async fn refresh_scope_widening_rejected_narrowing_ok() {
         let p = provider();
         let c = client("rp");
-        p.store.save_refresh_token(rt_bound("RT1", "rp", "openid profile", "KEY-A")).await.unwrap();
+        p.store
+            .save_refresh_token(rt_bound("RT1", "rp", "openid profile", "KEY-A"))
+            .await
+            .unwrap();
         let widen = form(&[("refresh_token", "RT1"), ("scope", "openid profile email")]);
         assert!(matches!(
-            RefreshTokenGrant.handle(&p, &c, &widen, Some("KEY-A".into())).await,
+            RefreshTokenGrant
+                .handle(&p, &c, &widen, Some("KEY-A".into()))
+                .await,
             Err(OAuthError::InvalidScope(_))
         ));
-        p.store.save_refresh_token(rt_bound("RT2", "rp", "openid profile", "KEY-A")).await.unwrap();
+        p.store
+            .save_refresh_token(rt_bound("RT2", "rp", "openid profile", "KEY-A"))
+            .await
+            .unwrap();
         let narrow = form(&[("refresh_token", "RT2"), ("scope", "openid")]);
-        let r = RefreshTokenGrant.handle(&p, &c, &narrow, Some("KEY-A".into())).await.unwrap();
+        let r = RefreshTokenGrant
+            .handle(&p, &c, &narrow, Some("KEY-A".into()))
+            .await
+            .unwrap();
         assert_eq!(r.scope, "openid");
     }
 
@@ -1474,9 +2224,15 @@ mod tests {
 
     async fn seed_ciba(status: CibaStatus) -> (Provider, String) {
         let store = std::sync::Arc::new(MemoryCibaStore::default());
-        let id = store.create("rp", "user@example.com", "openid", "msg", None).await.unwrap();
+        let id = store
+            .create("rp", "user@example.com", "openid", "msg", None)
+            .await
+            .unwrap();
         if status != CibaStatus::Pending {
-            store.transition_if_pending(id.as_str(), status).await.unwrap();
+            store
+                .transition_if_pending(id.as_str(), status)
+                .await
+                .unwrap();
         }
         let p = provider().with_ciba(store);
         (p, id.0)
@@ -1539,14 +2295,25 @@ mod tests {
     async fn ciba_token_carries_the_mandate_stored_with_the_request() {
         let store = std::sync::Arc::new(MemoryCibaStore::default());
         let mandate = r#"[{"type":"payment_initiation","amount":"100"}]"#;
-        let id = store.create("rp", "user@example.com", "openid", "msg", Some(mandate)).await.unwrap();
-        store.transition_if_pending(id.as_str(), CibaStatus::Approved).await.unwrap();
+        let id = store
+            .create("rp", "user@example.com", "openid", "msg", Some(mandate))
+            .await
+            .unwrap();
+        store
+            .transition_if_pending(id.as_str(), CibaStatus::Approved)
+            .await
+            .unwrap();
         let p = provider().with_ciba(store);
         let f = form(&[("auth_req_id", id.as_str())]);
         let r = CibaGrant.handle(&p, &client("rp"), &f, None).await.unwrap();
         let want: serde_json::Value = serde_json::from_str(mandate).unwrap();
         assert_eq!(r.authorization_details, Some(want));
-        let at = p.store.get_access_token(&r.access_token).await.unwrap().unwrap();
+        let at = p
+            .store
+            .get_access_token(&r.access_token)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at.authorization_details.as_deref(), Some(mandate));
     }
 
@@ -1554,7 +2321,10 @@ mod tests {
     async fn ciba_approved_with_dpop_issues_dpop_token() {
         let (p, id) = seed_ciba(CibaStatus::Approved).await;
         let f = form(&[("auth_req_id", &id)]);
-        let r = CibaGrant.handle(&p, &client("rp"), &f, Some("JKT".into())).await.unwrap();
+        let r = CibaGrant
+            .handle(&p, &client("rp"), &f, Some("JKT".into()))
+            .await
+            .unwrap();
         assert_eq!(r.token_type, "DPoP");
     }
 }

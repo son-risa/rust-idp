@@ -9,7 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// UNIX 秒。MemoryStore の期限判定に使う(grants 側の now() と同一基準)。
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// レコード種別ごとの保持上限(UNIX 秒)。**全ストア実装が参照する唯一の定義**で、
@@ -99,7 +102,12 @@ pub trait Store: Send + Sync {
     /// コード再利用時に、そのコードで発行したトークンを失効させる（RFC 6749 §4.1.2）。
     async fn revoke_code_tokens(&self, code: &str);
     /// 発行した access/refresh token をコードに紐付ける（再利用時の失効対象を記録）。
-    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()>;
+    async fn link_issued_tokens(
+        &self,
+        code: &str,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> StoreResult<()>;
 
     async fn save_access_token(&self, t: AccessToken) -> StoreResult<()>;
     async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>>;
@@ -143,7 +151,9 @@ pub trait Store: Send + Sync {
 /// 系列ごと失効させる（RT の再利用検知と同じ札）。系列が分からないときは、その RT だけ消す。
 pub(crate) async fn revoke_issued_refresh<S: Store + ?Sized>(store: &S, rt: &str) {
     match store.get_refresh_token(rt).await {
-        Ok(Some(t)) if !t.family_id.is_empty() => store.revoke_refresh_family(&t.family_id, rt).await,
+        Ok(Some(t)) if !t.family_id.is_empty() => {
+            store.revoke_refresh_family(&t.family_id, rt).await
+        }
         Ok(_) => {
             if let Err(e) = store.revoke_refresh_token(rt).await {
                 tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
@@ -151,7 +161,11 @@ pub(crate) async fn revoke_issued_refresh<S: Store + ?Sized>(store: &S, rt: &str
         }
         Err(e) => {
             // 系列は引けないが、少なくともその RT は消す。
-            tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh_family", "{e}");
+            tracing::error!(
+                event = "code_reuse_revoke_failed",
+                kind = "refresh_family",
+                "{e}"
+            );
             if let Err(e) = store.revoke_refresh_token(rt).await {
                 tracing::error!(event = "code_reuse_revoke_failed", kind = "refresh", "{e}");
             }
@@ -198,18 +212,24 @@ pub struct MemoryStore {
 impl MemoryStore {
     /// find_account が、[`Provider::with_document_store`](crate::Provider::with_document_store) に渡したのと
     /// 同じ保存先から、登録された account の email と保存済みの claim を引く MemoryStore。
-    pub fn with_documents(documents: std::sync::Arc<dyn crate::document_store::DocumentStore>) -> Self {
-        Self { documents: Some(documents), ..Self::default() }
+    pub fn with_documents(
+        documents: std::sync::Arc<dyn crate::document_store::DocumentStore>,
+    ) -> Self {
+        Self {
+            documents: Some(documents),
+            ..Self::default()
+        }
     }
 }
-
-
 
 #[async_trait]
 impl Store for MemoryStore {
     async fn save_interaction(&self, i: Interaction) {
         let exp = now_secs() + INTERACTION_TTL_SECS;
-        self.interactions.lock().unwrap().insert(i.uid.clone(), Expiring::new(i, exp));
+        self.interactions
+            .lock()
+            .unwrap()
+            .insert(i.uid.clone(), Expiring::new(i, exp));
     }
     async fn get_interaction(&self, uid: &str) -> Option<Interaction> {
         let mut map = self.interactions.lock().unwrap();
@@ -241,7 +261,10 @@ impl Store for MemoryStore {
     }
     async fn save_session(&self, s: Session) {
         let exp = now_secs() + SESSION_TTL_SECS;
-        self.sessions.lock().unwrap().insert(s.sid.clone(), Expiring::new(s, exp));
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(s.sid.clone(), Expiring::new(s, exp));
     }
     async fn get_session(&self, sid: &str) -> Option<Session> {
         let mut map = self.sessions.lock().unwrap();
@@ -265,7 +288,12 @@ impl Store for MemoryStore {
         self.codes.lock().unwrap().insert(
             key,
             Expiring::new(
-                CodeRecord { code: c, used: false, issued_access: None, issued_refresh: None },
+                CodeRecord {
+                    code: c,
+                    used: false,
+                    issued_access: None,
+                    issued_refresh: None,
+                },
                 exp,
             ),
         );
@@ -301,7 +329,12 @@ impl Store for MemoryStore {
             revoke_issued_refresh(self, &rt).await;
         }
     }
-    async fn link_issued_tokens(&self, code: &str, access_token: &str, refresh_token: Option<&str>) -> StoreResult<()> {
+    async fn link_issued_tokens(
+        &self,
+        code: &str,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> StoreResult<()> {
         if let Some(entry) = self.codes.lock().unwrap().get_mut(code) {
             entry.value.issued_access = Some(access_token.to_string());
             entry.value.issued_refresh = refresh_token.map(str::to_string);
@@ -310,7 +343,10 @@ impl Store for MemoryStore {
     }
     async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> {
         let exp = now_secs() + ACCESS_TTL_SECS;
-        self.access_tokens.lock().unwrap().insert(t.token.clone(), Expiring::new(t, exp));
+        self.access_tokens
+            .lock()
+            .unwrap()
+            .insert(t.token.clone(), Expiring::new(t, exp));
         Ok(())
     }
     async fn get_access_token(&self, token: &str) -> StoreResult<Option<AccessToken>> {
@@ -340,7 +376,10 @@ impl Store for MemoryStore {
     }
     async fn save_refresh_token(&self, t: RefreshToken) -> StoreResult<()> {
         let exp = now_secs() + REFRESH_TTL_SECS;
-        self.refresh_tokens.lock().unwrap().insert(t.token.clone(), Expiring::new(t, exp));
+        self.refresh_tokens
+            .lock()
+            .unwrap()
+            .insert(t.token.clone(), Expiring::new(t, exp));
         Ok(())
     }
     async fn get_refresh_token(&self, token: &str) -> StoreResult<Option<RefreshToken>> {
@@ -370,13 +409,21 @@ impl Store for MemoryStore {
         })
     }
     async fn refresh_family_revoked(&self, family_id: &str) -> StoreResult<bool> {
-        Ok(self.revoked_families.lock().unwrap().get(family_id).is_some_and(|e| e.alive()))
-    }
-    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
-        self.revoked_families
+        Ok(self
+            .revoked_families
             .lock()
             .unwrap()
-            .insert(family_id.to_string(), Expiring::new((), now_secs() + REFRESH_TTL_SECS + FAMILY_REVOCATION_MARGIN_SECS));
+            .get(family_id)
+            .is_some_and(|e| e.alive()))
+    }
+    async fn revoke_refresh_family(&self, family_id: &str, start_token: &str) {
+        self.revoked_families.lock().unwrap().insert(
+            family_id.to_string(),
+            Expiring::new(
+                (),
+                now_secs() + REFRESH_TTL_SECS + FAMILY_REVOCATION_MARGIN_SECS,
+            ),
+        );
         // 後片付け: ローテーションは単回なので鎖は枝分かれせず、start から replaced_by を辿れば以後の RT を
         // 全部消せる。壊れた replaced_by の循環は訪れた集合で止める。
         let mut map = self.refresh_tokens.lock().unwrap();
@@ -387,16 +434,25 @@ impl Store for MemoryStore {
         }
     }
     async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> RevocationCounts {
-        fn remove<T>(map: &Mutex<HashMap<String, Expiring<T>>>, doomed: impl Fn(&str, &T) -> bool) -> usize {
+        fn remove<T>(
+            map: &Mutex<HashMap<String, Expiring<T>>>,
+            doomed: impl Fn(&str, &T) -> bool,
+        ) -> usize {
             let mut m = map.lock().unwrap();
             let before = m.len();
             m.retain(|k, e| !doomed(k, &e.value));
             before - m.len()
         }
         RevocationCounts {
-            sessions: remove(&self.sessions, |sid, s: &Session| s.account_id == account_id && sid != keep_sid),
-            access_tokens: remove(&self.access_tokens, |_, t: &AccessToken| t.account_id == account_id),
-            refresh_tokens: remove(&self.refresh_tokens, |_, t: &RefreshToken| t.account_id == account_id),
+            sessions: remove(&self.sessions, |sid, s: &Session| {
+                s.account_id == account_id && sid != keep_sid
+            }),
+            access_tokens: remove(&self.access_tokens, |_, t: &AccessToken| {
+                t.account_id == account_id
+            }),
+            refresh_tokens: remove(&self.refresh_tokens, |_, t: &RefreshToken| {
+                t.account_id == account_id
+            }),
             query_errors: Vec::new(),
         }
     }
@@ -443,8 +499,14 @@ pub fn account_for(sub: &str) -> Account {
     put("middle_name", serde_json::json!("Test"));
     put("nickname", serde_json::json!(sub));
     put("preferred_username", serde_json::json!(sub));
-    put("profile", serde_json::json!(format!("https://example.com/u/{sub}")));
-    put("picture", serde_json::json!("https://example.com/avatar.png"));
+    put(
+        "profile",
+        serde_json::json!(format!("https://example.com/u/{sub}")),
+    );
+    put(
+        "picture",
+        serde_json::json!("https://example.com/avatar.png"),
+    );
     put("website", serde_json::json!("https://example.com"));
     put("gender", serde_json::json!("other"));
     put("birthdate", serde_json::json!("2000-01-01"));
@@ -464,7 +526,10 @@ pub fn account_for(sub: &str) -> Account {
     );
     put("phone_number", serde_json::json!("+81-3-0000-0000"));
     put("phone_number_verified", serde_json::json!(false));
-    Account { sub: sub.to_string(), claims }
+    Account {
+        sub: sub.to_string(),
+        claims,
+    }
 }
 
 #[cfg(test)]
@@ -490,14 +555,32 @@ mod tests {
     }
 
     fn at(t: &str) -> AccessToken {
-        AccessToken { token: t.into(), client_id: "cl".into(), account_id: "a".into(), scope: "openid".into(), jkt: None, aud: None, acr: None, auth_time: None, authorization_details: None, mandate_consumed: false }
+        AccessToken {
+            token: t.into(),
+            client_id: "cl".into(),
+            account_id: "a".into(),
+            scope: "openid".into(),
+            jkt: None,
+            aud: None,
+            acr: None,
+            auth_time: None,
+            authorization_details: None,
+            mandate_consumed: false,
+        }
     }
 
     fn rtok(token: &str, replaced_by: Option<&str>, used: bool) -> RefreshToken {
         RefreshToken {
-            token: token.into(), client_id: "cl".into(), account_id: "a".into(),
-            scope: "openid offline_access".into(), resource: None, jkt: None, acr: None,
-            auth_time: None, family_id: "fam".into(), used,
+            token: token.into(),
+            client_id: "cl".into(),
+            account_id: "a".into(),
+            scope: "openid offline_access".into(),
+            resource: None,
+            jkt: None,
+            acr: None,
+            auth_time: None,
+            family_id: "fam".into(),
+            used,
             replaced_by: replaced_by.map(str::to_string),
         }
     }
@@ -516,9 +599,17 @@ mod tests {
         let s = MemoryStore::default();
         let base = now_secs();
 
-        s.save_session(Session { sid: "S1".into(), account_id: "a".into(), auth_time: 0 }).await;
+        s.save_session(Session {
+            sid: "S1".into(),
+            account_id: "a".into(),
+            auth_time: 0,
+        })
+        .await;
         let session_exp = s.sessions.lock().unwrap().get("S1").unwrap().expires_at;
-        assert!(session_exp >= base + SESSION_TTL_SECS, "session は 7 日保持(15 分ではない)");
+        assert!(
+            session_exp >= base + SESSION_TTL_SECS,
+            "session は 7 日保持(15 分ではない)"
+        );
 
         s.save_interaction(Interaction {
             uid: "U1".into(),
@@ -530,14 +621,31 @@ mod tests {
         })
         .await;
         let inter_exp = s.interactions.lock().unwrap().get("U1").unwrap().expires_at;
-        assert!(inter_exp >= base + INTERACTION_TTL_SECS, "interaction は 1 時間保持");
+        assert!(
+            inter_exp >= base + INTERACTION_TTL_SECS,
+            "interaction は 1 時間保持"
+        );
 
         s.save_access_token(at("AT1")).await.unwrap();
-        let at_exp = s.access_tokens.lock().unwrap().get("AT1").unwrap().expires_at;
+        let at_exp = s
+            .access_tokens
+            .lock()
+            .unwrap()
+            .get("AT1")
+            .unwrap()
+            .expires_at;
         assert!(at_exp >= base + ACCESS_TTL_SECS && at_exp < base + SESSION_TTL_SECS);
 
-        s.save_refresh_token(rtok("RT1", None, false)).await.unwrap();
-        let rt_exp = s.refresh_tokens.lock().unwrap().get("RT1").unwrap().expires_at;
+        s.save_refresh_token(rtok("RT1", None, false))
+            .await
+            .unwrap();
+        let rt_exp = s
+            .refresh_tokens
+            .lock()
+            .unwrap()
+            .get("RT1")
+            .unwrap()
+            .expires_at;
         assert!(rt_exp >= base + REFRESH_TTL_SECS, "refresh は 14 日保持");
     }
 
@@ -549,7 +657,10 @@ mod tests {
         let mut c = code("C1");
         c.expires_at = now_secs() + 42;
         s.save_code(c).await.unwrap();
-        assert_eq!(s.codes.lock().unwrap().get("C1").unwrap().expires_at, now_secs() + 42);
+        assert_eq!(
+            s.codes.lock().unwrap().get("C1").unwrap().expires_at,
+            now_secs() + 42
+        );
     }
 
     // 期限切れ access token は取得時に None(lazy 失効)。introspection が active 扱いしない根拠。
@@ -557,10 +668,10 @@ mod tests {
     async fn expired_access_token_is_none_on_get() {
         let s = MemoryStore::default();
         // 過去に失効するエントリを直接投入(save は now+TTL になるため内部 API で細工)。
-        s.access_tokens
-            .lock()
-            .unwrap()
-            .insert("AT_OLD".into(), Expiring::new(at("AT_OLD"), now_secs().saturating_sub(1)));
+        s.access_tokens.lock().unwrap().insert(
+            "AT_OLD".into(),
+            Expiring::new(at("AT_OLD"), now_secs().saturating_sub(1)),
+        );
         assert!(s.get_access_token("AT_OLD").await.unwrap().is_none());
         // lazy 削除されている(マップから消える)。
         assert!(!s.access_tokens.lock().unwrap().contains_key("AT_OLD"));
@@ -579,10 +690,10 @@ mod tests {
     async fn sweep_removes_only_expired() {
         let s = MemoryStore::default();
         s.save_access_token(at("LIVE")).await.unwrap(); // 生存
-        s.access_tokens
-            .lock()
-            .unwrap()
-            .insert("DEAD".into(), Expiring::new(at("DEAD"), now_secs().saturating_sub(1)));
+        s.access_tokens.lock().unwrap().insert(
+            "DEAD".into(),
+            Expiring::new(at("DEAD"), now_secs().saturating_sub(1)),
+        );
         s.sweep_expired().await;
         assert!(s.access_tokens.lock().unwrap().contains_key("LIVE"));
         assert!(!s.access_tokens.lock().unwrap().contains_key("DEAD"));
@@ -608,5 +719,4 @@ mod tests {
         );
         assert!(!s.consume_interaction("U_OLD").await);
     }
-
 }

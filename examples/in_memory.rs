@@ -9,8 +9,8 @@
 //! OP はセッションを見て、ログイン画面を出さずに認可コードを返す。passkey の登録とログインから
 //! 通す例は `passkey_memory`。
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rust_idp::{Client, MemoryStore, Provider, Session, Store};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -31,27 +31,40 @@ async fn main() {
     let issuer = format!("http://{}", listener.local_addr().unwrap());
 
     let store = Arc::new(MemoryStore::default());
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     store
-        .save_session(Session { sid: SID.into(), account_id: "alice".into(), auth_time: now })
+        .save_session(Session {
+            sid: SID.into(),
+            account_id: "alice".into(),
+            auth_time: now,
+        })
         .await;
 
-    let provider = Provider::new(issuer.clone()).with_store(store).with_client(Client {
-        client_id: CLIENT_ID.into(),
-        redirect_uris: vec![REDIRECT_URI.into()],
-        token_endpoint_auth_method: "none".into(),
-        client_secret: None,
-        grant_types: vec!["authorization_code".into()],
-        post_logout_redirect_uris: vec![],
-        initiate_login_uri: None,
-        dpop_bound: false,
-        jwks: vec![],
-        jwks_uri: None,
-        require_par: false,
-        require_pkce: true,
-        id_token_signed_response_alg: None,
+    let provider = Provider::new(issuer.clone())
+        .with_store(store)
+        .with_client(Client {
+            client_id: CLIENT_ID.into(),
+            redirect_uris: vec![REDIRECT_URI.into()],
+            token_endpoint_auth_method: "none".into(),
+            client_secret: None,
+            grant_types: vec!["authorization_code".into()],
+            post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
+            dpop_bound: false,
+            jwks: vec![],
+            jwks_uri: None,
+            require_par: false,
+            require_pkce: true,
+            id_token_signed_response_alg: None,
+        });
+    tokio::spawn(async move {
+        axum::serve(listener, rust_idp::router(provider))
+            .await
+            .unwrap()
     });
-    tokio::spawn(async move { axum::serve(listener, rust_idp::router(provider)).await.unwrap() });
     println!("OP: {issuer}");
 
     let http = reqwest::Client::builder()
@@ -90,7 +103,10 @@ async fn main() {
         .send()
         .await
         .unwrap();
-    let location = resp.headers()[reqwest::header::LOCATION].to_str().unwrap().to_string();
+    let location = resp.headers()[reqwest::header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     let (_, callback_query) = location.split_once('?').expect("redirect to the callback");
     let callback: HashMap<String, String> = serde_urlencoded::from_str(callback_query).unwrap();
     assert!(location.starts_with(REDIRECT_URI), "{location}");
@@ -109,7 +125,10 @@ async fn main() {
     .unwrap();
     let resp = http
         .post(token_endpoint)
-        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
         .body(body)
         .send()
         .await
@@ -119,7 +138,9 @@ async fn main() {
     assert!(status.is_success(), "{tokens}");
     let id_token = tokens["id_token"].as_str().unwrap();
     let claims: Value = serde_json::from_slice(
-        &URL_SAFE_NO_PAD.decode(id_token.split('.').nth(1).unwrap()).unwrap(),
+        &URL_SAFE_NO_PAD
+            .decode(id_token.split('.').nth(1).unwrap())
+            .unwrap(),
     )
     .unwrap();
     println!("3. token: {status} token_type={}", tokens["token_type"]);

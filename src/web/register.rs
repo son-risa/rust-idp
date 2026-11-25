@@ -27,11 +27,19 @@ pub(super) async fn register_form(
     Query(q): Query<SignupQuery>,
 ) -> Html<String> {
     let action = p.path("/signup");
-    let uid: String = q.uid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(64).collect();
+    let uid: String = q
+        .uid
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect();
     let back = if uid.is_empty() {
         String::new()
     } else {
-        format!(r#"<p><a href="{}">[[Back to sign in]]</a></p>"#, p.path(&format!("/login/{uid}")))
+        format!(
+            r#"<p><a href="{}">[[Back to sign in]]</a></p>"#,
+            p.path(&format!("/login/{uid}"))
+        )
     };
     page(
         Lang::from_headers(&headers),
@@ -77,7 +85,8 @@ pub(super) async fn issue_register_email(
     match crate::registration::has_passkey(fs, email).await? {
         true => {
             if super::recover::recovery_for(fs, email).await? == super::recover::Recovery::Allowed {
-                let token = crate::registration::create_recovery_challenge_from(fs, email, from).await?;
+                let token =
+                    crate::registration::create_recovery_challenge_from(fs, email, from).await?;
                 let url = format!("{}{}?t={}", p.origin(), p.path("/recover"), token);
                 if let Err(e) = p.mailer.send_recovery(email, &url, lang).await {
                     tracing::error!("send_recovery failed: {e}");
@@ -111,7 +120,12 @@ pub(super) async fn register_submit(
     let email = form.email.trim().to_lowercase();
     let fs = match p.docs.as_deref() {
         Some(fs) => fs,
-        None => return plain_error(&localize("[[Something went wrong. Please try again.]]", Lang::from_headers(&headers))),
+        None => {
+            return plain_error(&localize(
+                "[[Something went wrong. Please try again.]]",
+                Lang::from_headers(&headers),
+            ));
+        }
     };
     let lang = Lang::from_headers(&headers);
     let from = super::came_from(&p, &jar, &form.uid).await;
@@ -156,9 +170,20 @@ pub(super) async fn register_email_challenge(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    match issue_register_email(&p, fs, &email, &client_ip(&headers), None, &Default::default()).await {
+    match issue_register_email(
+        &p,
+        fs,
+        &email,
+        &client_ip(&headers),
+        None,
+        &Default::default(),
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) if e == "invalid email" => (StatusCode::BAD_REQUEST, "invalid email").into_response(),
+        Err(e) if e == "invalid email" => {
+            (StatusCode::BAD_REQUEST, "invalid email").into_response()
+        }
         Err(e) if e == "rate_limited" => {
             (StatusCode::TOO_MANY_REQUESTS, "rate limited").into_response()
         }
@@ -294,30 +319,65 @@ async function reg(){
 </script></body></html>"##;
     let body = body
         .replace("__SERVER_ERROR_JS__", SERVER_ERROR_JS)
-        .replace("__SWITCH__", if current.is_some() { super::SWITCH_NOTICE } else { "" })
-        .replace("__MAIN_HIDDEN__", if current.is_some() { "hidden" } else { "" })
-        .replace("__TARGET__", if target.is_some() { "<p>{target}</p>\n" } else { "" });
+        .replace(
+            "__SWITCH__",
+            if current.is_some() {
+                super::SWITCH_NOTICE
+            } else {
+                ""
+            },
+        )
+        .replace(
+            "__MAIN_HIDDEN__",
+            if current.is_some() { "hidden" } else { "" },
+        )
+        .replace(
+            "__TARGET__",
+            if target.is_some() {
+                "<p>{target}</p>\n"
+            } else {
+                ""
+            },
+        );
     // アプリが設定されていなければ、モバイルでも Web で登録する。
     let app = p.mobile_app.as_ref();
     let web_only = web_only || app.is_none();
     let html = localize(&body, lang)
-            .replace("{app}", &super::admin::esc(app.map_or("", |a| a.name.as_str())))
-            .replace("__APP_SCHEME__", &js_string_literal(app.map_or("", |a| a.scheme.as_str())))
-            .replace("__APP_PACKAGE__", &js_string_literal(app.map_or("", |a| a.android_package.as_str())))
-            .replace("__MAGIC__", &js_string_literal(&format!("{}/r", p.origin())))
-            .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
-            .replace("__TOKEN__", &token)
-            .replace("__OPT__", &p.path("/signup/passkey/options"))
-            .replace("__VER__", &p.path("/signup/passkey/verify"))
-            .replace("__ACCOUNT__", &p.path("/account"))
-            .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or("")))
-            .replace("__WEB_ONLY__", if web_only { "true" } else { "false" });
-    Html(super::fill_switch_notice(html, current.as_deref().unwrap_or(""), target.unwrap_or("")))
+        .replace(
+            "{app}",
+            &super::admin::esc(app.map_or("", |a| a.name.as_str())),
+        )
+        .replace(
+            "__APP_SCHEME__",
+            &js_string_literal(app.map_or("", |a| a.scheme.as_str())),
+        )
+        .replace(
+            "__APP_PACKAGE__",
+            &js_string_literal(app.map_or("", |a| a.android_package.as_str())),
+        )
+        .replace(
+            "__MAGIC__",
+            &js_string_literal(&format!("{}/r", p.origin())),
+        )
+        .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
+        .replace("__TOKEN__", &token)
+        .replace("__OPT__", &p.path("/signup/passkey/options"))
+        .replace("__VER__", &p.path("/signup/passkey/verify"))
+        .replace("__ACCOUNT__", &p.path("/account"))
+        .replace("__AFTER__", &js_string_literal(invite_return.unwrap_or("")))
+        .replace("__WEB_ONLY__", if web_only { "true" } else { "false" });
+    Html(super::fill_switch_notice(
+        html,
+        current.as_deref().unwrap_or(""),
+        target.unwrap_or(""),
+    ))
 }
 
 /// `<script>` に埋め込む JS の文字列リテラル。JSON の文字列表現に、`</script>` を閉じさせない `<` の退避を足す。
 fn js_string_literal(s: &str) -> String {
-    serde_json::Value::String(s.to_string()).to_string().replace('<', "\\u003c")
+    serde_json::Value::String(s.to_string())
+        .to_string()
+        .replace('<', "\\u003c")
 }
 
 /// メールリンク /r?t= の着地。iPhone は AASA でアプリ起動、PC/Mac はブラウザ登録。
@@ -369,22 +429,34 @@ pub(super) async fn verify_form(
 }
 
 /// メールのリンクが途中で切れて token が無いときは、登録画面を出さずにその旨を伝える。
-async fn link_landing(p: &Provider, jar: &CookieJar, lang: Lang, token: &str, web_only: bool) -> Response {
+async fn link_landing(
+    p: &Provider,
+    jar: &CookieJar,
+    lang: Lang,
+    token: &str,
+    web_only: bool,
+) -> Response {
     if token.is_empty() {
-        return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
+        return plain_error(&localize(
+            "[[This link is incomplete. Please open the link in the email again.]]",
+            lang,
+        ));
     }
     let target = match p.docs.as_deref() {
-        Some(fs) => crate::registration::peek_email_challenge(fs, token).await.unwrap_or_else(|e| {
-            tracing::warn!("peek_email_challenge: {e}");
-            None
-        }),
+        Some(fs) => crate::registration::peek_email_challenge(fs, token)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("peek_email_challenge: {e}");
+                None
+            }),
         None => None,
     };
     let current = match &target {
         Some(t) => super::signed_in_as_other(p, jar, t).await,
         None => None,
     };
-    passkey_register_page(p, lang, token, None, web_only, target.as_deref(), current).into_response()
+    passkey_register_page(p, lang, token, None, web_only, target.as_deref(), current)
+        .into_response()
 }
 
 /* ===== 招待（RP が発行を頼む、確認メール不要の登録リンク） ===== */
@@ -399,19 +471,31 @@ fn url_origin(u: &str) -> Option<String> {
     let hostname = host.split(':').next().unwrap_or(host);
     match scheme {
         "https" => Some(format!("https://{host}")),
-        "http" if hostname == "localhost" || hostname == "127.0.0.1" => Some(format!("http://{host}")),
+        "http" if hostname == "localhost" || hostname == "127.0.0.1" => {
+            Some(format!("http://{host}"))
+        }
         _ => None,
     }
 }
 
 /// 戻り先は、その client の redirect_uri と同じ origin の下に限る（オープンリダイレクト防止）。
 fn return_to_allowed(client: &crate::model::Client, return_to: &str) -> bool {
-    if return_to.len() > 2000 || return_to.chars().any(|c| c.is_whitespace() || c.is_control() || "\\\"'<>`".contains(c)) {
+    if return_to.len() > 2000
+        || return_to
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "\\\"'<>`".contains(c))
+    {
         return false;
     }
-    let Some(origin) = url_origin(return_to) else { return false };
+    let Some(origin) = url_origin(return_to) else {
+        return false;
+    };
     let under_origin = return_to == origin || return_to.starts_with(&format!("{origin}/"));
-    under_origin && client.redirect_uris.iter().any(|r| url_origin(r).as_deref() == Some(origin.as_str()))
+    under_origin
+        && client
+            .redirect_uris
+            .iter()
+            .any(|r| url_origin(r).as_deref() == Some(origin.as_str()))
 }
 
 /// POST /invites（form: email, return_to ＋ confidential client の認証）。
@@ -426,7 +510,8 @@ pub(super) async fn invite_create(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    let (client, email) = match authorize_invite_client(&p, &headers, &form, "invite_denied").await {
+    let (client, email) = match authorize_invite_client(&p, &headers, &form, "invite_denied").await
+    {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -492,7 +577,9 @@ async fn authorize_invite_client(
         tracing::warn!(event = denied_event, client_id = %client.client_id);
         return Err((StatusCode::FORBIDDEN, "client not allowed").into_response());
     }
-    let email = form.get("email").map_or_default(|e| e.trim().to_lowercase());
+    let email = form
+        .get("email")
+        .map_or_default(|e| e.trim().to_lowercase());
     if !email.contains('@') || email.len() > 254 {
         return Err(plain_error("invalid email"));
     }
@@ -511,15 +598,20 @@ pub(super) async fn account_disable(
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
-    let (client, email) = match authorize_invite_client(&p, &headers, &form, "account_disable_denied").await {
-        Ok(x) => x,
-        Err(r) => return r,
-    };
+    let (client, email) =
+        match authorize_invite_client(&p, &headers, &form, "account_disable_denied").await {
+            Ok(x) => x,
+            Err(r) => return r,
+        };
     match crate::registration::get_account(fs, &email).await {
         Ok(Some(account)) => match crate::admin_store::is_admin(fs, &account.account_id).await {
             Ok(true) => {
                 tracing::warn!(event = "account_disable_protected", client_id = %client.client_id);
-                return (StatusCode::CONFLICT, Json(serde_json::json!({ "status": "protected" }))).into_response();
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "status": "protected" })),
+                )
+                    .into_response();
             }
             Ok(false) => {}
             Err(e) => {
@@ -562,7 +654,7 @@ pub(super) async fn invite_page(
                 StatusCode::SERVICE_UNAVAILABLE,
                 localize("[[Something went wrong. Please try again.]]", lang),
             )
-                .into_response()
+                .into_response();
         }
     };
     let (email, return_to) = match crate::registration::peek_invite(fs, &q.t).await {
@@ -591,12 +683,24 @@ pub(super) async fn invite_page(
         return Redirect::to(&return_to).into_response();
     }
     let current = super::signed_in_as_other(&p, &jar, &email).await;
-    passkey_register_page(&p, lang, &q.t, Some(&return_to), false, Some(&email), current).into_response()
+    passkey_register_page(
+        &p,
+        lang,
+        &q.t,
+        Some(&return_to),
+        false,
+        Some(&email),
+        current,
+    )
+    .into_response()
 }
 
 /// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
 /// 登録の後に残りの token で、通知も失効も無しに passkey を足せないようにする。
-async fn refuse_token_for_registered(fs: &dyn crate::document_store::DocumentStore, token: &str) -> Option<Response> {
+async fn refuse_token_for_registered(
+    fs: &dyn crate::document_store::DocumentStore,
+    token: &str,
+) -> Option<Response> {
     let email = match crate::registration::peek_email_challenge(fs, token).await {
         Ok(Some(email)) => email,
         Ok(None) => return None,
@@ -663,14 +767,29 @@ pub(super) async fn register_passkey_options(
         .map(|a| a.account_id.clone())
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let challenge = match crate::registration::create_webauthn_challenge(fs, &email, crate::registration::ChallengeKind::Reg, "", &account_id).await {
+    let challenge = match crate::registration::create_webauthn_challenge(
+        fs,
+        &email,
+        crate::registration::ChallengeKind::Reg,
+        "",
+        &account_id,
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("create challenge: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
         }
     };
-    Json(creation_options(&p, &challenge, &account_id, &email, &existing_creds)).into_response()
+    Json(creation_options(
+        &p,
+        &challenge,
+        &account_id,
+        &email,
+        &existing_creds,
+    ))
+    .into_response()
 }
 
 /// navigator.credentials.create に渡す options。登録と、ログイン後の passkey の追加で同じものを使う。
@@ -734,7 +853,8 @@ pub(super) async fn register_passkey_verify(
     if let Some(r) = refuse_token_for_registered(fs, &req.token).await {
         return r;
     }
-    let name = match crate::registration::normalize_profile_value(req.name.as_deref().unwrap_or("")) {
+    let name = match crate::registration::normalize_profile_value(req.name.as_deref().unwrap_or(""))
+    {
         Ok(n) => n,
         Err(()) => return plain_error("invalid name"),
     };
@@ -761,15 +881,22 @@ pub(super) async fn register_passkey_verify(
         Some(c) => c,
         None => return (StatusCode::BAD_REQUEST, "no challenge").into_response(),
     };
-    let (email2, kind, ceremony_uid, account_id) = match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response(),
-        Err(e) => {
-            tracing::error!("consume webauthn challenge: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
-        }
-    };
-    if kind != crate::registration::ChallengeKind::Reg || !ceremony_uid.is_empty() || email2 != email1 || account_id.is_empty() {
+    let (email2, kind, ceremony_uid, account_id) =
+        match crate::registration::consume_webauthn_challenge(fs, &challenge).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return (StatusCode::BAD_REQUEST, "challenge invalid/expired").into_response();
+            }
+            Err(e) => {
+                tracing::error!("consume webauthn challenge: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            }
+        };
+    if kind != crate::registration::ChallengeKind::Reg
+        || !ceremony_uid.is_empty()
+        || email2 != email1
+        || account_id.is_empty()
+    {
         return (StatusCode::BAD_REQUEST, "challenge context mismatch").into_response();
     }
     let outcome = match crate::webauthn::verify_registration(
@@ -798,7 +925,8 @@ pub(super) async fn register_passkey_verify(
     // 登録できたらログイン済みにする（メールの確認と passkey の作成で本人と確かめている）。
     // 戻った先の RP で passkey をもう一度押さずに済み、すぐ別の passkey を足せる。
     // 凍結を確かめられなかったときは張らない（/authorize のセッション利用は凍結を見ない）。
-    let active = matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if !a.disabled);
+    let active =
+        matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if !a.disabled);
     let (jar, redirect) = if active {
         if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
             p.store.delete_session(&old).await;
@@ -825,15 +953,15 @@ pub(super) async fn register_passkey_verify(
 
 #[cfg(all(test, feature = "gcp"))]
 mod invite_tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
-    use crate::fido::verify::test_support::*;
     use crate::fido::verify::FLAG_AT;
     use crate::fido::verify::FLAG_UP;
+    use crate::fido::verify::test_support::*;
     use crate::firestore::fake_firestore;
     use crate::model::Client;
     use ciborium::value::Value as Cbor;
     use p256::ecdsa::SigningKey;
+    use p256::elliptic_curve::Generate;
 
     const RP_ORIGIN: &str = "https://amate.example";
 
@@ -857,7 +985,10 @@ mod invite_tests {
 
     async fn provider(invite_clients: &[&str]) -> Arc<Provider> {
         // 2026-11-21 に一度だけ登録が 500 で落ち、原因の記録が無かった。落ちた試験の出力に error のログを残す。
-        let _ = tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::WARN).try_init();
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::WARN)
+            .try_init();
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         Arc::new(
@@ -875,27 +1006,48 @@ mod invite_tests {
         let mut h = HeaderMap::new();
         h.insert(
             header::AUTHORIZATION,
-            format!("Basic {}", B64.encode(format!("{id}:{secret}"))).parse().unwrap(),
+            format!("Basic {}", B64.encode(format!("{id}:{secret}")))
+                .parse()
+                .unwrap(),
         );
         h
     }
 
     fn form(pairs: &[(&str, &str)]) -> Form<HashMap<String, String>> {
-        Form(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+        Form(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        )
     }
 
     async fn body_json(resp: Response) -> serde_json::Value {
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
     async fn body_text(resp: Response) -> String {
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         String::from_utf8_lossy(&bytes).to_string()
     }
 
-    async fn invite(p: &Arc<Provider>, headers: HeaderMap, email: &str, return_to: &str) -> Response {
-        invite_create(State(p.clone()), headers, form(&[("email", email), ("return_to", return_to)])).await
+    async fn invite(
+        p: &Arc<Provider>,
+        headers: HeaderMap,
+        email: &str,
+        return_to: &str,
+    ) -> Response {
+        invite_create(
+            State(p.clone()),
+            headers,
+            form(&[("email", email), ("return_to", return_to)]),
+        )
+        .await
     }
 
     fn token_of(url: &str) -> String {
@@ -907,8 +1059,10 @@ mod invite_tests {
     }
 
     async fn register_named(p: &Arc<Provider>, token: &str, name: Option<&str>) -> StatusCode {
-        let opts_req: RegPkOptionsReq = serde_json::from_value(serde_json::json!({ "token": token })).unwrap();
-        let opts = body_json(register_passkey_options(State(p.clone()), Json(opts_req)).await).await;
+        let opts_req: RegPkOptionsReq =
+            serde_json::from_value(serde_json::json!({ "token": token })).unwrap();
+        let opts =
+            body_json(register_passkey_options(State(p.clone()), Json(opts_req)).await).await;
         let challenge = opts["challenge"].as_str().unwrap();
         let key = SigningKey::generate();
         let (x, y) = ec_xy(&key);
@@ -918,7 +1072,15 @@ mod invite_tests {
         let att = Cbor::Map(vec![
             (Cbor::Text("fmt".into()), Cbor::Text("none".into())),
             (Cbor::Text("attStmt".into()), Cbor::Map(vec![])),
-            (Cbor::Text("authData".into()), Cbor::Bytes(build_auth_data(&p.rp_id(), FLAG_UP | FLAG_AT, 0, Some(&acd)))),
+            (
+                Cbor::Text("authData".into()),
+                Cbor::Bytes(build_auth_data(
+                    &p.rp_id(),
+                    FLAG_UP | FLAG_AT,
+                    0,
+                    Some(&acd),
+                )),
+            ),
         ]);
         let cdj = client_data_json("webauthn.create", challenge, &p.origin());
         let mut body = serde_json::json!({
@@ -932,7 +1094,9 @@ mod invite_tests {
             body["name"] = serde_json::json!(n);
         }
         let verify_req: RegVerifyReq = serde_json::from_value(body).unwrap();
-        register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await.status()
+        register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req))
+            .await
+            .status()
     }
 
     #[tokio::test]
@@ -945,27 +1109,52 @@ mod invite_tests {
         assert!(url.starts_with("https://idp.example/invite?t="), "{url}");
         let token = token_of(&url);
 
-        let page = invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token.clone() }),
+        let page = invite_page(
+            State(p.clone()),
+            HeaderMap::new(),
+            CookieJar::default(),
+            Query(MagicQuery { t: token.clone() }),
         )
         .await;
         assert_eq!(page.status(), StatusCode::OK);
         let html = body_text(page).await;
-        assert!(html.contains(&format!("AFTER=\"{return_to}\"")), "戻り先が焼き込まれる");
+        assert!(
+            html.contains(&format!("AFTER=\"{return_to}\"")),
+            "戻り先が焼き込まれる"
+        );
 
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
         let fs = p.docs.as_deref().unwrap();
-        assert!(crate::registration::has_passkey(fs, "new@example.com").await.unwrap());
-        let cred = crate::registration::get_account(fs, "new@example.com").await.unwrap().unwrap();
+        assert!(
+            crate::registration::has_passkey(fs, "new@example.com")
+                .await
+                .unwrap()
+        );
+        let cred = crate::registration::get_account(fs, "new@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         let claims = p.store.find_account(&cred.account_id).await.claims;
-        assert_eq!(claims.get("email"), Some(&serde_json::json!("new@example.com")));
+        assert_eq!(
+            claims.get("email"),
+            Some(&serde_json::json!("new@example.com"))
+        );
         assert_eq!(
             claims.get("email_verified"),
             Some(&serde_json::json!(true)),
             "招待のリンクがメールの持ち主の確認を兼ねるので、RP には確認済みとして渡る"
         );
-        assert_eq!(claims.get("name"), Some(&serde_json::json!("招待 太郎")), "登録で入れた氏名が RP に渡る");
+        assert_eq!(
+            claims.get("name"),
+            Some(&serde_json::json!("招待 太郎")),
+            "登録で入れた氏名が RP に渡る"
+        );
 
-        let again = invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token }),
+        let again = invite_page(
+            State(p.clone()),
+            HeaderMap::new(),
+            CookieJar::default(),
+            Query(MagicQuery { t: token }),
         )
         .await;
         assert_eq!(
@@ -993,25 +1182,38 @@ mod invite_tests {
         )
         .await;
         assert_eq!(register_with_token(&p, &first).await, StatusCode::CREATED);
-        let before = crate::registration::sole_credential(fs, "a@example.com").await.unwrap();
+        let before = crate::registration::sole_credential(fs, "a@example.com")
+            .await
+            .unwrap();
 
         let opts = register_passkey_options(
             State(p.clone()),
             Json(serde_json::from_value(serde_json::json!({ "token": second })).unwrap()),
         )
         .await;
-        assert_eq!(opts.status(), StatusCode::CONFLICT, "登録の後は、残りの招待で options を出さない");
+        assert_eq!(
+            opts.status(),
+            StatusCode::CONFLICT,
+            "登録の後は、残りの招待で options を出さない"
+        );
 
         let verify_req: RegVerifyReq = serde_json::from_value(serde_json::json!({
             "token": second,
             "response": { "clientDataJSON": "", "attestationObject": "" },
         }))
         .unwrap();
-        let verify = register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await;
-        assert_eq!(verify.status(), StatusCode::CONFLICT, "登録の前に取った options があっても、verify で断る");
+        let verify =
+            register_passkey_verify(State(p.clone()), CookieJar::default(), Json(verify_req)).await;
+        assert_eq!(
+            verify.status(),
+            StatusCode::CONFLICT,
+            "登録の前に取った options があっても、verify で断る"
+        );
         assert!(second_opts["challenge"].is_string());
 
-        let after = crate::registration::sole_credential(fs, "a@example.com").await.unwrap();
+        let after = crate::registration::sole_credential(fs, "a@example.com")
+            .await
+            .unwrap();
         assert_eq!(after.pub_x, before.pub_x);
         assert_eq!(after.credential_id, before.credential_id);
     }
@@ -1019,11 +1221,23 @@ mod invite_tests {
     #[tokio::test]
     async fn registered_address_gets_no_link() {
         let p = provider(&["amate"]).await;
-        let first = invite(&p, basic("amate", "s3cret"), "a@example.com", &format!("{RP_ORIGIN}/")).await;
+        let first = invite(
+            &p,
+            basic("amate", "s3cret"),
+            "a@example.com",
+            &format!("{RP_ORIGIN}/"),
+        )
+        .await;
         let token = token_of(body_json(first).await["url"].as_str().unwrap());
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
 
-        let resp = invite(&p, basic("amate", "s3cret"), "a@example.com", &format!("{RP_ORIGIN}/")).await;
+        let resp = invite(
+            &p,
+            basic("amate", "s3cret"),
+            "a@example.com",
+            &format!("{RP_ORIGIN}/"),
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_json(resp).await;
         assert_eq!(body["status"], "registered");
@@ -1034,17 +1248,40 @@ mod invite_tests {
     async fn clients_outside_the_allow_list_are_refused() {
         let p = provider(&["amate", "public"]).await;
         let rt = format!("{RP_ORIGIN}/auth/login");
-        assert_eq!(invite(&p, basic("other", "s3cret"), "a@example.com", &rt).await.status(), StatusCode::FORBIDDEN);
-        assert_eq!(invite(&p, basic("amate", "wrong"), "a@example.com", &rt).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            invite(&p, basic("other", "s3cret"), "a@example.com", &rt)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            invite(&p, basic("amate", "wrong"), "a@example.com", &rt)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
         let public = invite_create(
             State(p.clone()),
             HeaderMap::new(),
-            form(&[("client_id", "public"), ("email", "a@example.com"), ("return_to", &rt)]),
+            form(&[
+                ("client_id", "public"),
+                ("email", "a@example.com"),
+                ("return_to", &rt),
+            ]),
         )
         .await;
-        assert_eq!(public.status(), StatusCode::FORBIDDEN, "public client は許可一覧にあっても招待できない");
+        assert_eq!(
+            public.status(),
+            StatusCode::FORBIDDEN,
+            "public client は許可一覧にあっても招待できない"
+        );
         let nobody = provider(&[]).await;
-        assert_eq!(invite(&nobody, basic("amate", "s3cret"), "a@example.com", &rt).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            invite(&nobody, basic("amate", "s3cret"), "a@example.com", &rt)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
     }
 
     async fn disable(p: &Arc<Provider>, headers: HeaderMap, email: &str) -> Response {
@@ -1063,10 +1300,22 @@ mod invite_tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["status"], "disabled");
         let fs = p.docs.as_deref().unwrap();
-        assert!(crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
-        let audit = fs.query_eq("auditLog", "action", "disable_account").await.unwrap();
+        assert!(
+            crate::registration::get_account(fs, "a@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .disabled
+        );
+        let audit = fs
+            .query_eq("auditLog", "action", "disable_account")
+            .await
+            .unwrap();
         assert_eq!(audit.len(), 1);
-        assert_eq!(crate::firestore::field_str(&audit[0].1, "actor"), Some("client:amate"));
+        assert_eq!(
+            crate::firestore::field_str(&audit[0].1, "actor"),
+            Some("client:amate")
+        );
 
         let again = disable(&p, basic("amate", "s3cret"), "a@example.com").await;
         assert_eq!(body_json(again).await["status"], "already_disabled");
@@ -1074,7 +1323,10 @@ mod invite_tests {
         let reinvite = invite(&p, basic("amate", "s3cret"), "a@example.com", &rt).await;
         assert_eq!(reinvite.status(), StatusCode::OK);
         let body = body_json(reinvite).await;
-        assert_eq!(body["status"], "disabled", "凍結中のアドレスには、登録済みと区別して返す");
+        assert_eq!(
+            body["status"], "disabled",
+            "凍結中のアドレスには、登録済みと区別して返す"
+        );
         assert!(body.get("url").is_none());
     }
 
@@ -1086,14 +1338,31 @@ mod invite_tests {
         let token = token_of(body_json(first).await["url"].as_str().unwrap());
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
         let fs = p.docs.as_deref().unwrap();
-        let account_id = crate::registration::get_account(fs, "boss@example.com").await.unwrap().unwrap().account_id;
-        crate::admin_store::grant_admin(fs, &account_id, "cli").await.unwrap();
+        let account_id = crate::registration::get_account(fs, "boss@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .account_id;
+        crate::admin_store::grant_admin(fs, &account_id, "cli")
+            .await
+            .unwrap();
 
         let resp = disable(&p, basic("amate", "s3cret"), "boss@example.com").await;
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         assert_eq!(body_json(resp).await["status"], "protected");
-        assert!(!crate::registration::get_account(fs, "boss@example.com").await.unwrap().unwrap().disabled);
-        assert!(fs.query_eq("auditLog", "action", "disable_account").await.unwrap().is_empty());
+        assert!(
+            !crate::registration::get_account(fs, "boss@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .disabled
+        );
+        assert!(
+            fs.query_eq("auditLog", "action", "disable_account")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1112,15 +1381,39 @@ mod invite_tests {
         let token = token_of(body_json(first).await["url"].as_str().unwrap());
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
 
-        assert_eq!(disable(&p, basic("other", "s3cret"), "a@example.com").await.status(), StatusCode::FORBIDDEN);
-        assert_eq!(disable(&p, basic("amate", "wrong"), "a@example.com").await.status(), StatusCode::UNAUTHORIZED);
-        let public =
-            account_disable(State(p.clone()), HeaderMap::new(), form(&[("client_id", "public"), ("email", "a@example.com")]))
-                .await;
+        assert_eq!(
+            disable(&p, basic("other", "s3cret"), "a@example.com")
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            disable(&p, basic("amate", "wrong"), "a@example.com")
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let public = account_disable(
+            State(p.clone()),
+            HeaderMap::new(),
+            form(&[("client_id", "public"), ("email", "a@example.com")]),
+        )
+        .await;
         assert_eq!(public.status(), StatusCode::FORBIDDEN);
-        assert_eq!(disable(&p, basic("amate", "s3cret"), "not-an-email").await.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            disable(&p, basic("amate", "s3cret"), "not-an-email")
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
         let fs = p.docs.as_deref().unwrap();
-        assert!(!crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
+        assert!(
+            !crate::registration::get_account(fs, "a@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .disabled
+        );
     }
 
     #[tokio::test]
@@ -1147,7 +1440,11 @@ mod invite_tests {
         let token = crate::registration::create_email_challenge(fs, "a@example.com")
             .await
             .unwrap();
-        let resp = invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token }),
+        let resp = invite_page(
+            State(p.clone()),
+            HeaderMap::new(),
+            CookieJar::default(),
+            Query(MagicQuery { t: token }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1155,31 +1452,72 @@ mod invite_tests {
 
     async fn claims_of(p: &Arc<Provider>, email: &str) -> HashMap<String, serde_json::Value> {
         let fs = p.docs.as_deref().unwrap();
-        let cred = crate::registration::get_account(fs, email).await.unwrap().unwrap();
+        let cred = crate::registration::get_account(fs, email)
+            .await
+            .unwrap()
+            .unwrap();
         p.store.find_account(&cred.account_id).await.claims
     }
 
     #[tokio::test]
     async fn an_invite_needs_a_name_and_a_refused_try_keeps_the_invite_usable() {
         let p = provider(&["amate"]).await;
-        let resp = invite(&p, basic("amate", "s3cret"), "n@example.com", &format!("{RP_ORIGIN}/auth/login")).await;
+        let resp = invite(
+            &p,
+            basic("amate", "s3cret"),
+            "n@example.com",
+            &format!("{RP_ORIGIN}/auth/login"),
+        )
+        .await;
         let token = token_of(body_json(resp).await["url"].as_str().unwrap());
-        assert_eq!(register_named(&p, &token, None).await, StatusCode::BAD_REQUEST);
-        assert_eq!(register_named(&p, &token, Some("   ")).await, StatusCode::BAD_REQUEST, "空白だけは氏名にならない");
-        assert_eq!(register_named(&p, &token, Some("  山田 花子 ")).await, StatusCode::CREATED, "断られた試しで招待は消えない");
-        assert_eq!(claims_of(&p, "n@example.com").await.get("name"), Some(&serde_json::json!("山田 花子")));
+        assert_eq!(
+            register_named(&p, &token, None).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            register_named(&p, &token, Some("   ")).await,
+            StatusCode::BAD_REQUEST,
+            "空白だけは氏名にならない"
+        );
+        assert_eq!(
+            register_named(&p, &token, Some("  山田 花子 ")).await,
+            StatusCode::CREATED,
+            "断られた試しで招待は消えない"
+        );
+        assert_eq!(
+            claims_of(&p, "n@example.com").await.get("name"),
+            Some(&serde_json::json!("山田 花子"))
+        );
     }
 
     #[tokio::test]
     async fn ordinary_signup_takes_the_name_optionally() {
         let p = provider(&[]).await;
         let fs = p.docs.as_deref().unwrap();
-        let without = crate::registration::create_email_challenge(fs, "plain@example.com").await.unwrap();
-        assert_eq!(register_named(&p, &without, None).await, StatusCode::CREATED, "fido2demo のように氏名を送らない登録は今までどおり");
-        assert!(!claims_of(&p, "plain@example.com").await.contains_key("name"));
-        let with = crate::registration::create_email_challenge(fs, "named@example.com").await.unwrap();
-        assert_eq!(register_named(&p, &with, Some("佐藤")).await, StatusCode::CREATED);
-        assert_eq!(claims_of(&p, "named@example.com").await.get("name"), Some(&serde_json::json!("佐藤")));
+        let without = crate::registration::create_email_challenge(fs, "plain@example.com")
+            .await
+            .unwrap();
+        assert_eq!(
+            register_named(&p, &without, None).await,
+            StatusCode::CREATED,
+            "fido2demo のように氏名を送らない登録は今までどおり"
+        );
+        assert!(
+            !claims_of(&p, "plain@example.com")
+                .await
+                .contains_key("name")
+        );
+        let with = crate::registration::create_email_challenge(fs, "named@example.com")
+            .await
+            .unwrap();
+        assert_eq!(
+            register_named(&p, &with, Some("佐藤")).await,
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            claims_of(&p, "named@example.com").await.get("name"),
+            Some(&serde_json::json!("佐藤"))
+        );
     }
 
     #[tokio::test]
@@ -1194,20 +1532,41 @@ mod invite_tests {
             "a\u{2066}b".to_string(),
             "a\u{200F}b".to_string(),
         ] {
-            let token = crate::registration::create_email_challenge(fs, "bad@example.com").await.unwrap();
-            assert_eq!(register_named(&p, &token, Some(&bad)).await, StatusCode::BAD_REQUEST, "{bad:?}");
+            let token = crate::registration::create_email_challenge(fs, "bad@example.com")
+                .await
+                .unwrap();
+            assert_eq!(
+                register_named(&p, &token, Some(&bad)).await,
+                StatusCode::BAD_REQUEST,
+                "{bad:?}"
+            );
         }
-        let token = crate::registration::create_email_challenge(fs, "bad@example.com").await.unwrap();
-        assert_eq!(register_named(&p, &token, Some(&"あ".repeat(80))).await, StatusCode::CREATED);
+        let token = crate::registration::create_email_challenge(fs, "bad@example.com")
+            .await
+            .unwrap();
+        assert_eq!(
+            register_named(&p, &token, Some(&"あ".repeat(80))).await,
+            StatusCode::CREATED
+        );
     }
 
     #[tokio::test]
     async fn the_registration_page_asks_for_the_name() {
         let p = provider(&["amate"]).await;
-        let resp = invite(&p, basic("amate", "s3cret"), "page@example.com", &format!("{RP_ORIGIN}/auth/login")).await;
+        let resp = invite(
+            &p,
+            basic("amate", "s3cret"),
+            "page@example.com",
+            &format!("{RP_ORIGIN}/auth/login"),
+        )
+        .await;
         let token = token_of(body_json(resp).await["url"].as_str().unwrap());
         let html = body_text(
-            invite_page(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: token }),
+            invite_page(
+                State(p.clone()),
+                HeaderMap::new(),
+                CookieJar::default(),
+                Query(MagicQuery { t: token }),
             )
             .await,
         )
@@ -1215,7 +1574,10 @@ mod invite_tests {
         assert!(html.contains(r#"<input id="nm" autocomplete="name" maxlength="80">"#));
         assert!(html.contains("NAME_REQUIRED=!!AFTER"));
         let plain = passkey_register_page(&p, Lang::En, "tok", None, false, None, None).0;
-        assert!(plain.contains(r#"AFTER="""#), "通常の登録では AFTER が空なので、氏名は任意");
+        assert!(
+            plain.contains(r#"AFTER="""#),
+            "通常の登録では AFTER が空なので、氏名は任意"
+        );
     }
 
     /// ログイン画面から始めた登録のリンク（/signup/verify）は、スマホでもアプリへ誘わず Web で済ませる。
@@ -1224,21 +1586,57 @@ mod invite_tests {
     async fn a_sign_up_started_from_the_sign_in_screen_stays_on_the_web() {
         let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()));
         let from_sign_in = body_text(
-            verify_form(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(VerifyQuery { token: "tok".into() })).await,
+            verify_form(
+                State(p.clone()),
+                HeaderMap::new(),
+                CookieJar::default(),
+                Query(VerifyQuery {
+                    token: "tok".into(),
+                }),
+            )
+            .await,
         )
         .await;
         assert!(from_sign_in.contains("WEB_ONLY=true"), "{from_sign_in}");
-        let no_app = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
-        assert!(no_app.contains("WEB_ONLY=true"), "アプリを設定していなければ /r でも Web で済ませる");
-        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()).with_mobile_app(crate::MobileApp {
-            name: "Demo<App>".into(),
-            scheme: "com.example.demo".into(),
-            android_package: "com.example.pkg".into(),
-            apple_app_id: "TEAM123456.com.example.demo".into(),
-        }));
-        let app_link = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
+        let no_app = body_text(
+            magic_redirect(
+                State(p.clone()),
+                HeaderMap::new(),
+                CookieJar::default(),
+                Query(MagicQuery { t: "tok".into() }),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            no_app.contains("WEB_ONLY=true"),
+            "アプリを設定していなければ /r でも Web で済ませる"
+        );
+        let p = Arc::new(
+            Provider::new("https://idp.example/oidc".to_string()).with_mobile_app(
+                crate::MobileApp {
+                    name: "Demo<App>".into(),
+                    scheme: "com.example.demo".into(),
+                    android_package: "com.example.pkg".into(),
+                    apple_app_id: "TEAM123456.com.example.demo".into(),
+                },
+            ),
+        );
+        let app_link = body_text(
+            magic_redirect(
+                State(p.clone()),
+                HeaderMap::new(),
+                CookieJar::default(),
+                Query(MagicQuery { t: "tok".into() }),
+            )
+            .await,
+        )
+        .await;
         assert!(app_link.contains("WEB_ONLY=false"));
-        assert!(app_link.contains(r#"<div id="fallback">"#), "Web で続けるボタンが隠れている");
+        assert!(
+            app_link.contains(r#"<div id="fallback">"#),
+            "Web で続けるボタンが隠れている"
+        );
         assert!(app_link.contains("Demo&lt;App&gt;"), "{app_link}");
         assert!(app_link.contains(r#"APP_SCHEME="com.example.demo",APP_PACKAGE="com.example.pkg",MAGIC="https://idp.example/r";"#), "{app_link}");
     }
@@ -1254,7 +1652,10 @@ mod invite_tests {
 
     #[test]
     fn script_embedding_cannot_close_the_script_tag() {
-        assert_eq!(js_string_literal("a</script>\""), "\"a\\u003c/script>\\\"\"");
+        assert_eq!(
+            js_string_literal("a</script>\""),
+            "\"a\\u003c/script>\\\"\""
+        );
         assert_eq!(js_string_literal(""), "\"\"");
     }
 }

@@ -54,7 +54,10 @@ pub fn decide(params: &AuthParams, session: Option<&Session>, now: u64) -> AuthD
     let prompts = Prompt::parse_set(params.prompt.as_deref());
     let want_none = prompts.contains(&Prompt::None);
     let want_login = prompts.contains(&Prompt::Login);
-    let max_age = params.max_age.as_deref().and_then(|s| s.parse::<u64>().ok());
+    let max_age = params
+        .max_age
+        .as_deref()
+        .and_then(|s| s.parse::<u64>().ok());
 
     // prompt=none は他の値と併用不可 (OIDC Core 3.1.2.1)。
     if want_none && prompts.len() > 1 {
@@ -91,8 +94,8 @@ pub fn decide(params: &AuthParams, session: Option<&Session>, now: u64) -> AuthD
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches;
     use super::*;
+    use std::assert_matches;
 
     fn params(prompt: Option<&str>, max_age: Option<&str>) -> AuthParams {
         AuthParams {
@@ -113,7 +116,11 @@ mod tests {
     }
 
     fn session(auth_time: u64) -> Session {
-        Session { sid: "sid".into(), account_id: "alice".into(), auth_time }
+        Session {
+            sid: "sid".into(),
+            account_id: "alice".into(),
+            auth_time,
+        }
     }
 
     #[test]
@@ -139,7 +146,10 @@ mod tests {
     fn fresh_session_reused() {
         let s = session(1000);
         match decide(&params(None, None), Some(&s), 1500) {
-            AuthDecision::UseSession { account_id, auth_time } => {
+            AuthDecision::UseSession {
+                account_id,
+                auth_time,
+            } => {
                 assert_eq!(account_id, "alice");
                 assert_eq!(auth_time, 1000);
             }
@@ -150,7 +160,10 @@ mod tests {
     #[test]
     fn prompt_login_forces_reauth_even_with_session() {
         let s = session(1000);
-        assert_matches!(decide(&params(Some("login"), None), Some(&s), 1001), AuthDecision::Login);
+        assert_matches!(
+            decide(&params(Some("login"), None), Some(&s), 1001),
+            AuthDecision::Login
+        );
     }
 
     #[test]
@@ -182,7 +195,10 @@ mod tests {
     fn max_age_exceeded_forces_login() {
         let s = session(1000);
         // now - auth_time = 200 > max_age 100
-        assert_matches!(decide(&params(None, Some("100")), Some(&s), 1200), AuthDecision::Login);
+        assert_matches!(
+            decide(&params(None, Some("100")), Some(&s), 1200),
+            AuthDecision::Login
+        );
     }
 
     #[test]

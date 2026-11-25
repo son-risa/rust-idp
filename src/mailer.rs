@@ -1,9 +1,9 @@
 //! メール送信の概念トレイトと Resend 実装。
 //! ローカル用に送らず URL をログに出す LogMailer も用意する。
 
+use crate::web::i18n::Lang;
 #[cfg(any(feature = "gcp", test))]
 use crate::web::i18n::{bilingual, localize};
-use crate::web::i18n::Lang;
 use async_trait::async_trait;
 #[cfg(feature = "gcp")]
 use serde_json::json;
@@ -98,7 +98,9 @@ pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {
 
 #[cfg(any(feature = "gcp", test))]
 fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(feature = "gcp")]
@@ -131,7 +133,11 @@ impl ResendMailer {
         if r.status().is_success() {
             Ok(())
         } else {
-            Err(format!("resend {} {}", r.status(), r.text().await.unwrap_or_default()))
+            Err(format!(
+                "resend {} {}",
+                r.status(),
+                r.text().await.unwrap_or_default()
+            ))
         }
     }
 }

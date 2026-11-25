@@ -19,7 +19,10 @@ const HIST_COL: &str = "cibaHistory";
 const HISTORY_RETENTION_SECS: u64 = 90 * 86400;
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// auth_req_id は他の ID(token/challenge)と取り違えないよう newtype 化。
@@ -45,7 +48,9 @@ impl AuthReqId {
     pub fn well_formed(id: &str) -> bool {
         (1..=128).contains(&id.len())
             && !id.starts_with("__")
-            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     }
     pub fn as_str(&self) -> &str {
         &self.0
@@ -104,7 +109,10 @@ impl BackchannelAuthRequest {
         obj.insert("scope".into(), firestore::s(&self.scope));
         obj.insert("bindingMessage".into(), firestore::s(&self.binding_message));
         obj.insert("status".into(), firestore::s(self.status.as_str()));
-        obj.insert("expiresAt".into(), firestore::ts(&firestore::rfc3339(self.expires_at)));
+        obj.insert(
+            "expiresAt".into(),
+            firestore::ts(&firestore::rfc3339(self.expires_at)),
+        );
         if let Some(ad) = &self.authorization_details {
             obj.insert("authorizationDetails".into(), firestore::s(ad));
         }
@@ -170,11 +178,16 @@ impl CibaHistoryEntry {
         obj.insert("scope".into(), firestore::s(&self.scope));
         obj.insert("bindingMessage".into(), firestore::s(&self.binding_message));
         obj.insert("outcome".into(), firestore::s(&self.outcome));
-        obj.insert("resolvedAt".into(), firestore::ts(&firestore::rfc3339(self.resolved_at)));
+        obj.insert(
+            "resolvedAt".into(),
+            firestore::ts(&firestore::rfc3339(self.resolved_at)),
+        );
         // Firestore TTL ポリシー対象フィールド（保持期間後に自動削除）。
         obj.insert(
             "expireAt".into(),
-            firestore::ts(&firestore::rfc3339(self.resolved_at + HISTORY_RETENTION_SECS)),
+            firestore::ts(&firestore::rfc3339(
+                self.resolved_at + HISTORY_RETENTION_SECS,
+            )),
         );
         if let Some(ad) = &self.authorization_details {
             obj.insert("authorizationDetails".into(), firestore::s(ad));
@@ -222,10 +235,17 @@ pub trait CibaStore: Send + Sync {
     async fn get(&self, auth_req_id: &str) -> Result<Option<BackchannelAuthRequest>, String>;
     /// Pending のときだけ status へ原子的に遷移。遷移できたら Ok(true)、
     /// 既に Pending でない/レース敗北なら Ok(false)。
-    async fn transition_if_pending(&self, auth_req_id: &str, status: CibaStatus) -> Result<bool, String>;
+    async fn transition_if_pending(
+        &self,
+        auth_req_id: &str,
+        status: CibaStatus,
+    ) -> Result<bool, String>;
     /// Approved を原子的に消費（削除）。消費できたら Ok(Some(req))、
     /// 既に消費済み/Pending/Denied/レース敗北なら Ok(None)。
-    async fn consume_if_approved(&self, auth_req_id: &str) -> Result<Option<BackchannelAuthRequest>, String>;
+    async fn consume_if_approved(
+        &self,
+        auth_req_id: &str,
+    ) -> Result<Option<BackchannelAuthRequest>, String>;
     async fn delete(&self, auth_req_id: &str) -> Result<(), String>;
     /// アカウントの pending な要求一覧（承認 UI 用）。期限切れは除く。
     async fn list_pending(&self, account: &str) -> Result<Vec<BackchannelAuthRequest>, String>;
@@ -245,7 +265,11 @@ pub trait CibaStore: Send + Sync {
     /// 解決済み要求を監査履歴（cibaHistory）に追記する。
     async fn record_history(&self, entry: &CibaHistoryEntry) -> Result<(), String>;
     /// アカウントの履歴を新しい順に最大 limit 件返す。
-    async fn list_history(&self, account: &str, limit: usize) -> Result<Vec<CibaHistoryEntry>, String>;
+    async fn list_history(
+        &self,
+        account: &str,
+        limit: usize,
+    ) -> Result<Vec<CibaHistoryEntry>, String>;
     /// アカウントの期限切れ Pending を履歴(expired)へ移して削除し、件数を返す（掃除漏れ対策）。
     /// pending/履歴の取得時に呼ぶ「読み取り時スイープ」。
     async fn sweep_expired(&self, account: &str) -> Result<u32, String>;
@@ -299,7 +323,10 @@ impl CibaRateLimiter {
     pub fn sweep(&self) {
         let now = std::time::Instant::now();
         let mut map = self.map.lock().unwrap();
-        map.retain(|_, dq| dq.back().is_some_and(|&last| now.duration_since(last) <= self.window));
+        map.retain(|_, dq| {
+            dq.back()
+                .is_some_and(|&last| now.duration_since(last) <= self.window)
+        });
     }
 }
 
@@ -344,7 +371,9 @@ impl CibaStore for FirestoreCibaStore {
             expires_at: now() + TTL_SECS,
             authorization_details: authorization_details.map(|s| s.to_string()),
         };
-        self.fs.set_doc(COL, req.auth_req_id.as_str(), req.fields()).await?;
+        self.fs
+            .set_doc(COL, req.auth_req_id.as_str(), req.fields())
+            .await?;
         Ok(req.auth_req_id)
     }
 
@@ -358,21 +387,33 @@ impl CibaStore for FirestoreCibaStore {
         }
     }
 
-    async fn transition_if_pending(&self, auth_req_id: &str, status: CibaStatus) -> Result<bool, String> {
-        let (fields, update_time) = match self.fs.get_doc_with_update_time(COL, auth_req_id).await? {
+    async fn transition_if_pending(
+        &self,
+        auth_req_id: &str,
+        status: CibaStatus,
+    ) -> Result<bool, String> {
+        let (fields, update_time) = match self.fs.get_doc_with_update_time(COL, auth_req_id).await?
+        {
             Some(x) => x,
             None => return Ok(false),
         };
-        let mut req = BackchannelAuthRequest::from_fields(AuthReqId(auth_req_id.to_string()), &fields);
+        let mut req =
+            BackchannelAuthRequest::from_fields(AuthReqId(auth_req_id.to_string()), &fields);
         if req.status != CibaStatus::Pending {
             return Ok(false);
         }
         req.status = status;
-        self.fs.set_doc_if_unchanged(COL, auth_req_id, req.fields(), &update_time).await
+        self.fs
+            .set_doc_if_unchanged(COL, auth_req_id, req.fields(), &update_time)
+            .await
     }
 
-    async fn consume_if_approved(&self, auth_req_id: &str) -> Result<Option<BackchannelAuthRequest>, String> {
-        let (fields, update_time) = match self.fs.get_doc_with_update_time(COL, auth_req_id).await? {
+    async fn consume_if_approved(
+        &self,
+        auth_req_id: &str,
+    ) -> Result<Option<BackchannelAuthRequest>, String> {
+        let (fields, update_time) = match self.fs.get_doc_with_update_time(COL, auth_req_id).await?
+        {
             Some(x) => x,
             None => return Ok(None),
         };
@@ -380,7 +421,11 @@ impl CibaStore for FirestoreCibaStore {
         if req.status != CibaStatus::Approved {
             return Ok(None);
         }
-        if self.fs.delete_doc_if_unchanged(COL, auth_req_id, &update_time).await? {
+        if self
+            .fs
+            .delete_doc_if_unchanged(COL, auth_req_id, &update_time)
+            .await?
+        {
             Ok(Some(req))
         } else {
             Ok(None)
@@ -401,10 +446,16 @@ impl CibaStore for FirestoreCibaStore {
     }
 
     async fn record_history(&self, entry: &CibaHistoryEntry) -> Result<(), String> {
-        self.fs.set_doc(HIST_COL, &entry.auth_req_id, entry.fields()).await
+        self.fs
+            .set_doc(HIST_COL, &entry.auth_req_id, entry.fields())
+            .await
     }
 
-    async fn list_history(&self, account: &str, limit: usize) -> Result<Vec<CibaHistoryEntry>, String> {
+    async fn list_history(
+        &self,
+        account: &str,
+        limit: usize,
+    ) -> Result<Vec<CibaHistoryEntry>, String> {
         let rows = self.fs.query_eq(HIST_COL, "account", account).await?;
         let mut v: Vec<CibaHistoryEntry> = rows
             .into_iter()
@@ -470,7 +521,11 @@ impl CibaStore for MemoryCibaStore {
         Ok(self.map.lock().unwrap().get(auth_req_id).cloned())
     }
 
-    async fn transition_if_pending(&self, auth_req_id: &str, status: CibaStatus) -> Result<bool, String> {
+    async fn transition_if_pending(
+        &self,
+        auth_req_id: &str,
+        status: CibaStatus,
+    ) -> Result<bool, String> {
         let mut map = self.map.lock().unwrap();
         match map.get_mut(auth_req_id) {
             Some(req) if req.status == CibaStatus::Pending => {
@@ -481,7 +536,10 @@ impl CibaStore for MemoryCibaStore {
         }
     }
 
-    async fn consume_if_approved(&self, auth_req_id: &str) -> Result<Option<BackchannelAuthRequest>, String> {
+    async fn consume_if_approved(
+        &self,
+        auth_req_id: &str,
+    ) -> Result<Option<BackchannelAuthRequest>, String> {
         let mut map = self.map.lock().unwrap();
         match map.get(auth_req_id) {
             Some(req) if req.status == CibaStatus::Approved => Ok(map.remove(auth_req_id)),
@@ -510,7 +568,11 @@ impl CibaStore for MemoryCibaStore {
         Ok(())
     }
 
-    async fn list_history(&self, account: &str, limit: usize) -> Result<Vec<CibaHistoryEntry>, String> {
+    async fn list_history(
+        &self,
+        account: &str,
+        limit: usize,
+    ) -> Result<Vec<CibaHistoryEntry>, String> {
         let mut v: Vec<CibaHistoryEntry> = self
             .history
             .lock()
@@ -552,7 +614,11 @@ mod tests {
     #[cfg(feature = "gcp")]
     #[test]
     fn status_str_roundtrip_and_unknown_defaults_pending() {
-        for s in [CibaStatus::Pending, CibaStatus::Approved, CibaStatus::Denied] {
+        for s in [
+            CibaStatus::Pending,
+            CibaStatus::Approved,
+            CibaStatus::Denied,
+        ] {
             assert_eq!(CibaStatus::parse(s.as_str()), s);
         }
         assert_eq!(CibaStatus::parse("garbage"), CibaStatus::Pending);
@@ -563,7 +629,13 @@ mod tests {
     fn auth_req_id_carries_256_random_bits() {
         let a = AuthReqId::generate();
         assert_eq!(a.as_str().len(), 43, "{}", a.as_str());
-        assert!(a.as_str().bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'), "{}", a.as_str());
+        assert!(
+            a.as_str()
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
+            "{}",
+            a.as_str()
+        );
         assert_eq!(crate::es256::b64url_decode(a.as_str()).unwrap().len(), 32);
         assert_ne!(a, AuthReqId::generate());
     }
@@ -607,14 +679,34 @@ mod tests {
     #[tokio::test]
     async fn find_pending_for_filters_by_client() {
         let s = MemoryCibaStore::default();
-        let a = s.create("rp-a", "u@example.com", "openid", "msg-a", None).await.unwrap();
-        let _b = s.create("rp-b", "u@example.com", "openid", "msg-b", None).await.unwrap();
-        let found = s.find_pending_for("rp-a", "u@example.com").await.unwrap().unwrap();
+        let a = s
+            .create("rp-a", "u@example.com", "openid", "msg-a", None)
+            .await
+            .unwrap();
+        let _b = s
+            .create("rp-b", "u@example.com", "openid", "msg-b", None)
+            .await
+            .unwrap();
+        let found = s
+            .find_pending_for("rp-a", "u@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(found.auth_req_id.0, a.0);
         assert_eq!(found.client_id, "rp-a");
         // 該当無し
-        assert!(s.find_pending_for("rp-c", "u@example.com").await.unwrap().is_none());
-        assert!(s.find_pending_for("rp-a", "other@example.com").await.unwrap().is_none());
+        assert!(
+            s.find_pending_for("rp-c", "u@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            s.find_pending_for("rp-a", "other@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -648,7 +740,13 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(60));
         assert!(rl.check_and_record("ip", "new"));
         rl.sweep();
-        let keys: Vec<_> = rl.map.lock().unwrap().keys().map(|(_, k)| k.clone()).collect();
+        let keys: Vec<_> = rl
+            .map
+            .lock()
+            .unwrap()
+            .keys()
+            .map(|(_, k)| k.clone())
+            .collect();
         assert_eq!(keys, vec!["new".to_string()]);
     }
 
@@ -657,9 +755,20 @@ mod tests {
         let s = MemoryCibaStore::default();
         let id = s.create("rp", "u", "openid", "", None).await.unwrap();
         // 先勝ち: 最初の Pending→Approved だけ成功し、後発は負ける。
-        assert!(s.transition_if_pending(id.as_str(), CibaStatus::Approved).await.unwrap());
-        assert!(!s.transition_if_pending(id.as_str(), CibaStatus::Denied).await.unwrap());
-        assert_eq!(s.get(id.as_str()).await.unwrap().unwrap().status, CibaStatus::Approved);
+        assert!(
+            s.transition_if_pending(id.as_str(), CibaStatus::Approved)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !s.transition_if_pending(id.as_str(), CibaStatus::Denied)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            s.get(id.as_str()).await.unwrap().unwrap().status,
+            CibaStatus::Approved
+        );
     }
 
     #[tokio::test]
@@ -668,7 +777,9 @@ mod tests {
         let id = s.create("rp", "u", "openid", "", None).await.unwrap();
         // Approved でないと消費できない。
         assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
-        s.transition_if_pending(id.as_str(), CibaStatus::Approved).await.unwrap();
+        s.transition_if_pending(id.as_str(), CibaStatus::Approved)
+            .await
+            .unwrap();
         // 単回消費: 1 回目だけ Some、2 回目は None（並行 poll の二重発行防止）。
         assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_some());
         assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
@@ -682,7 +793,9 @@ mod tests {
         let s = FirestoreCibaStore::new(Arc::new(Firestore::new_for_test("proj", host)));
         let id = s.create("rp", "u", "openid", "", None).await.unwrap();
         assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
-        s.transition_if_pending(id.as_str(), CibaStatus::Approved).await.unwrap();
+        s.transition_if_pending(id.as_str(), CibaStatus::Approved)
+            .await
+            .unwrap();
         assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_some());
         assert!(s.consume_if_approved(id.as_str()).await.unwrap().is_none());
     }
@@ -706,8 +819,15 @@ mod tests {
         assert_eq!(h.len(), 2);
         assert_eq!(h[0].auth_req_id, "b", "新しい順");
         assert_eq!(h[1].auth_req_id, "a");
-        assert!(s.list_history("other", 10).await.unwrap().is_empty(), "別アカウントは混ざらない");
-        assert_eq!(s.sweep_expired("u").await.unwrap(), 0, "期限切れpendingが無ければ0");
+        assert!(
+            s.list_history("other", 10).await.unwrap().is_empty(),
+            "別アカウントは混ざらない"
+        );
+        assert_eq!(
+            s.sweep_expired("u").await.unwrap(),
+            0,
+            "期限切れpendingが無ければ0"
+        );
     }
 
     #[test]

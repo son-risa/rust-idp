@@ -35,7 +35,12 @@ pub enum EnableOutcome {
 }
 
 /// actor は監査ログへ記録する呼び出し主体（CLI実行なら"cli"）。
-pub async fn disable_account(fs: &dyn DocumentStore, store: &dyn Store, actor: &str, email: &str) -> Result<DisableOutcome, String> {
+pub async fn disable_account(
+    fs: &dyn DocumentStore,
+    store: &dyn Store,
+    actor: &str,
+    email: &str,
+) -> Result<DisableOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DisableOutcome::NotFound),
@@ -65,7 +70,11 @@ pub async fn disable_account(fs: &dyn DocumentStore, store: &dyn Store, actor: &
 
 /// AlreadyEnabled(no-op)でも disable_account 同様に必ず監査ログを残す
 /// （「べき等な管理操作の再実行」を disable/enable で対称に扱う）。
-pub async fn enable_account(fs: &dyn DocumentStore, actor: &str, email: &str) -> Result<EnableOutcome, String> {
+pub async fn enable_account(
+    fs: &dyn DocumentStore,
+    actor: &str,
+    email: &str,
+) -> Result<EnableOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(EnableOutcome::NotFound),
@@ -82,7 +91,11 @@ pub async fn enable_account(fs: &dyn DocumentStore, actor: &str, email: &str) ->
         &format!("email={email} already_enabled={already_enabled}"),
     )
     .await;
-    Ok(if already_enabled { EnableOutcome::AlreadyEnabled } else { EnableOutcome::Enabled })
+    Ok(if already_enabled {
+        EnableOutcome::AlreadyEnabled
+    } else {
+        EnableOutcome::Enabled
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -95,7 +108,12 @@ pub enum DeleteOutcome {
 
 /// 凍結済みのアカウントを完全に消す。accounts・credentials・accountsByUuid・profiles と、
 /// セッション・トークンを消し、監査ログを残す。
-pub async fn delete_account(fs: &dyn DocumentStore, store: &dyn Store, actor: &str, email: &str) -> Result<DeleteOutcome, String> {
+pub async fn delete_account(
+    fs: &dyn DocumentStore,
+    store: &dyn Store,
+    actor: &str,
+    email: &str,
+) -> Result<DeleteOutcome, String> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DeleteOutcome::NotFound),
@@ -126,7 +144,12 @@ pub async fn delete_account(fs: &dyn DocumentStore, store: &dyn Store, actor: &s
 /// passkey だけを全部消す。アカウント（accountId＝sub）とプロフィールは残すので、登録し直しても
 /// 同じ人のまま。端末をなくしたときなどに使うので、セッションとトークンも失効させる。
 /// アカウントが無ければ None。
-pub async fn delete_passkeys(fs: &dyn DocumentStore, store: &dyn Store, actor: &str, email: &str) -> Result<Option<usize>, String> {
+pub async fn delete_passkeys(
+    fs: &dyn DocumentStore,
+    store: &dyn Store,
+    actor: &str,
+    email: &str,
+) -> Result<Option<usize>, String> {
     let Some(a) = registration::get_account(fs, email).await? else {
         return Ok(None);
     };
@@ -164,7 +187,9 @@ mod tests {
     /// (emulator host, Firestore) を返す。host は同じ fake サーバを指す2つ目の Firestore
     /// （FirestoreStore 経由のセッション/トークン操作用）を作るために呼び出し側で使う。
     fn fstore(host: &str) -> crate::firestore_store::FirestoreStore {
-        crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test("proj", host)))
+        crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test(
+            "proj", host,
+        )))
     }
 
     async fn setup() -> (String, Firestore) {
@@ -180,13 +205,17 @@ mod tests {
             sign_count: 0,
             aaguid: String::new(),
         };
-        registration::save_credential(fs, email, account_id, &outcome).await.unwrap();
+        registration::save_credential(fs, email, account_id, &outcome)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn disable_unknown_account_returns_not_found() {
         let (host, fs) = setup().await;
-        let out = disable_account(&fs, &fstore(&host), "cli", "nobody@example.com").await.unwrap();
+        let out = disable_account(&fs, &fstore(&host), "cli", "nobody@example.com")
+            .await
+            .unwrap();
         assert_eq!(out, DisableOutcome::NotFound);
     }
 
@@ -200,10 +229,18 @@ mod tests {
             Firestore::new_for_test("proj", host.clone()),
         ));
         store
-            .save_session(Session { sid: "sid-1".into(), account_id: "acc-victim".into(), auth_time: 0 })
+            .save_session(Session {
+                sid: "sid-1".into(),
+                account_id: "acc-victim".into(),
+                auth_time: 0,
+            })
             .await;
         store
-            .save_session(Session { sid: "sid-other".into(), account_id: "acc-other".into(), auth_time: 0 })
+            .save_session(Session {
+                sid: "sid-other".into(),
+                account_id: "acc-other".into(),
+                auth_time: 0,
+            })
             .await;
         store
             .save_access_token(AccessToken {
@@ -218,7 +255,8 @@ mod tests {
                 authorization_details: None,
                 mandate_consumed: false,
             })
-            .await.unwrap();
+            .await
+            .unwrap();
         store
             .save_refresh_token(RefreshToken {
                 token: "rt-victim".into(),
@@ -233,9 +271,12 @@ mod tests {
                 used: false,
                 replaced_by: None,
             })
-            .await.unwrap();
+            .await
+            .unwrap();
 
-        let out = disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
+        let out = disable_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
         assert_eq!(
             out,
             DisableOutcome::Disabled(RevocationCounts {
@@ -246,11 +287,20 @@ mod tests {
             })
         );
 
-        let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
+        let cred = registration::get_account(&fs, "victim@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(cred.disabled);
         assert!(store.get_session("sid-1").await.is_none());
         assert!(store.get_access_token("at-victim").await.unwrap().is_none());
-        assert!(store.get_refresh_token("rt-victim").await.unwrap().is_none());
+        assert!(
+            store
+                .get_refresh_token("rt-victim")
+                .await
+                .unwrap()
+                .is_none()
+        );
         // 無関係のアカウントのセッションは残る。
         assert!(store.get_session("sid-other").await.is_some());
     }
@@ -259,21 +309,33 @@ mod tests {
     async fn disable_is_idempotent_and_reports_already_disabled() {
         let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
-        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
 
-        let out = disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
-        assert_eq!(out, DisableOutcome::AlreadyDisabled(RevocationCounts::default()));
+        let out = disable_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            DisableOutcome::AlreadyDisabled(RevocationCounts::default())
+        );
     }
 
     #[tokio::test]
     async fn reregistration_preserves_disabled_flag() {
         let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
-        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
 
         // 機種変更等で passkey を作り直しても凍結は解除されない。
         register(&fs, "victim@example.com", "acc-victim").await;
-        let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
+        let cred = registration::get_account(&fs, "victim@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(cred.disabled, "再登録で凍結が解除されてはならない");
     }
 
@@ -283,17 +345,32 @@ mod tests {
         register(&fs, "victim@example.com", "acc-victim").await;
 
         assert_eq!(
-            enable_account(&fs, "cli", "victim@example.com").await.unwrap(),
+            enable_account(&fs, "cli", "victim@example.com")
+                .await
+                .unwrap(),
             EnableOutcome::AlreadyEnabled
         );
 
-        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
-        assert_eq!(enable_account(&fs, "cli", "victim@example.com").await.unwrap(), EnableOutcome::Enabled);
-        let cred = registration::get_account(&fs, "victim@example.com").await.unwrap().unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
+        assert_eq!(
+            enable_account(&fs, "cli", "victim@example.com")
+                .await
+                .unwrap(),
+            EnableOutcome::Enabled
+        );
+        let cred = registration::get_account(&fs, "victim@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!cred.disabled);
 
         // AlreadyEnabled の no-op でも監査ログは記録される(disable側との対称性)。
-        let entries = fs.query_eq("auditLog", "action", "enable_account").await.unwrap();
+        let entries = fs
+            .query_eq("auditLog", "action", "enable_account")
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2, "Enabled 1件 + AlreadyEnabled(no-op) 1件");
     }
 
@@ -301,15 +378,24 @@ mod tests {
     async fn delete_refuses_an_account_that_is_not_disabled() {
         let (host, fs) = setup().await;
         register(&fs, "victim@example.com", "acc-victim").await;
-        let out = delete_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
+        let out = delete_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
         assert_eq!(out, DeleteOutcome::NotDisabled);
-        assert!(registration::get_account(&fs, "victim@example.com").await.unwrap().is_some());
+        assert!(
+            registration::get_account(&fs, "victim@example.com")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
     async fn delete_unknown_account_returns_not_found() {
         let (host, fs) = setup().await;
-        let out = delete_account(&fs, &fstore(&host), "cli", "nobody@example.com").await.unwrap();
+        let out = delete_account(&fs, &fstore(&host), "cli", "nobody@example.com")
+            .await
+            .unwrap();
         assert_eq!(out, DeleteOutcome::NotFound);
     }
 
@@ -319,25 +405,77 @@ mod tests {
         register(&fs, "victim@example.com", "acc-victim").await;
         register(&fs, "other@example.com", "acc-other").await;
         let name = std::collections::HashMap::from([("name".to_string(), "被害者".to_string())]);
-        registration::save_profile(&fs, "acc-victim", &name).await.unwrap();
-        registration::save_profile(&fs, "acc-other", &name).await.unwrap();
+        registration::save_profile(&fs, "acc-victim", &name)
+            .await
+            .unwrap();
+        registration::save_profile(&fs, "acc-other", &name)
+            .await
+            .unwrap();
         for id in ["acc-victim", "acc-other"] {
-            fs.set_doc("fcmTokens", id, serde_json::json!({ "token": crate::firestore::s("t") })).await.unwrap();
+            fs.set_doc(
+                "fcmTokens",
+                id,
+                serde_json::json!({ "token": crate::firestore::s("t") }),
+            )
+            .await
+            .unwrap();
         }
-        disable_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
+        disable_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
 
-        let out = delete_account(&fs, &fstore(&host), "cli", "victim@example.com").await.unwrap();
+        let out = delete_account(&fs, &fstore(&host), "cli", "victim@example.com")
+            .await
+            .unwrap();
         assert_eq!(out, DeleteOutcome::Deleted(RevocationCounts::default()));
 
-        assert!(fs.get_doc("accounts", "victim@example.com").await.unwrap().is_none());
-        assert!(fs.get_doc("accountsByUuid", "acc-victim").await.unwrap().is_none());
-        assert!(fs.get_doc("profiles", "acc-victim").await.unwrap().is_none());
-        assert!(fs.get_doc("fcmTokens", "acc-victim").await.unwrap().is_none());
-        assert!(fs.get_doc("fcmTokens", "acc-other").await.unwrap().is_some());
-        assert!(fs.get_doc("accounts", "other@example.com").await.unwrap().is_some());
-        assert!(fs.get_doc("accountsByUuid", "acc-other").await.unwrap().is_some());
+        assert!(
+            fs.get_doc("accounts", "victim@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            fs.get_doc("accountsByUuid", "acc-victim")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            fs.get_doc("profiles", "acc-victim")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            fs.get_doc("fcmTokens", "acc-victim")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            fs.get_doc("fcmTokens", "acc-other")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            fs.get_doc("accounts", "other@example.com")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            fs.get_doc("accountsByUuid", "acc-other")
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert!(fs.get_doc("profiles", "acc-other").await.unwrap().is_some());
-        let entries = fs.query_eq("auditLog", "action", "delete_account").await.unwrap();
+        let entries = fs
+            .query_eq("auditLog", "action", "delete_account")
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1);
     }
 
@@ -347,18 +485,45 @@ mod tests {
         let (host, fake) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host.clone());
         register(&fs, "lost@example.com", "acc-lost").await;
-        let store = crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(Firestore::new_for_test("proj", host.clone())));
-        store.save_session(Session { sid: "S-LOST".into(), account_id: "acc-lost".into(), auth_time: 0 }).await;
+        let store = crate::firestore_store::FirestoreStore::new(std::sync::Arc::new(
+            Firestore::new_for_test("proj", host.clone()),
+        ));
+        store
+            .save_session(Session {
+                sid: "S-LOST".into(),
+                account_id: "acc-lost".into(),
+                auth_time: 0,
+            })
+            .await;
 
         fake.fail_once("PATCH", "accounts", Some("lost@example.com"));
-        assert!(delete_passkeys(&fs, &fstore(&host), "cli", "lost@example.com").await.is_err());
-        assert!(store.get_session("S-LOST").await.is_none(), "セッションが残った");
-        let entries = fs.query_eq("auditLog", "action", "delete_passkeys").await.unwrap();
+        assert!(
+            delete_passkeys(&fs, &fstore(&host), "cli", "lost@example.com")
+                .await
+                .is_err()
+        );
+        assert!(
+            store.get_session("S-LOST").await.is_none(),
+            "セッションが残った"
+        );
+        let entries = fs
+            .query_eq("auditLog", "action", "delete_passkeys")
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1);
 
         // やり直せば消える。
         fake.clear_failures();
-        assert_eq!(delete_passkeys(&fs, &fstore(&host), "cli", "lost@example.com").await.unwrap(), Some(1));
-        assert!(!registration::has_passkey(&fs, "lost@example.com").await.unwrap());
+        assert_eq!(
+            delete_passkeys(&fs, &fstore(&host), "cli", "lost@example.com")
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        assert!(
+            !registration::has_passkey(&fs, "lost@example.com")
+                .await
+                .unwrap()
+        );
     }
 }

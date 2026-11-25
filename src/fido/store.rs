@@ -12,14 +12,17 @@ use crate::fido::verify::CredKey;
 use {
     crate::es256::{b64url_decode, b64url_encode},
     crate::firestore::{self, Firestore},
-    serde_json::{json, Value},
+    serde_json::{Value, json},
     std::sync::Arc,
 };
 
 const CHALLENGE_TTL_SECS: u64 = 300;
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// 登録/認証セレモニーの状態。challenge をキーに引く。
@@ -84,7 +87,13 @@ impl FidoStore for MemFidoStore {
         }
     }
     async fn find_credentials(&self, user: &str) -> Vec<StoredCredential> {
-        self.inner.lock().unwrap().credentials.get(user).cloned().unwrap_or_default()
+        self.inner
+            .lock()
+            .unwrap()
+            .credentials
+            .get(user)
+            .cloned()
+            .unwrap_or_default()
     }
     async fn update_sign_count(&self, user: &str, cred_id: &str, new_count: u32) {
         let mut g = self.inner.lock().unwrap();
@@ -140,13 +149,26 @@ fn cred_from_fields(f: &Value) -> Option<StoredCredential> {
     let sign_count = firestore::field_u64(f, "signCount").unwrap_or(0) as u32;
     let dec = |k: &str| b64url_decode(firestore::field_str(f, k).unwrap_or("")).ok();
     let key = match firestore::field_str(f, "kty")? {
-        "es256" => CredKey::Es256 { x: dec("x")?, y: dec("y")? },
-        "rs256" => CredKey::Rs256 { n: dec("n")?, e: dec("e")? },
-        "rs1" => CredKey::Rs1 { n: dec("n")?, e: dec("e")? },
+        "es256" => CredKey::Es256 {
+            x: dec("x")?,
+            y: dec("y")?,
+        },
+        "rs256" => CredKey::Rs256 {
+            n: dec("n")?,
+            e: dec("e")?,
+        },
+        "rs1" => CredKey::Rs1 {
+            n: dec("n")?,
+            e: dec("e")?,
+        },
         "ed25519" => CredKey::Ed25519 { pk: dec("pk")? },
         _ => return None,
     };
-    Some(StoredCredential { id, key, sign_count })
+    Some(StoredCredential {
+        id,
+        key,
+        sign_count,
+    })
 }
 
 #[cfg(feature = "gcp")]
@@ -168,7 +190,9 @@ impl FidoStore for FirestoreFidoStore {
         }
         let uv = firestore::field_str(&f, "userVerification").unwrap_or("");
         Some(ChallengeState {
-            username: firestore::field_str(&f, "username").unwrap_or("").to_string(),
+            username: firestore::field_str(&f, "username")
+                .unwrap_or("")
+                .to_string(),
             user_verification: (!uv.is_empty()).then(|| uv.to_string()),
             created_at: now(),
         })
@@ -181,7 +205,10 @@ impl FidoStore for FirestoreFidoStore {
     }
     async fn find_credentials(&self, user: &str) -> Vec<StoredCredential> {
         match self.fs.query_eq(COL_CREDENTIALS, "user", user).await {
-            Ok(rows) => rows.iter().filter_map(|(_, f)| cred_from_fields(f)).collect(),
+            Ok(rows) => rows
+                .iter()
+                .filter_map(|(_, f)| cred_from_fields(f))
+                .collect(),
             Err(_) => Vec::new(),
         }
     }

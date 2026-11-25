@@ -3,7 +3,7 @@
 //! router() は環境変数を読むので、ほかの試験と同じ process で変数を書き換えると取り合いになる。
 //! 試験の binary を分け、この 1 本だけで順に書き換える。
 
-use axum::http::{header, Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt;
 
 async fn fido_status(setting: Option<&str>) -> StatusCode {
@@ -26,8 +26,24 @@ async fn fido_status(setting: Option<&str>) -> StatusCode {
 
 #[tokio::test]
 async fn the_fido_conformance_routes_exist_only_when_enabled() {
-    assert_eq!(fido_status(None).await, StatusCode::NOT_FOUND, "設定が無いのに在る");
-    assert_eq!(fido_status(Some("0")).await, StatusCode::NOT_FOUND, "0 なのに在る");
-    assert_ne!(fido_status(Some("1")).await, StatusCode::NOT_FOUND, "1 なのに無い");
-    assert_ne!(fido_status(Some("true")).await, StatusCode::NOT_FOUND, "true なのに無い");
+    assert_eq!(
+        fido_status(None).await,
+        StatusCode::NOT_FOUND,
+        "設定が無いのに在る"
+    );
+    assert_eq!(
+        fido_status(Some("0")).await,
+        StatusCode::NOT_FOUND,
+        "0 なのに在る"
+    );
+    assert_ne!(
+        fido_status(Some("1")).await,
+        StatusCode::NOT_FOUND,
+        "1 なのに無い"
+    );
+    assert_ne!(
+        fido_status(Some("true")).await,
+        StatusCode::NOT_FOUND,
+        "true なのに無い"
+    );
 }

@@ -121,7 +121,9 @@ impl DcrError {
                 format!("post_logout_redirect_uri must be https without fragment or userinfo: {u}")
             }
             DcrError::PostLogoutRedirectHostNotAllowed(h) => {
-                format!("post_logout_redirect_uri host not allowed by the initial access token: {h}")
+                format!(
+                    "post_logout_redirect_uri host not allowed by the initial access token: {h}"
+                )
             }
             DcrError::InsecureInitiateLoginUri(u) => {
                 format!("initiate_login_uri must be https without fragment or userinfo: {u}")
@@ -164,7 +166,11 @@ pub fn jwks_from_jwk_set(jwks: Option<&serde_json::Value>) -> Vec<JwkPub> {
             let xb = crate::es256::b64url_decode(x).ok()?;
             let yb = crate::es256::b64url_decode(y).ok()?;
             crate::es256::verifying_key_from_xy(&xb, &yb).ok()?;
-            Some(JwkPub { kid: kid.to_string(), x: x.to_string(), y: y.to_string() })
+            Some(JwkPub {
+                kid: kid.to_string(),
+                x: x.to_string(),
+                y: y.to_string(),
+            })
         })
         .collect()
 }
@@ -208,7 +214,11 @@ pub fn validate_registration(
     }
     for uri in &req.redirect_uris {
         let host = https_host(uri).ok_or_else(|| DcrError::InsecureRedirectUri(uri.clone()))?;
-        if !c.allowed_redirect_hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+        if !c
+            .allowed_redirect_hosts
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(host))
+        {
             return Err(DcrError::RedirectHostNotAllowed(host.to_string()));
         }
     }
@@ -218,15 +228,24 @@ pub fn validate_registration(
     for uri in &req.post_logout_redirect_uris {
         let host =
             https_host(uri).ok_or_else(|| DcrError::InsecurePostLogoutRedirectUri(uri.clone()))?;
-        if !c.allowed_redirect_hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+        if !c
+            .allowed_redirect_hosts
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(host))
+        {
             return Err(DcrError::PostLogoutRedirectHostNotAllowed(host.to_string()));
         }
     }
     // initiate_login_uri: 任意。期限切れのログイン画面から利用者をここへ送るので、
     // post_logout_redirect_uri と同じ縛りで開いたリダイレクトの足場にさせない。
     if let Some(uri) = &req.initiate_login_uri {
-        let host = https_host(uri).ok_or_else(|| DcrError::InsecureInitiateLoginUri(uri.clone()))?;
-        if !c.allowed_redirect_hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+        let host =
+            https_host(uri).ok_or_else(|| DcrError::InsecureInitiateLoginUri(uri.clone()))?;
+        if !c
+            .allowed_redirect_hosts
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(host))
+        {
             return Err(DcrError::InitiateLoginHostNotAllowed(host.to_string()));
         }
     }
@@ -319,7 +338,10 @@ pub fn check_admin_post_logout_uris(
     uris: &[String],
     client_redirect_uris: &[String],
 ) -> Result<(), PostLogoutUriError> {
-    let allowed: Vec<&str> = client_redirect_uris.iter().filter_map(|u| https_host(u)).collect();
+    let allowed: Vec<&str> = client_redirect_uris
+        .iter()
+        .filter_map(|u| https_host(u))
+        .collect();
     for uri in uris {
         let host = match https_host(uri) {
             Some(h) => h,
@@ -355,20 +377,20 @@ fn https_host(uri: &str) -> Option<&str> {
         return None; // userinfo 付きは不可（ホスト偽装の足場）。
     }
     let host = authority.split(':').next().unwrap_or(authority);
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
+    if host.is_empty() { None } else { Some(host) }
 }
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
+    use p256::elliptic_curve::Generate;
 
     fn jwk() -> JwkPub {
-        JwkPub { kid: "k1".into(), x: "x".into(), y: "y".into() }
+        JwkPub {
+            kid: "k1".into(),
+            x: "x".into(),
+            y: "y".into(),
+        }
     }
 
     fn constraints() -> IatConstraints {
@@ -394,7 +416,11 @@ mod tests {
         RegistrationRequest {
             post_logout_redirect_uris: post_logout.iter().map(|s| s.to_string()).collect(),
             initiate_login_uri: None,
-            ..req(&["https://rp.example.com/cb"], &["authorization_code"], vec![jwk()])
+            ..req(
+                &["https://rp.example.com/cb"],
+                &["authorization_code"],
+                vec![jwk()],
+            )
         }
     }
 
@@ -403,15 +429,23 @@ mod tests {
     #[test]
     fn post_logout_redirect_uris_are_registered() {
         let r = req_with_post_logout(&["https://rp.example.com/"]);
-        let c = validate_registration("cid-pl-1", &r, &constraints()).unwrap().client;
+        let c = validate_registration("cid-pl-1", &r, &constraints())
+            .unwrap()
+            .client;
         assert_eq!(c.post_logout_redirect_uris, vec!["https://rp.example.com/"]);
     }
 
     // 省略時は空のまま（従来どおり）。
     #[test]
     fn post_logout_redirect_uris_default_to_empty() {
-        let r = req(&["https://rp.example.com/cb"], &["authorization_code"], vec![jwk()]);
-        let c = validate_registration("cid-pl-2", &r, &constraints()).unwrap().client;
+        let r = req(
+            &["https://rp.example.com/cb"],
+            &["authorization_code"],
+            vec![jwk()],
+        );
+        let c = validate_registration("cid-pl-2", &r, &constraints())
+            .unwrap()
+            .client;
         assert!(c.post_logout_redirect_uris.is_empty());
     }
 
@@ -420,19 +454,25 @@ mod tests {
     #[test]
     fn admin_post_logout_uris_must_share_a_redirect_uri_host() {
         let redirects = vec!["https://rp.example.com/cb".to_string()];
-        assert!(check_admin_post_logout_uris(
-            &["https://rp.example.com/".to_string()],
-            &redirects
-        )
-        .is_ok());
+        assert!(
+            check_admin_post_logout_uris(&["https://rp.example.com/".to_string()], &redirects)
+                .is_ok()
+        );
         // 別ホストは不可（許可ホストの縛りが効かない穴を塞ぐ）。
         assert_eq!(
             check_admin_post_logout_uris(&["https://evil.example.net/".to_string()], &redirects),
             Err(PostLogoutUriError::ForeignHost("evil.example.net".into()))
         );
         // 形の縛りは登録時と同じ。
-        for bad in ["http://rp.example.com/", "https://rp.example.com/#x", "https://u@rp.example.com/"] {
-            assert!(check_admin_post_logout_uris(&[bad.to_string()], &redirects).is_err(), "{bad}");
+        for bad in [
+            "http://rp.example.com/",
+            "https://rp.example.com/#x",
+            "https://u@rp.example.com/",
+        ] {
+            assert!(
+                check_admin_post_logout_uris(&[bad.to_string()], &redirects).is_err(),
+                "{bad}"
+            );
         }
         // 空は許す（戻り先なしへ戻せる）。
         assert!(check_admin_post_logout_uris(&[], &redirects).is_ok());
@@ -446,7 +486,10 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("許可ホスト外の post_logout_redirect_uri が通ってしまった"),
         };
-        assert_eq!(e, DcrError::PostLogoutRedirectHostNotAllowed("evil.example.net".into()));
+        assert_eq!(
+            e,
+            DcrError::PostLogoutRedirectHostNotAllowed("evil.example.net".into())
+        );
         assert_eq!(e.code(), "invalid_client_metadata");
     }
 
@@ -463,7 +506,11 @@ mod tests {
                 Err(e) => e,
                 Ok(_) => panic!("{bad} が通ってしまった"),
             };
-            assert_eq!(e, DcrError::InsecurePostLogoutRedirectUri(bad.into()), "{bad}");
+            assert_eq!(
+                e,
+                DcrError::InsecurePostLogoutRedirectUri(bad.into()),
+                "{bad}"
+            );
             assert!(https_host(bad).is_none(), "{bad}");
         }
     }
@@ -472,22 +519,44 @@ mod tests {
     fn initiate_login_uri_is_kept_when_https_on_an_allowed_host() {
         let r = RegistrationRequest {
             initiate_login_uri: Some("https://rp.example.com/auth/login".into()),
-            ..req(&["https://rp.example.com/cb"], &["authorization_code"], vec![jwk()])
+            ..req(
+                &["https://rp.example.com/cb"],
+                &["authorization_code"],
+                vec![jwk()],
+            )
         };
-        let c = validate_registration("cid-il-1", &r, &constraints()).unwrap().client;
-        assert_eq!(c.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
+        let c = validate_registration("cid-il-1", &r, &constraints())
+            .unwrap()
+            .client;
+        assert_eq!(
+            c.initiate_login_uri.as_deref(),
+            Some("https://rp.example.com/auth/login")
+        );
     }
 
     #[test]
     fn initiate_login_uri_is_bound_like_redirect_uris() {
         for (bad, want) in [
-            ("http://rp.example.com/login", DcrError::InsecureInitiateLoginUri("http://rp.example.com/login".into())),
-            ("https://user@rp.example.com/", DcrError::InsecureInitiateLoginUri("https://user@rp.example.com/".into())),
-            ("https://evil.example.net/login", DcrError::InitiateLoginHostNotAllowed("evil.example.net".into())),
+            (
+                "http://rp.example.com/login",
+                DcrError::InsecureInitiateLoginUri("http://rp.example.com/login".into()),
+            ),
+            (
+                "https://user@rp.example.com/",
+                DcrError::InsecureInitiateLoginUri("https://user@rp.example.com/".into()),
+            ),
+            (
+                "https://evil.example.net/login",
+                DcrError::InitiateLoginHostNotAllowed("evil.example.net".into()),
+            ),
         ] {
             let r = RegistrationRequest {
                 initiate_login_uri: Some(bad.into()),
-                ..req(&["https://rp.example.com/cb"], &["authorization_code"], vec![jwk()])
+                ..req(
+                    &["https://rp.example.com/cb"],
+                    &["authorization_code"],
+                    vec![jwk()],
+                )
             };
             let e = match validate_registration("cid-il-2", &r, &constraints()) {
                 Err(e) => e,
@@ -500,7 +569,11 @@ mod tests {
 
     #[test]
     fn valid_registration_builds_private_key_jwt_client() {
-        let r = req(&["https://rp.example.com/cb"], &["authorization_code"], vec![jwk()]);
+        let r = req(
+            &["https://rp.example.com/cb"],
+            &["authorization_code"],
+            vec![jwk()],
+        );
         let out = validate_registration("cid-1", &r, &constraints()).unwrap();
         let c = out.client;
         assert_eq!(c.client_id, "cid-1");
@@ -510,7 +583,10 @@ mod tests {
         // FAPI2 既定（PKCE/PAR/DPoP）。
         assert!(c.require_pkce && c.require_par && c.dpop_bound);
         assert_eq!(c.redirect_uris, vec!["https://rp.example.com/cb"]);
-        assert!(out.raw_client_secret.is_none(), "ConfidentialKeyはsecretを発行しない");
+        assert!(
+            out.raw_client_secret.is_none(),
+            "ConfidentialKeyはsecretを発行しない"
+        );
     }
 
     // B-6: inline jwks の代わりに jwks_uri で登録できる（鍵ローテーション運用）。
@@ -524,7 +600,9 @@ mod tests {
             jwks: vec![],
             jwks_uri: Some("https://rp.example.com/jwks".into()),
         };
-        let c = validate_registration("cid-2", &r, &constraints()).unwrap().client;
+        let c = validate_registration("cid-2", &r, &constraints())
+            .unwrap()
+            .client;
         assert_eq!(c.token_endpoint_auth_method, "private_key_jwt");
         assert_eq!(c.jwks_uri.as_deref(), Some("https://rp.example.com/jwks"));
         assert!(c.jwks.is_empty());
@@ -539,9 +617,14 @@ mod tests {
         assert_eq!(out.client.token_endpoint_auth_method, "client_secret_basic");
         assert!(out.client.require_pkce);
         assert!(!out.client.require_par && !out.client.dpop_bound);
-        let raw = out.raw_client_secret.expect("ConfidentialSecretは平文secretを1回返す");
+        let raw = out
+            .raw_client_secret
+            .expect("ConfidentialSecretは平文secretを1回返す");
         // 保存されるのはハッシュのみ（平文そのものではない）。
-        assert_eq!(out.client.client_secret.as_deref(), Some(hash_token(&raw).as_str()));
+        assert_eq!(
+            out.client.client_secret.as_deref(),
+            Some(hash_token(&raw).as_str())
+        );
         assert_ne!(out.client.client_secret.as_deref(), Some(raw.as_str()));
     }
 
@@ -555,7 +638,10 @@ mod tests {
         assert!(out.client.client_secret.is_none());
         assert!(out.client.jwks.is_empty() && out.client.jwks_uri.is_none());
         assert!(!out.client.require_par);
-        assert!(out.client.dpop_bound, "publicクライアントはdemo-rp/mobile-rpと同様DPoP束縛する");
+        assert!(
+            out.client.dpop_bound,
+            "publicクライアントはdemo-rp/mobile-rpと同様DPoP束縛する"
+        );
         assert!(out.raw_client_secret.is_none());
     }
 
@@ -623,7 +709,11 @@ mod tests {
 
     #[test]
     fn rejects_disallowed_grant_type() {
-        let r = req(&["https://rp.example.com/cb"], &["client_credentials"], vec![jwk()]);
+        let r = req(
+            &["https://rp.example.com/cb"],
+            &["client_credentials"],
+            vec![jwk()],
+        );
         assert!(matches!(
             validate_registration("c", &r, &constraints()),
             Err(DcrError::GrantTypeNotAllowed(_))
@@ -659,7 +749,9 @@ mod tests {
     #[test]
     fn empty_grant_defaults_to_authorization_code() {
         let r = req(&["https://rp.example.com/cb"], &[], vec![jwk()]);
-        let c = validate_registration("c", &r, &constraints()).unwrap().client;
+        let c = validate_registration("c", &r, &constraints())
+            .unwrap()
+            .client;
         assert_eq!(c.grant_types, vec!["authorization_code"]);
     }
 
@@ -670,7 +762,9 @@ mod tests {
             &["authorization_code", "refresh_token"],
             vec![jwk()],
         );
-        let c = validate_registration("c", &r, &constraints()).unwrap().client;
+        let c = validate_registration("c", &r, &constraints())
+            .unwrap()
+            .client;
         assert_eq!(c.grant_types, vec!["authorization_code", "refresh_token"]);
     }
 
@@ -688,7 +782,10 @@ mod tests {
         use p256::ecdsa::SigningKey;
         let key = SigningKey::generate();
         let pt = key.verifying_key().to_sec1_point(false);
-        (b64url_encode(pt.x().unwrap()), b64url_encode(pt.y().unwrap()))
+        (
+            b64url_encode(pt.x().unwrap()),
+            b64url_encode(pt.y().unwrap()),
+        )
     }
 
     #[test]

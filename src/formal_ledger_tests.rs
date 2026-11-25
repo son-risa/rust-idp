@@ -63,7 +63,9 @@ fn region_start(model: &str) -> String {
 
 fn is_premise_id(id: &str) -> bool {
     id.strip_prefix("P-").is_some_and(|t| {
-        t.starts_with(|c: char| c.is_ascii_uppercase()) && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        t.starts_with(|c: char| c.is_ascii_uppercase())
+            && t.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
     })
 }
 
@@ -82,12 +84,16 @@ fn premise_tables(rows: &[Premise]) -> Result<BTreeMap<String, String>, Vec<Stri
         }
         for (name, cell) in [("premise", &p.premise), ("assurance", &p.assurance)] {
             if cell.trim().is_empty() || cell.contains(['|', '\n', '\r']) {
-                errors.push(format!("{row}: {name} が空か、表を壊す文字（| や改行）を含む"));
+                errors.push(format!(
+                    "{row}: {name} が空か、表を壊す文字（| や改行）を含む"
+                ));
             }
         }
         tables
             .entry(p.model.clone())
-            .or_insert_with(|| "| ID | 前提（抽象） | rust-idp の担保 |\n|---|---|---|\n".to_string())
+            .or_insert_with(|| {
+                "| ID | 前提（抽象） | rust-idp の担保 |\n|---|---|---|\n".to_string()
+            })
             .push_str(&format!("| {} | {} | {} |\n", p.id, p.premise, p.assurance));
     }
     if errors.is_empty() {
@@ -99,14 +105,21 @@ fn premise_tables(rows: &[Premise]) -> Result<BTreeMap<String, String>, Vec<Stri
 
 /// README の各範囲の中身を作った表に差し替えた README を返す。範囲の欠け・重なり・閉じ忘れ・台帳に無い model の
 /// 範囲は誤り。
-fn readme_with_tables(readme: &str, tables: &BTreeMap<String, String>) -> Result<String, Vec<String>> {
+fn readme_with_tables(
+    readme: &str,
+    tables: &BTreeMap<String, String>,
+) -> Result<String, Vec<String>> {
     let mut out = String::new();
     let mut errors = Vec::new();
     let mut placed = BTreeSet::new();
     let mut lines = readme.split_inclusive('\n');
     while let Some(line) = lines.next() {
         out.push_str(line);
-        let Some(model) = line.trim_end_matches(['\n', '\r']).strip_prefix("<!-- premises: ").and_then(|r| r.strip_suffix(" -->")) else {
+        let Some(model) = line
+            .trim_end_matches(['\n', '\r'])
+            .strip_prefix("<!-- premises: ")
+            .and_then(|r| r.strip_suffix(" -->"))
+        else {
             continue;
         };
         if !placed.insert(model.to_string()) {
@@ -147,7 +160,9 @@ fn readme_with_tables(readme: &str, tables: &BTreeMap<String, String>) -> Result
 
 /// `src/x.rs: Type::method` か `src/x.rs: function`。Type を書いたときは impl も在ることを見る。
 fn guard_exists(guard: &str) -> Result<(), String> {
-    let (file, sym) = guard.split_once(": ").ok_or_else(|| format!("{guard}: `file: 名前` の形でない"))?;
+    let (file, sym) = guard
+        .split_once(": ")
+        .ok_or_else(|| format!("{guard}: `file: 名前` の形でない"))?;
     let text = std::fs::read_to_string(root().join(file)).map_err(|e| format!("{guard}: {e}"))?;
     let (ty, f) = match sym.rsplit_once("::") {
         Some((t, f)) => (Some(t), f),
@@ -157,7 +172,8 @@ fn guard_exists(guard: &str) -> Result<(), String> {
         return Err(format!("{guard}: fn {f} が無い"));
     }
     if let Some(t) = ty
-        && !text.contains(&format!("for {t} {{")) && !text.contains(&format!("impl {t} {{"))
+        && !text.contains(&format!("for {t} {{"))
+        && !text.contains(&format!("impl {t} {{"))
     {
         return Err(format!("{guard}: impl {t} が無い"));
     }
@@ -171,7 +187,8 @@ fn readme_premise_tables_are_generated_from_the_ledger() {
     }
     let tables = premise_tables(&ledger()).unwrap_or_else(|e| panic!("{}", e.join("\n")));
     let readme = read("formal/README.md");
-    let expected = readme_with_tables(&readme, &tables).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    let expected =
+        readme_with_tables(&readme, &tables).unwrap_or_else(|e| panic!("{}", e.join("\n")));
     if std::env::var_os("UPDATE_PREMISE_TABLES").is_some() {
         std::fs::write(root().join("formal/README.md"), &expected).unwrap();
         return;
@@ -187,8 +204,12 @@ fn every_ledger_row_points_at_things_that_exist() {
     if skipped_in_package() {
         return;
     }
-    let harnesses: Vec<String> =
-        read("formal/kani-harnesses.txt").lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
+    let harnesses: Vec<String> = read("formal/kani-harnesses.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
     let mut errors = Vec::new();
     for p in ledger() {
         let row = format!("{} ({})", p.id, p.model);
@@ -198,9 +219,15 @@ fn every_ledger_row_points_at_things_that_exist() {
         if !Path::new(&root().join("formal").join(&p.model)).is_file() {
             errors.push(format!("{row}: formal/{} が無い", p.model));
         }
-        let outside = p.outside.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let outside = p
+            .outside
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         if p.tests.is_empty() && p.kani.is_empty() && outside.is_none() {
-            errors.push(format!("{row}: 試験も Kani ハーネスも無く、outside の理由も無い"));
+            errors.push(format!(
+                "{row}: 試験も Kani ハーネスも無く、outside の理由も無い"
+            ));
         }
         if outside.is_none() && p.guard.is_empty() {
             errors.push(format!("{row}: 担保のコード（guard）が無い"));
@@ -212,9 +239,15 @@ fn every_ledger_row_points_at_things_that_exist() {
         }
         for k in &p.kani {
             if !harnesses.contains(k) {
-                errors.push(format!("{row}: Kani ハーネス {k} が formal/kani-harnesses.txt に無い"));
+                errors.push(format!(
+                    "{row}: Kani ハーネス {k} が formal/kani-harnesses.txt に無い"
+                ));
             }
         }
     }
-    assert!(errors.is_empty(), "formal/premises.json が実在しないものを指している:\n{}", errors.join("\n"));
+    assert!(
+        errors.is_empty(),
+        "formal/premises.json が実在しないものを指している:\n{}",
+        errors.join("\n")
+    );
 }

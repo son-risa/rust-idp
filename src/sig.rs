@@ -10,8 +10,11 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
 fn rsa_key(n: &[u8], e: &[u8]) -> Result<RsaPublicKey, String> {
-    RsaPublicKey::new(BoxedUint::from_be_slice_vartime(n), BoxedUint::from_be_slice_vartime(e))
-        .map_err(|e| format!("rsa key: {e}"))
+    RsaPublicKey::new(
+        BoxedUint::from_be_slice_vartime(n),
+        BoxedUint::from_be_slice_vartime(e),
+    )
+    .map_err(|e| format!("rsa key: {e}"))
 }
 
 /// RS256 = RSASSA-PKCS1-v1.5 over SHA-256。
@@ -41,9 +44,13 @@ pub fn verify_rs1(n: &[u8], e: &[u8], message: &[u8], signature: &[u8]) -> Resul
 
 /// Ed25519（PureEdDSA, メッセージを直接署名）。
 pub fn verify_ed25519(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), String> {
-    let pk: [u8; 32] = public_key.try_into().map_err(|_| "ed25519 pubkey != 32 bytes")?;
+    let pk: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| "ed25519 pubkey != 32 bytes")?;
     let key = EdKey::from_bytes(&pk).map_err(|e| format!("ed25519 key: {e}"))?;
-    let sig: [u8; 64] = signature.try_into().map_err(|_| "ed25519 sig != 64 bytes")?;
+    let sig: [u8; 64] = signature
+        .try_into()
+        .map_err(|_| "ed25519 sig != 64 bytes")?;
     key.verify(message, &EdSignature::from_bytes(&sig))
         .map_err(|_| "invalid Ed25519 signature".to_string())
 }
@@ -51,14 +58,18 @@ pub fn verify_ed25519(public_key: &[u8], message: &[u8], signature: &[u8]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsa::traits::PublicKeyParts;
     use rsa::PrivateKey as RsaPrivateKey;
+    use rsa::traits::PublicKeyParts;
 
     fn rsa_keypair() -> (RsaPrivateKey, Vec<u8>, Vec<u8>) {
         // 1024bit: テスト高速化用（本番鍵長の検証ではなくロジック検証が目的）。
         let sk = RsaPrivateKey::new(&mut getrandom::SysRng, 1024).unwrap();
         let pk = sk.to_public_key();
-        (sk, pk.n().to_be_bytes_trimmed_vartime().into_vec(), pk.e().to_be_bytes_trimmed_vartime().into_vec())
+        (
+            sk,
+            pk.n().to_be_bytes_trimmed_vartime().into_vec(),
+            pk.e().to_be_bytes_trimmed_vartime().into_vec(),
+        )
     }
 
     #[test]

@@ -6,10 +6,10 @@
 //! - JWK Thumbprint (RFC 7638)
 //! - base64url enc/dec
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use p256::ecdsa::VerifyingKey;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use p256::Sec1Point;
+use p256::ecdsa::VerifyingKey;
 use sha2::{Digest, Sha256};
 
 pub fn b64url_encode(b: impl AsRef<[u8]>) -> String {
@@ -55,9 +55,9 @@ pub fn jwk_thumbprint_p256(x_b64: &str, y_b64: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use p256::elliptic_curve::Generate;
     use super::*;
     use p256::ecdsa::SigningKey;
+    use p256::elliptic_curve::Generate;
 
     #[test]
     fn b64url_roundtrip_and_padding_lenient() {
@@ -102,6 +102,9 @@ mod tests {
             "CeklDX4_DJrArRhgR02px71cEGk-KZ43X9yURY2Vg9Y"
         );
         // 座標が違えば thumbprint も変わる。
-        assert_ne!(jwk_thumbprint_p256("AA", "BB"), jwk_thumbprint_p256("AA", "CC"));
+        assert_ne!(
+            jwk_thumbprint_p256("AA", "BB"),
+            jwk_thumbprint_p256("AA", "CC")
+        );
     }
 }

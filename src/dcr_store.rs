@@ -5,10 +5,10 @@
 //! 書き込みはこのサーバ経由のみ（クライアント直書き不可＝信頼境界が DB 側で閉じている）。
 
 use crate::dcr::IatConstraints;
-use crate::firestore::{self, field_bool, field_str, field_u64};
 use crate::document_store::DocumentStore;
 #[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
+use crate::firestore::{self, field_bool, field_str, field_u64};
 use crate::model::Client;
 
 const CLIENTS: &str = "clients";
@@ -135,7 +135,8 @@ pub async fn put_iat(
     expires_at: u64,
     reusable: bool,
 ) -> Result<(), String> {
-    let cj = serde_json::to_string(constraints).map_err(|e| format!("serialize constraints: {e}"))?;
+    let cj =
+        serde_json::to_string(constraints).map_err(|e| format!("serialize constraints: {e}"))?;
     let created = fs
         .create_if_absent(
             DCR_TOKENS,
@@ -172,12 +173,22 @@ pub async fn peek_iat(fs: &dyn DocumentStore, hash: &str) -> Result<Option<Iat>,
         None => return Ok(None),
     };
     let (constraints, expires_at, reusable) = parse_iat_fields(&fields)?;
-    Ok(Some(Iat { constraints, expires_at, update_time, reusable }))
+    Ok(Some(Iat {
+        constraints,
+        expires_at,
+        update_time,
+        reusable,
+    }))
 }
 
 /// IAT を単回消費する（updateTime CAS 削除）。勝てば Ok(true)、並行消費・既消費は Ok(false)。
-pub async fn consume_iat(fs: &dyn DocumentStore, hash: &str, update_time: &str) -> Result<bool, String> {
-    fs.delete_doc_if_unchanged(DCR_TOKENS, hash, update_time).await
+pub async fn consume_iat(
+    fs: &dyn DocumentStore,
+    hash: &str,
+    update_time: &str,
+) -> Result<bool, String> {
+    fs.delete_doc_if_unchanged(DCR_TOKENS, hash, update_time)
+        .await
 }
 
 /// 未消費IATの一覧（管理UI用）。1件の読み出し結果に doc id(hash) を添えたもの。
@@ -199,7 +210,13 @@ pub async fn list_pending_iats(fs: &dyn DocumentStore) -> Result<Vec<PendingIat>
     for (hash, fields, update_time) in rows {
         match parse_iat_fields(&fields) {
             Ok((constraints, expires_at, reusable)) => {
-                out.push(PendingIat { hash, constraints, expires_at, reusable, update_time });
+                out.push(PendingIat {
+                    hash,
+                    constraints,
+                    expires_at,
+                    reusable,
+                    update_time,
+                });
             }
             Err(e) => eprintln!("dcr_store: list_pending_iats {hash}: {e}"),
         }
@@ -276,14 +293,20 @@ mod tests {
         let fs = Firestore::new_for_test("proj", host);
 
         save_client(&fs, &client("dcr-pl")).await.unwrap();
-        let (mut c, v) = load_client_with_version(&fs, "dcr-pl").await.unwrap().unwrap();
+        let (mut c, v) = load_client_with_version(&fs, "dcr-pl")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(c.post_logout_redirect_uris.is_empty());
 
         c.post_logout_redirect_uris = vec!["https://rp.example.com/".into()];
         assert!(put_client_if_unchanged(&fs, &c, &v).await.unwrap());
 
         let stored = load_client(&fs, "dcr-pl").await.unwrap();
-        assert_eq!(stored.post_logout_redirect_uris, vec!["https://rp.example.com/"]);
+        assert_eq!(
+            stored.post_logout_redirect_uris,
+            vec!["https://rp.example.com/"]
+        );
         assert_eq!(stored.redirect_uris, vec!["https://rp.example.com/cb"]);
         assert_eq!(stored.token_endpoint_auth_method, "private_key_jwt");
     }
@@ -296,17 +319,29 @@ mod tests {
 
         save_client(&fs, &client("dcr-race")).await.unwrap();
         // A が読む。
-        let (mut a, va) = load_client_with_version(&fs, "dcr-race").await.unwrap().unwrap();
+        let (mut a, va) = load_client_with_version(&fs, "dcr-race")
+            .await
+            .unwrap()
+            .unwrap();
         // B が先に書く。
-        let (mut b, vb) = load_client_with_version(&fs, "dcr-race").await.unwrap().unwrap();
+        let (mut b, vb) = load_client_with_version(&fs, "dcr-race")
+            .await
+            .unwrap()
+            .unwrap();
         b.post_logout_redirect_uris = vec!["https://rp.example.com/b".into()];
         assert!(put_client_if_unchanged(&fs, &b, &vb).await.unwrap());
         // A の書き戻しは古い版なので負ける。
         a.post_logout_redirect_uris = vec!["https://rp.example.com/a".into()];
-        assert!(!put_client_if_unchanged(&fs, &a, &va).await.unwrap(), "古い版の書き戻しが通ってしまった");
+        assert!(
+            !put_client_if_unchanged(&fs, &a, &va).await.unwrap(),
+            "古い版の書き戻しが通ってしまった"
+        );
         // B の値が残っている。
         let stored = load_client(&fs, "dcr-race").await.unwrap();
-        assert_eq!(stored.post_logout_redirect_uris, vec!["https://rp.example.com/b"]);
+        assert_eq!(
+            stored.post_logout_redirect_uris,
+            vec!["https://rp.example.com/b"]
+        );
     }
 
     // 未知の client は None（作らない）。
@@ -314,7 +349,12 @@ mod tests {
     async fn load_client_with_version_returns_none_for_unknown() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        assert!(load_client_with_version(&fs, "unknown").await.unwrap().is_none());
+        assert!(
+            load_client_with_version(&fs, "unknown")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -336,9 +376,14 @@ mod tests {
         let fs = Firestore::new_for_test("proj", host);
         let hash = "hash-1";
 
-        put_iat(&fs, hash, &constraints(), 9_999_999_999, false).await.unwrap();
+        put_iat(&fs, hash, &constraints(), 9_999_999_999, false)
+            .await
+            .unwrap();
         let iat = peek_iat(&fs, hash).await.unwrap().unwrap();
-        assert_eq!(iat.constraints.allowed_redirect_hosts, vec!["rp.example.com"]);
+        assert_eq!(
+            iat.constraints.allowed_redirect_hosts,
+            vec!["rp.example.com"]
+        );
         assert!(!iat.reusable);
 
         // 検証成功後の単回消費(CAS 削除)。
@@ -357,26 +402,38 @@ mod tests {
         let fs = Firestore::new_for_test("proj", host);
         let hash = "hash-2";
 
-        put_iat(&fs, hash, &constraints(), 9_999_999_999, false).await.unwrap();
+        put_iat(&fs, hash, &constraints(), 9_999_999_999, false)
+            .await
+            .unwrap();
         let stale = peek_iat(&fs, hash).await.unwrap().unwrap();
         // 間に別のリクエストが割り込んで再書き込みされた状況を模す(実際には put_iat は
         // create_if_absent なので同一ドキュメントの再書き込みは通常起きないが、
         // updateTime CAS 自体の防御が効くことを確認する)。
         let fresh = peek_iat(&fs, hash).await.unwrap().unwrap();
-        assert_eq!(stale.update_time, fresh.update_time, "この時点では同一のはず");
+        assert_eq!(
+            stale.update_time, fresh.update_time,
+            "この時点では同一のはず"
+        );
 
         // 明らかに古い(存在しない)updateTime を渡すと必ず負ける。
         let lost = consume_iat(&fs, hash, "v-does-not-exist").await.unwrap();
         assert!(!lost);
-        assert!(peek_iat(&fs, hash).await.unwrap().is_some(), "負けた場合は削除されない");
+        assert!(
+            peek_iat(&fs, hash).await.unwrap().is_some(),
+            "負けた場合は削除されない"
+        );
     }
 
     #[tokio::test]
     async fn put_iat_rejects_hash_collision() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        put_iat(&fs, "dup-hash", &constraints(), 1, false).await.unwrap();
-        let err = put_iat(&fs, "dup-hash", &constraints(), 2, false).await.unwrap_err();
+        put_iat(&fs, "dup-hash", &constraints(), 1, false)
+            .await
+            .unwrap();
+        let err = put_iat(&fs, "dup-hash", &constraints(), 2, false)
+            .await
+            .unwrap_err();
         assert!(err.contains("already exists"));
     }
 
@@ -385,12 +442,21 @@ mod tests {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
 
-        assert!(!revoke_client(&fs, "nope").await.unwrap(), "存在しないクライアントは false");
+        assert!(
+            !revoke_client(&fs, "nope").await.unwrap(),
+            "存在しないクライアントは false"
+        );
 
         save_client(&fs, &client("dcr-rev")).await.unwrap();
         assert!(revoke_client(&fs, "dcr-rev").await.unwrap());
-        assert!(load_client(&fs, "dcr-rev").await.is_none(), "失効後は解決できない");
-        assert!(!revoke_client(&fs, "dcr-rev").await.unwrap(), "二重失効は false(冪等)");
+        assert!(
+            load_client(&fs, "dcr-rev").await.is_none(),
+            "失効後は解決できない"
+        );
+        assert!(
+            !revoke_client(&fs, "dcr-rev").await.unwrap(),
+            "二重失効は false(冪等)"
+        );
     }
 
     #[tokio::test]
@@ -400,12 +466,22 @@ mod tests {
         save_client(&fs, &client("dcr-list-1")).await.unwrap();
         save_client(&fs, &client("dcr-list-2")).await.unwrap();
         // json フィールドを持たない壊れたドキュメントを直接差し込む。
-        fs.set_doc(CLIENTS, "broken", serde_json::json!({})).await.unwrap();
+        fs.set_doc(CLIENTS, "broken", serde_json::json!({}))
+            .await
+            .unwrap();
 
-        let mut ids: Vec<String> =
-            list_clients(&fs).await.unwrap().into_iter().map(|c| c.client_id).collect();
+        let mut ids: Vec<String> = list_clients(&fs)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.client_id)
+            .collect();
         ids.sort();
-        assert_eq!(ids, vec!["dcr-list-1", "dcr-list-2"], "壊れたドキュメントはスキップされる");
+        assert_eq!(
+            ids,
+            vec!["dcr-list-1", "dcr-list-2"],
+            "壊れたドキュメントはスキップされる"
+        );
     }
 
     #[tokio::test]
@@ -419,8 +495,12 @@ mod tests {
     async fn list_pending_iats_returns_all_with_hash_and_update_time() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        put_iat(&fs, "hash-a", &constraints(), 100, false).await.unwrap();
-        put_iat(&fs, "hash-b", &constraints(), 200, true).await.unwrap();
+        put_iat(&fs, "hash-a", &constraints(), 100, false)
+            .await
+            .unwrap();
+        put_iat(&fs, "hash-b", &constraints(), 200, true)
+            .await
+            .unwrap();
 
         let mut list = list_pending_iats(&fs).await.unwrap();
         list.sort_by(|a, b| a.hash.cmp(&b.hash));
@@ -437,16 +517,22 @@ mod tests {
     async fn list_pending_iats_skips_malformed_and_reflects_consume() {
         let (host, _state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
-        put_iat(&fs, "hash-ok", &constraints(), 100, false).await.unwrap();
+        put_iat(&fs, "hash-ok", &constraints(), 100, false)
+            .await
+            .unwrap();
         // constraints フィールドを持たない壊れたドキュメントを直接差し込む。
-        fs.set_doc(DCR_TOKENS, "broken", serde_json::json!({})).await.unwrap();
+        fs.set_doc(DCR_TOKENS, "broken", serde_json::json!({}))
+            .await
+            .unwrap();
 
         let list = list_pending_iats(&fs).await.unwrap();
         assert_eq!(list.len(), 1, "壊れたドキュメントはスキップされる");
         assert_eq!(list[0].hash, "hash-ok");
 
         // revoke(consume_iat)後は一覧から消える(brokenは元々スキップされているので0件になる)。
-        consume_iat(&fs, "hash-ok", &list[0].update_time).await.unwrap();
+        consume_iat(&fs, "hash-ok", &list[0].update_time)
+            .await
+            .unwrap();
         assert!(list_pending_iats(&fs).await.unwrap().is_empty());
     }
 }

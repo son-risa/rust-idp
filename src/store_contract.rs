@@ -9,7 +9,10 @@ use crate::store::{CodeTake, Store};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// 構造体に PartialEq が無いので、Debug の形で全 field を比べる。
@@ -79,17 +82,31 @@ fn rt(token: &str, family: &str, replaced_by: Option<&str>) -> RefreshToken {
 
 /// interaction は保存したとおりに読め、ログインの完了は在る間だけ書ける。消費は 1 度だけで、消費した後の
 /// 完了は interaction を蘇らせない。
-pub(crate) async fn an_interaction_is_completed_only_while_it_exists_and_consumed_once(s: &dyn Store) {
+pub(crate) async fn an_interaction_is_completed_only_while_it_exists_and_consumed_once(
+    s: &dyn Store,
+) {
     s.save_interaction(interaction("U1")).await;
-    assert!(same(&s.get_interaction("U1").await.unwrap(), &interaction("U1")));
+    assert!(same(
+        &s.get_interaction("U1").await.unwrap(),
+        &interaction("U1")
+    ));
     assert!(s.complete_interaction("U1", "a", 42).await);
     let done = s.get_interaction("U1").await.unwrap();
-    assert_eq!((done.account_id.as_deref(), done.auth_time), (Some("a"), Some(42)));
+    assert_eq!(
+        (done.account_id.as_deref(), done.auth_time),
+        (Some("a"), Some(42))
+    );
 
     assert!(s.consume_interaction("U1").await);
     assert!(!s.consume_interaction("U1").await, "2 度消費できた");
-    assert!(!s.complete_interaction("U1", "a", 43).await, "消費した interaction に完了を書けた");
-    assert!(s.get_interaction("U1").await.is_none(), "消費した interaction が蘇った");
+    assert!(
+        !s.complete_interaction("U1", "a", 43).await,
+        "消費した interaction に完了を書けた"
+    );
+    assert!(
+        s.get_interaction("U1").await.is_none(),
+        "消費した interaction が蘇った"
+    );
     assert!(!s.consume_interaction("NOPE").await);
     assert!(!s.complete_interaction("NOPE", "a", 1).await);
 }
@@ -103,7 +120,11 @@ pub(crate) async fn racing_interaction_consumptions_let_one_through(s: &dyn Stor
 
 /// session は保存したとおりに読め、消すと読めない。
 pub(crate) async fn a_session_is_saved_read_and_deleted(s: &dyn Store) {
-    let session = Session { sid: "S1".into(), account_id: "a".into(), auth_time: 42 };
+    let session = Session {
+        sid: "S1".into(),
+        account_id: "a".into(),
+        auth_time: 42,
+    };
     s.save_session(session.clone()).await;
     assert!(same(&s.get_session("S1").await.unwrap(), &session));
     s.delete_session("S1").await;
@@ -118,21 +139,34 @@ pub(crate) async fn code_reuse_revokes_issued_tokens(s: &dyn Store) {
     s.save_code(code("C1")).await.unwrap();
     s.save_access_token(at("AT1", "a")).await.unwrap();
     s.save_refresh_token(rt("RT1", "F", None)).await.unwrap();
-    s.link_issued_tokens("C1", "AT1", Some("RT1")).await.unwrap();
+    s.link_issued_tokens("C1", "AT1", Some("RT1"))
+        .await
+        .unwrap();
 
-    assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Fresh(c) if same(&c, &code("C1"))));
+    assert!(
+        matches!(s.take_code("C1").await.unwrap(), CodeTake::Fresh(c) if same(&c, &code("C1")))
+    );
     assert!(matches!(s.take_code("C1").await.unwrap(), CodeTake::Reused(c) if c.client_id == "cl"));
-    assert!(s.get_access_token("AT1").await.unwrap().is_some(), "take_code が失効させた");
+    assert!(
+        s.get_access_token("AT1").await.unwrap().is_some(),
+        "take_code が失効させた"
+    );
     s.revoke_code_tokens("C1").await;
     assert!(s.get_access_token("AT1").await.unwrap().is_none());
     assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
-    assert!(matches!(s.take_code("NOPE").await.unwrap(), CodeTake::Unknown));
+    assert!(matches!(
+        s.take_code("NOPE").await.unwrap(),
+        CodeTake::Unknown
+    ));
 }
 
 /// access token は保存したとおりに読め、失効させると読めない。知らない token の失効は誤りにしない。
 pub(crate) async fn an_access_token_is_saved_read_and_revoked(s: &dyn Store) {
     s.save_access_token(at("AT1", "a")).await.unwrap();
-    assert!(same(&s.get_access_token("AT1").await.unwrap().unwrap(), &at("AT1", "a")));
+    assert!(same(
+        &s.get_access_token("AT1").await.unwrap().unwrap(),
+        &at("AT1", "a")
+    ));
     s.revoke_access_token("AT1").await.unwrap();
     assert!(s.get_access_token("AT1").await.unwrap().is_none());
     s.revoke_access_token("NOPE").await.unwrap();
@@ -143,14 +177,23 @@ pub(crate) async fn consume_mandate_is_single_use(s: &dyn Store) {
     s.save_access_token(at("AT1", "a")).await.unwrap();
     assert!(s.consume_mandate_if_unused("AT1").await.unwrap());
     assert!(!s.consume_mandate_if_unused("AT1").await.unwrap());
-    assert!(s.get_access_token("AT1").await.unwrap().unwrap().mandate_consumed);
+    assert!(
+        s.get_access_token("AT1")
+            .await
+            .unwrap()
+            .unwrap()
+            .mandate_consumed
+    );
     assert!(!s.consume_mandate_if_unused("NOPE").await.unwrap());
 }
 
 /// 並んだ mandate の消費のうち、通るのは 1 つだけ。
 pub(crate) async fn racing_mandate_consumptions_let_one_through(s: &dyn Store) {
     s.save_access_token(at("AT1", "a")).await.unwrap();
-    let (a, b) = tokio::join!(s.consume_mandate_if_unused("AT1"), s.consume_mandate_if_unused("AT1"));
+    let (a, b) = tokio::join!(
+        s.consume_mandate_if_unused("AT1"),
+        s.consume_mandate_if_unused("AT1")
+    );
     assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|w| **w).count(), 1);
 }
 
@@ -158,7 +201,10 @@ pub(crate) async fn racing_mandate_consumptions_let_one_through(s: &dyn Store) {
 pub(crate) async fn a_refresh_token_is_read_without_being_consumed(s: &dyn Store) {
     s.save_refresh_token(rt("RT1", "F", None)).await.unwrap();
     for _ in 0..2 {
-        assert!(same(&s.get_refresh_token("RT1").await.unwrap().unwrap(), &rt("RT1", "F", None)));
+        assert!(same(
+            &s.get_refresh_token("RT1").await.unwrap().unwrap(),
+            &rt("RT1", "F", None)
+        ));
     }
     s.revoke_refresh_token("RT1").await.unwrap();
     assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
@@ -169,7 +215,10 @@ pub(crate) async fn a_refresh_token_is_read_without_being_consumed(s: &dyn Store
 pub(crate) async fn mark_refresh_used_is_single_use(s: &dyn Store) {
     s.save_refresh_token(rt("RT1", "F", None)).await.unwrap();
     assert!(s.mark_refresh_used("RT1", Some("RT2")).await.unwrap());
-    assert!(!s.mark_refresh_used("RT1", Some("RT3")).await.unwrap(), "使用済みの RT をもう 1 度回せた");
+    assert!(
+        !s.mark_refresh_used("RT1", Some("RT3")).await.unwrap(),
+        "使用済みの RT をもう 1 度回せた"
+    );
     let used = s.get_refresh_token("RT1").await.unwrap().unwrap();
     assert!(used.used);
     assert_eq!(used.replaced_by.as_deref(), Some("RT2"));
@@ -179,7 +228,10 @@ pub(crate) async fn mark_refresh_used_is_single_use(s: &dyn Store) {
 /// 並んだローテーションのうち、通るのは 1 つだけ。
 pub(crate) async fn racing_rotations_let_one_through(s: &dyn Store) {
     s.save_refresh_token(rt("RT1", "F", None)).await.unwrap();
-    let (a, b) = tokio::join!(s.mark_refresh_used("RT1", Some("Ra")), s.mark_refresh_used("RT1", Some("Rb")));
+    let (a, b) = tokio::join!(
+        s.mark_refresh_used("RT1", Some("Ra")),
+        s.mark_refresh_used("RT1", Some("Rb"))
+    );
     assert_eq!([a.unwrap(), b.unwrap()].iter().filter(|w| **w).count(), 1);
 }
 
@@ -191,23 +243,42 @@ pub(crate) async fn revoke_family_deletes_entire_chain(s: &dyn Store) {
         let tok = |i: usize| format!("F{n}R{i}");
         for i in 1..=n {
             let next = (i < n).then(|| tok(i + 1));
-            s.save_refresh_token(rt(&tok(i), &fam, next.as_deref())).await.unwrap();
+            s.save_refresh_token(rt(&tok(i), &fam, next.as_deref()))
+                .await
+                .unwrap();
         }
         assert!(!s.refresh_family_revoked(&fam).await.unwrap());
         s.revoke_refresh_family(&fam, &tok(1)).await;
-        assert!(s.refresh_family_revoked(&fam).await.unwrap(), "n={n} 札が無い");
+        assert!(
+            s.refresh_family_revoked(&fam).await.unwrap(),
+            "n={n} 札が無い"
+        );
         for i in 1..=n {
-            assert!(s.get_refresh_token(&tok(i)).await.unwrap().is_none(), "n={n} {} が残っている", tok(i));
+            assert!(
+                s.get_refresh_token(&tok(i)).await.unwrap().is_none(),
+                "n={n} {} が残っている",
+                tok(i)
+            );
         }
     }
-    assert!(s.get_refresh_token("X1").await.unwrap().is_some(), "ほかの系列の RT が消えた");
-    assert!(!s.refresh_family_revoked("G").await.unwrap(), "ほかの系列に札が付いた");
+    assert!(
+        s.get_refresh_token("X1").await.unwrap().is_some(),
+        "ほかの系列の RT が消えた"
+    );
+    assert!(
+        !s.refresh_family_revoked("G").await.unwrap(),
+        "ほかの系列に札が付いた"
+    );
 }
 
 /// replaced_by が循環していても、系列の失効は止まり、鎖を全部消す。
 pub(crate) async fn revoke_family_cyclic_chain_terminates(s: &dyn Store) {
-    s.save_refresh_token(rt("C1", "F", Some("C2"))).await.unwrap();
-    s.save_refresh_token(rt("C2", "F", Some("C1"))).await.unwrap();
+    s.save_refresh_token(rt("C1", "F", Some("C2")))
+        .await
+        .unwrap();
+    s.save_refresh_token(rt("C2", "F", Some("C1")))
+        .await
+        .unwrap();
     s.revoke_refresh_family("F", "C1").await;
     assert!(s.get_refresh_token("C1").await.unwrap().is_none());
     assert!(s.get_refresh_token("C2").await.unwrap().is_none());
@@ -216,19 +287,35 @@ pub(crate) async fn revoke_family_cyclic_chain_terminates(s: &dyn Store) {
 /// account の失効は、その account の session（keep_sid を除く）・AT・RT を消して数を返す。ほかの account には触れない。
 pub(crate) async fn revoke_account_removes_only_that_accounts_records(s: &dyn Store) {
     for (sid, account) in [("S1", "a"), ("S2", "a"), ("S3", "b")] {
-        s.save_session(Session { sid: sid.into(), account_id: account.into(), auth_time: 0 }).await;
+        s.save_session(Session {
+            sid: sid.into(),
+            account_id: account.into(),
+            auth_time: 0,
+        })
+        .await;
     }
     for (t, account) in [("AT1", "a"), ("AT2", "b")] {
         s.save_access_token(at(t, account)).await.unwrap();
     }
     s.save_refresh_token(rt("RT1", "F", None)).await.unwrap();
-    s.save_refresh_token(RefreshToken { account_id: "b".into(), ..rt("RT2", "G", None) }).await.unwrap();
+    s.save_refresh_token(RefreshToken {
+        account_id: "b".into(),
+        ..rt("RT2", "G", None)
+    })
+    .await
+    .unwrap();
 
     let counts = s.revoke_account("a", "S2").await;
-    assert_eq!((counts.sessions, counts.access_tokens, counts.refresh_tokens), (1, 1, 1));
+    assert_eq!(
+        (counts.sessions, counts.access_tokens, counts.refresh_tokens),
+        (1, 1, 1)
+    );
     assert!(counts.query_errors.is_empty());
     assert!(s.get_session("S1").await.is_none());
-    assert!(s.get_session("S2").await.is_some(), "keep_sid の session が消えた");
+    assert!(
+        s.get_session("S2").await.is_some(),
+        "keep_sid の session が消えた"
+    );
     assert!(s.get_access_token("AT1").await.unwrap().is_none());
     assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
     assert!(s.get_session("S3").await.is_some());

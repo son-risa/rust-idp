@@ -7,15 +7,18 @@
 //! 副次的な記録であり、これの失敗で本処理をロールバックする理由にはならない
 //! （accountsByUuid 逆引きインデックスの書き込み失敗時と同じ方針。registration.rs 参照）。
 
-use crate::firestore;
 use crate::document_store::DocumentStore;
+use crate::firestore;
 #[cfg(all(test, feature = "gcp"))]
 use crate::firestore::Firestore;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// actor: 操作を行った主体（CLI実行なら"cli"。将来の管理UIからならその管理者自身の account_id）。
@@ -35,7 +38,9 @@ pub async fn record(fs: &dyn DocumentStore, actor: &str, action: &str, target: &
         // UUIDv4衝突は実質起こらないが、create_if_absentはOk(false)=「書き込みスキップ」を
         // 返しうる契約なので、Errだけ見ているとこのケースで監査ログが黙って欠落する。
         Ok(false) => {
-            tracing::error!("audit_log: id collision, entry not written action={action} target={target} id={id}");
+            tracing::error!(
+                "audit_log: id collision, entry not written action={action} target={target} id={id}"
+            );
         }
         Err(e) => tracing::error!("audit_log: write failed action={action} target={target}: {e}"),
     }
@@ -51,10 +56,18 @@ pub struct AuditEntry {
 
 fn parse_entry(fields: &serde_json::Value) -> AuditEntry {
     AuditEntry {
-        actor: firestore::field_str(fields, "actor").unwrap_or("").to_string(),
-        action: firestore::field_str(fields, "action").unwrap_or("").to_string(),
-        target: firestore::field_str(fields, "target").unwrap_or("").to_string(),
-        detail: firestore::field_str(fields, "detail").unwrap_or("").to_string(),
+        actor: firestore::field_str(fields, "actor")
+            .unwrap_or("")
+            .to_string(),
+        action: firestore::field_str(fields, "action")
+            .unwrap_or("")
+            .to_string(),
+        target: firestore::field_str(fields, "target")
+            .unwrap_or("")
+            .to_string(),
+        detail: firestore::field_str(fields, "detail")
+            .unwrap_or("")
+            .to_string(),
         at: firestore::field_ts_secs(fields, "at").unwrap_or(0),
     }
 }
@@ -68,7 +81,10 @@ pub async fn list_recent(fs: &dyn DocumentStore, limit: u32) -> Result<Vec<Audit
 
 /// 特定target（例: account_id）に紐づく履歴（新しい順）。1対象分に限定されるため既存の
 /// query_eq + クライアント側ソートで十分。
-pub async fn list_for_target(fs: &dyn DocumentStore, target: &str) -> Result<Vec<AuditEntry>, String> {
+pub async fn list_for_target(
+    fs: &dyn DocumentStore,
+    target: &str,
+) -> Result<Vec<AuditEntry>, String> {
     let rows = fs.query_eq("auditLog", "target", target).await?;
     let mut entries: Vec<AuditEntry> = rows.iter().map(|(_, fields)| parse_entry(fields)).collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.at));

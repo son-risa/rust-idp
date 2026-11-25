@@ -2,15 +2,32 @@
 //! node-oidc-provider の `claims` 設定相当。
 
 pub const PROFILE: &[&str] = &[
-    "name", "family_name", "given_name", "middle_name", "nickname",
-    "preferred_username", "profile", "picture", "website", "gender",
-    "birthdate", "zoneinfo", "locale", "updated_at",
+    "name",
+    "family_name",
+    "given_name",
+    "middle_name",
+    "nickname",
+    "preferred_username",
+    "profile",
+    "picture",
+    "website",
+    "gender",
+    "birthdate",
+    "zoneinfo",
+    "locale",
+    "updated_at",
 ];
 pub const EMAIL: &[&str] = &["email", "email_verified"];
 
 /// ユーザーが自身で編集できる claim（本人性に関わる email/sub 等は含めない）。
-pub const EDITABLE: &[&str] =
-    &["name", "nickname", "birthdate", "gender", "zoneinfo", "locale"];
+pub const EDITABLE: &[&str] = &[
+    "name",
+    "nickname",
+    "birthdate",
+    "gender",
+    "zoneinfo",
+    "locale",
+];
 pub const ADDRESS: &[&str] = &["address"];
 pub const PHONE: &[&str] = &["phone_number", "phone_number_verified"];
 
@@ -68,7 +85,12 @@ mod tests {
     fn all_scopes_union_is_superset_and_has_no_leak_beyond_supported() {
         let all = claim_names_for_scopes("openid profile email address phone");
         for c in [
-            "sub", "name", "email", "email_verified", "address", "phone_number",
+            "sub",
+            "name",
+            "email",
+            "email_verified",
+            "address",
+            "phone_number",
             "phone_number_verified",
         ] {
             assert!(all.contains(&c), "missing {c}");

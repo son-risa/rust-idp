@@ -5,10 +5,10 @@ use crate::sig;
 use ciborium::value::Value as Cbor;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use x509_cert::Certificate;
 use x509_cert::der::asn1::ObjectIdentifier;
 use x509_cert::der::{Decode, Encode};
 use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage};
-use x509_cert::Certificate;
 
 const TPM_GENERATED: u32 = 0xFF54_4347;
 const TPM_ST_ATTEST_CERTIFY: u16 = 0x8017;
@@ -145,9 +145,12 @@ fn aik_rsa_ne(cert: &Certificate) -> Result<(Vec<u8>, Vec<u8>), String> {
         .subject_public_key_info()
         .to_der()
         .map_err(|e| format!("aik spki der: {e}"))?;
-    let key = rsa::PublicKey::from_public_key_der(&spki)
-        .map_err(|e| format!("aik rsa key: {e}"))?;
-    Ok((key.n().to_be_bytes_trimmed_vartime().into_vec(), key.e().to_be_bytes_trimmed_vartime().into_vec()))
+    let key =
+        rsa::PublicKey::from_public_key_der(&spki).map_err(|e| format!("aik rsa key: {e}"))?;
+    Ok((
+        key.n().to_be_bytes_trimmed_vartime().into_vec(),
+        key.e().to_be_bytes_trimmed_vartime().into_vec(),
+    ))
 }
 
 /// §8.3.1: AIK 証明書は tcg-kp-AIKCertificate EKU を持ち basicConstraints CA=false。
@@ -272,7 +275,11 @@ mod tests {
         assert!(Reader::new(&[0x00]).u16().is_err());
         assert!(Reader::new(&[0x00, 0x00, 0x00]).u32().is_err());
         // TPM2B: size=4 だが本体3バイトしかない。
-        assert!(Reader::new(&[0x00, 0x04, 0xaa, 0xbb, 0xcc]).tpm2b().is_err());
+        assert!(
+            Reader::new(&[0x00, 0x04, 0xaa, 0xbb, 0xcc])
+                .tpm2b()
+                .is_err()
+        );
     }
 
     #[test]
@@ -313,7 +320,10 @@ mod tests {
 
     #[test]
     fn verify_tpm_rejects_non_map_and_missing_fields() {
-        let cred = CredKey::Rs256 { n: vec![1], e: vec![1, 0, 1] };
+        let cred = CredKey::Rs256 {
+            n: vec![1],
+            e: vec![1, 0, 1],
+        };
         assert!(verify_tpm(&Cbor::Null, b"ad", b"cdj", &cred).is_err());
         // ver が無い空マップ。
         assert!(verify_tpm(&Cbor::Map(vec![]), b"ad", b"cdj", &cred).is_err());
