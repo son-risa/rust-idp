@@ -378,6 +378,36 @@ async fn register_confidential_secret_returns_raw_secret_once() {
     assert_ne!(stored.client_secret.as_deref(), Some(raw_secret));
 }
 
+/// 使い捨ての IAT は 1 度の登録で消費され、同じ IAT での 2 度目の登録は断られる。
+#[tokio::test]
+async fn a_single_use_initial_access_token_registers_only_once() {
+    let p = test_provider().await;
+    let fs = p.docs.as_deref().unwrap();
+    let constraints = crate::dcr::IatConstraints {
+        allowed_redirect_hosts: vec!["rp.example.com".into()],
+        allowed_grant_types: vec!["authorization_code".into()],
+        profile: crate::dcr::ClientProfile::Public,
+    };
+    let (raw_iat, iat_hash) = crate::dcr::gen_random_token();
+    let expires_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
+    crate::dcr_store::put_iat(fs, &iat_hash, &constraints, expires_at, false).await.unwrap();
+    let register = || {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, format!("Bearer {raw_iat}").parse().unwrap());
+        let body = json!({ "redirect_uris": ["https://rp.example.com/cb"] }).to_string();
+        oidc::register(State(p.clone()), headers, body)
+    };
+
+    let first = register().await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let second = register().await;
+    let status = second.status();
+    let body = body_json(second).await;
+    assert!(status.is_client_error(), "2 度目が通った: {status} {body:?}");
+    assert_eq!(body["error"], "invalid_token");
+    assert!(crate::dcr_store::peek_iat(fs, &iat_hash).await.unwrap().is_none(), "IAT が残っている");
+}
+
 /// account_admin::disable_account で凍結したアカウントが、実HTTPハンドラ(login_passkey_verify)
 /// 経由でログインを拒否されることを検証する。login.rs 側の disabled チェックの配線確認。
 #[tokio::test]
