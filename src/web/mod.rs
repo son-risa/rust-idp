@@ -1073,12 +1073,12 @@ mod obs_tests {
     /// sub 擬似化: 同じ sub は安定、異なる sub は別、生メールを含まない。
     #[test]
     fn pseudonymize_sub_is_stable_and_not_plaintext() {
-        let a = super::pseudonymize_sub("david3080@gmail.com");
-        let b = super::pseudonymize_sub("david3080@gmail.com");
+        let a = super::pseudonymize_sub("alice@example.com");
+        let b = super::pseudonymize_sub("alice@example.com");
         let c = super::pseudonymize_sub("other@example.com");
         assert_eq!(a, b, "同じ sub は安定な相関トークン");
         assert_ne!(a, c, "異なる sub は異なる");
-        assert!(!a.contains("david3080") && !a.contains('@'), "生メールを含まない: {a}");
+        assert!(!a.contains("alice") && !a.contains('@'), "生メールを含まない: {a}");
         assert!(a.starts_with("h:"), "擬似化マーカー h: 付き: {a}");
     }
 }

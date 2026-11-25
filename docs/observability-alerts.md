@@ -101,6 +101,6 @@ gcloud alpha monitoring policies create \
     - `OP: KMS sign failed (runtime)` — `kms_sign_failed` ≥1 / 5分（**追加**。実行時の署名失敗）
     - `OP: DCR registration spike` — `dcr_client_registered` > 3 / 1時間（**追加**）
   - log-based metric（`op_`）: `op_client_auth_failed` / `op_login_failed` / `op_token_issued`（既存）＋ `op_kms_sign_failed` / `op_dcr_registered`（追加）
-  - 通知チャネル: email → **`david3080@gmail.com`**（`rust-op OP alerts`, **VERIFIED**）。`info@sonrisa.co.jp` は M365(Exchange Online) で確認メールが検疫され未達のため不採用（チャネルは残置・M365 検疫を解けば後で差し替え可）。
+  - 通知チャネル: email → 管理者の個人の宛先（`rust-op OP alerts`, **VERIFIED**）。`info@sonrisa.co.jp` は M365(Exchange Online) で確認メールが検疫され未達のため不採用（チャネルは残置・M365 検疫を解けば後で差し替え可）。
 - **done（end-to-end 実証 2026-06-09）**: テストでクレデンシャルスタッフィング（`/token` に 14 回の認証失敗）→ `op_client_auth_failed` 集計 → `OP: auth failure spike` 発火 → **Gmail へ配信**を確認。失敗イベントは 5 分窓から抜けて自動 resolve。
 - **残（Enterprise/Advanced, 対象外）**: 自動 first-pass triage・統計的異常検知・agentic SOAR・不変監査ログ。
