@@ -143,6 +143,22 @@ pub(crate) async fn update_sign_count_changes_only_that_credential(s: &dyn FidoS
     assert!(s.find_credentials("nobody").await.is_empty());
 }
 
+/// signCount の更新は、渡した利用者が持つ credential にだけ効く。持ち主の違う credential は更新せず、持ち主も変えない。
+pub(crate) async fn update_sign_count_ignores_a_credential_of_another_user(s: &dyn FidoStore) {
+    s.save_credential("alice", cred("C1", es256(1), 4)).await;
+    s.save_credential("bob", cred("B1", es256(5), 2)).await;
+
+    s.update_sign_count("bob", "C1", 9).await;
+    assert_eq!(
+        sorted(s.find_credentials("alice").await),
+        sorted(vec![cred("C1", es256(1), 4)])
+    );
+    assert_eq!(
+        sorted(s.find_credentials("bob").await),
+        sorted(vec![cred("B1", es256(5), 2)])
+    );
+}
+
 /// `$make` は新しい空の保存先を返す async fn（`impl FidoStore`）。
 macro_rules! fido_store_contract_tests {
     ($make:path) => {
@@ -156,6 +172,7 @@ macro_rules! fido_store_contract_tests {
                 credentials_are_found_per_user_with_their_keys,
                 saving_the_same_credential_twice_keeps_one,
                 update_sign_count_changes_only_that_credential,
+                update_sign_count_ignores_a_credential_of_another_user,
             );
         }
     };
