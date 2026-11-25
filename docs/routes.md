@@ -120,3 +120,6 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 - `/ciba/{auth_req_id}/reject` はログインも passkey も要らない。`auth_req_id` を知る者なら誰でも拒否できる（失敗しても安全な側に倒れる操作として、そう作っている）。
 - `fido` の経路は CORS の層が OPTIONS（preflight）に答える。表の method には書かない。
 - どれにも当たらない要求は、`log_unmatched` が 404 を返す。
+- 要求の Host が `LEGACY_HOSTS`（カンマ区切りのホスト名。大文字小文字と port は見ない）のどれかなら、経路を見る前に
+  ORIGIN の同じ path と query へ 308 で送る。表に無い path も送る。ただし `/.well-known/apple-app-site-association` は送らずに返す
+  （Apple は転送された AASA を読まない）。`LEGACY_HOSTS` が空なら、どの Host でもこの表のとおり。
