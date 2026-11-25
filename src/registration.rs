@@ -880,6 +880,7 @@ mod tests {
     #[test]
     fn an_id_that_only_starts_with_two_underscores_is_storable() {
         assert!(credential_id_ok("__Xq3v9mPf0aB1cD2eF3gH4"));
+        assert!(credential_id_ok("___"), "`__.*__` は 4 文字から");
         assert!(!credential_id_ok("____"));
         assert!(!credential_id_ok("__abc__"));
         assert!(!credential_id_ok("a/b"));
