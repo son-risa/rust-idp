@@ -1024,6 +1024,11 @@ mod obs_tests {
             .with_max_level(tracing::Level::TRACE)
             .with_writer(VecWriter(buf.clone()))
             .finish();
+        // tracing-core は、生きている Dispatch が 1 つだけだと、新しい callsite の interest をそれを最初に
+        // 踏んだ thread の既定の subscriber だけで決めて固定する。同時に走るほかの試験（subscriber 無し）が
+        // `request_trace` の callsite を先に踏むと Never で固定され、ここの http_request が記録されない。
+        // 2 つ目の Dispatch を生かしておき、interest をすべての Dispatch から決めさせる。
+        let _second_dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
         let _guard = tracing::subscriber::set_default(subscriber);
 
         const BEARER: &str = "SECRET-BEARER-7f3a9c";
