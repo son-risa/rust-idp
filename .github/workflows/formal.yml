@@ -9,13 +9,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formal.yml"
+  # PR は paths で絞らない。tamarin と kani は main への merge に必須の検査なので、
+  # docs だけの PR でも結果（skipped）を出す必要がある。走らせるかは changes の job で決める。
   pull_request:
-    paths:
-      - "src/**"
-      - "formal/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/formal.yml"
 
 permissions:
   contents: read
@@ -29,7 +25,35 @@ env:
   KANI_VERSION: 0.68.0
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      formal: ${{ steps.files.outputs.formal }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # この job が落ちると後ろの job は skipped（必須の検査として通る）になるので、
+          # 一覧を取れないときは落とさずに走らせる側へ倒す。
+          if [ "$EVENT" != "pull_request" ]; then echo "formal=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename'); then
+            echo "formal=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$files" ] || grep -Eq '^(src/|formal/|Cargo\.toml$|Cargo\.lock$|\.github/workflows/formal\.yml$)' <<<"$files"; then
+            echo "formal=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "formal=false" >> "$GITHUB_OUTPUT"
+          fi
+
   tamarin:
+    needs: changes
+    if: needs.changes.outputs.formal == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -55,6 +79,8 @@ jobs:
         run: formal/check.sh
 
   kani:
+    needs: changes
+    if: needs.changes.outputs.formal == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

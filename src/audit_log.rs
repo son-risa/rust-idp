@@ -7,7 +7,10 @@
 //! 副次的な記録であり、これの失敗で本処理をロールバックする理由にはならない
 //! （accountsByUuid 逆引きインデックスの書き込み失敗時と同じ方針。registration.rs 参照）。
 
-use crate::firestore::{self, Firestore};
+use crate::firestore;
+use crate::document_store::DocumentStore;
+#[cfg(all(test, feature = "gcp"))]
+use crate::firestore::Firestore;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,7 +21,7 @@ fn now() -> u64 {
 /// actor: 操作を行った主体（CLI実行なら"cli"。将来の管理UIからならその管理者自身の account_id）。
 /// action: 操作種別（例 "disable_account"）。target: 操作対象の識別子（例 account_id）。
 /// detail: 人間可読の補足情報。
-pub async fn record(fs: &Firestore, actor: &str, action: &str, target: &str, detail: &str) {
+pub async fn record(fs: &dyn DocumentStore, actor: &str, action: &str, target: &str, detail: &str) {
     let id = uuid::Uuid::new_v4().to_string();
     let fields = json!({
         "actor": firestore::s(actor),
@@ -58,14 +61,14 @@ fn parse_entry(fields: &serde_json::Value) -> AuditEntry {
 
 /// 全体の直近N件（新しい順）。auditLog は書き込みが積み重なり続ける唯一のコレクションの
 /// ため、コレクション全体は取得せず Firestore 側で絞り込む（list_recent_ordered）。
-pub async fn list_recent(fs: &Firestore, limit: u32) -> Result<Vec<AuditEntry>, String> {
+pub async fn list_recent(fs: &dyn DocumentStore, limit: u32) -> Result<Vec<AuditEntry>, String> {
     let rows = fs.list_recent_ordered("auditLog", "at", limit).await?;
     Ok(rows.iter().map(|(_, fields)| parse_entry(fields)).collect())
 }
 
 /// 特定target（例: account_id）に紐づく履歴（新しい順）。1対象分に限定されるため既存の
 /// query_eq + クライアント側ソートで十分。
-pub async fn list_for_target(fs: &Firestore, target: &str) -> Result<Vec<AuditEntry>, String> {
+pub async fn list_for_target(fs: &dyn DocumentStore, target: &str) -> Result<Vec<AuditEntry>, String> {
     let rows = fs.query_eq("auditLog", "target", target).await?;
     let mut entries: Vec<AuditEntry> = rows.iter().map(|(_, fields)| parse_entry(fields)).collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.at));
@@ -79,7 +82,7 @@ mod tests {
 
     /// record() は at に now()(秒精度)しか使えず、同一テスト内で連続記録すると同一秒に
     /// なりうるため、順序を厳密に検証したいテストでは at を明示指定して直接書き込む。
-    async fn record_at(fs: &Firestore, action: &str, target: &str, at: u64) {
+    async fn record_at(fs: &dyn DocumentStore, action: &str, target: &str, at: u64) {
         fs.set_doc(
             "auditLog",
             &uuid::Uuid::new_v4().to_string(),

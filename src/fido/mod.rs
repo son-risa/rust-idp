@@ -72,10 +72,7 @@ impl FidoState {
         let rp_name = std::env::var("FIDO_RP_NAME").unwrap_or_else(|_| "rust-idp FIDO2".into());
         #[cfg(feature = "gcp")]
         let store: Arc<dyn FidoStore> = if std::env::var("K_SERVICE").is_ok() {
-            let project = std::env::var("GCLOUD_PROJECT")
-                .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
-                .unwrap_or_else(|_| "fido2-8b943".into());
-            let fs = Arc::new(crate::firestore::Firestore::new(project));
+            let fs = Arc::new(crate::firestore::Firestore::new(crate::gcp::resolve_project()));
             Arc::new(store::FirestoreFidoStore::new(fs))
         } else {
             Arc::new(MemFidoStore::default())

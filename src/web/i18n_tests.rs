@@ -249,16 +249,16 @@ async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
     register(&fs, "u@example.com", "acc-u").await;
     register(&fs, "boss@example.com", "acc-boss").await;
     register(&fs, "active@example.com", "acc-active").await;
-    crate::admin_store::grant_admin(&fs, "acc-me", "cli")
+    crate::admin_store::grant_admin(&*fs, "acc-me", "cli")
         .await
         .unwrap();
-    crate::admin_store::grant_admin(&fs, "acc-boss", "cli")
+    crate::admin_store::grant_admin(&*fs, "acc-boss", "cli")
         .await
         .unwrap();
-    crate::account_admin::disable_account(&fs, "acc-me", "u@example.com")
+    crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "acc-me", "u@example.com")
         .await
         .unwrap();
-    crate::account_admin::disable_account(&fs, "acc-me", "boss@example.com")
+    crate::account_admin::disable_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "acc-me", "boss@example.com")
         .await
         .unwrap();
     (p, fs)
@@ -432,11 +432,11 @@ async fn admin_pages_follow_the_browser_language() {
     .await;
 
     let mut client = client("rp-1");
-    crate::dcr_store::save_client(&fs, &client).await.unwrap();
+    crate::dcr_store::save_client(&*fs, &client).await.unwrap();
     client.client_id = "rp-2".into();
     client.post_logout_redirect_uris = vec!["https://rp.example.com/".into()];
     client.client_secret = Some("hash".into());
-    crate::dcr_store::save_client(&fs, &client).await.unwrap();
+    crate::dcr_store::save_client(&*fs, &client).await.unwrap();
     check_page("clients", "認証方式", |h| async move {
         body_of(admin::clients_list(State(p.clone()), h, jar.clone()).await).await
     })
@@ -462,10 +462,10 @@ async fn admin_pages_follow_the_browser_language() {
         allowed_grant_types: vec!["authorization_code".into()],
         profile: crate::dcr::ClientProfile::Public,
     };
-    crate::dcr_store::put_iat(&fs, "h-live", &constraints, now() + 3600, false)
+    crate::dcr_store::put_iat(&*fs, "h-live", &constraints, now() + 3600, false)
         .await
         .unwrap();
-    crate::dcr_store::put_iat(&fs, "h-old", &constraints, 1, false)
+    crate::dcr_store::put_iat(&*fs, "h-old", &constraints, 1, false)
         .await
         .unwrap();
     check_page("iats", "未消費のIAT", |h| async move {
@@ -487,6 +487,7 @@ async fn admin_pages_follow_the_browser_language() {
             let doc = serde_json::json!({
                 "raw_token": crate::firestore::s("raw"),
                 "expires_at": crate::firestore::int(expires_at),
+                "minted_by": crate::firestore::s("acc-me"),
             });
             fsr.set_doc("adminIatFlash", &flash, doc).await.unwrap();
             body_of(admin::iat_show_once(State(p.clone()), h, jar.clone(), Path(flash)).await).await
@@ -504,7 +505,7 @@ async fn giving_up_admin_rights_shows_a_page_in_the_browser_language() {
         |h| async move {
             let (p, fs) = admin_world().await;
             let jar = login_as(&p, "acc-me").await;
-            crate::account_admin::enable_account(&fs, "cli", "boss@example.com")
+            crate::account_admin::enable_account(&*fs, "cli", "boss@example.com")
                 .await
                 .unwrap();
             body_of(admin::user_revoke_admin(State(p), h, jar, Path("acc-me".into())).await).await
@@ -573,7 +574,7 @@ async fn admin_messages_follow_the_browser_language() {
     )
     .await;
 
-    crate::dcr_store::save_client(&fs, &client("rp-1"))
+    crate::dcr_store::save_client(&*fs, &client("rp-1"))
         .await
         .unwrap();
     check_text(
@@ -618,11 +619,11 @@ async fn admin_messages_follow_the_browser_language() {
     .await;
     let resp = set_entry("+https%3A%2F%2Frp.example.com%2Fauth%2Flogin+")(accept(Some("ja"))).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let stored = crate::dcr_store::load_client(&fs, "rp-1").await.unwrap();
+    let stored = crate::dcr_store::load_client(&*fs, "rp-1").await.unwrap();
     assert_eq!(stored.initiate_login_uri.as_deref(), Some("https://rp.example.com/auth/login"));
     let resp = set_entry("")(accept(Some("ja"))).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert!(crate::dcr_store::load_client(&fs, "rp-1").await.unwrap().initiate_login_uri.is_none());
+    assert!(crate::dcr_store::load_client(&*fs, "rp-1").await.unwrap().initiate_login_uri.is_none());
 }
 
 #[cfg(feature = "gcp")]
@@ -633,7 +634,7 @@ async fn the_last_admin_message_follows_the_browser_language() {
         "最後の管理者は剥奪できません",
         |h| async move {
             let (p, fs) = with_firestore().await;
-            crate::admin_store::grant_admin(&fs, "acc-only", "cli")
+            crate::admin_store::grant_admin(&*fs, "acc-only", "cli")
                 .await
                 .unwrap();
             let jar = login_as(&p, "acc-only").await;
@@ -1241,7 +1242,7 @@ async fn the_account_page_is_in_the_viewers_language() {
         sign_count: 0,
         aaguid: String::new(),
     };
-    crate::registration::save_credential(&fs, "u@example.com", "acc-u", &second).await.unwrap();
+    crate::registration::save_credential(&*fs, "u@example.com", "acc-u", &second).await.unwrap();
     check_page("account (signed out)", "パスキーでログイン", |h| {
         let p = p.clone();
         async move { body_of(account::account_page(State(p), h, CookieJar::default(), Query(account::AccountQuery::default())).await).await }
@@ -1269,7 +1270,7 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
         sign_count: 0,
         aaguid: String::new(),
     };
-    crate::registration::save_credential(&fs, "u@example.com", "acc-u", &legacy).await.unwrap();
+    crate::registration::save_credential(&*fs, "u@example.com", "acc-u", &legacy).await.unwrap();
     let mut f = fs.get_doc("credentials", "cred-legacy").await.unwrap().unwrap();
     f.as_object_mut().unwrap().remove("createdAt");
     fs.set_doc("credentials", "cred-legacy", f).await.unwrap();

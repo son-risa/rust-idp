@@ -1,0 +1,67 @@
+# 日本語版。英語版の出力の下（site/public/ja/）へ出す。site/build.sh が英語版の後に build する。
+site_name: rust-idp
+site_description: パスキーでログインする OpenID Provider（Rust 製）。
+site_url: !ENV [SITE_URL_JA, "https://son-risa.github.io/rust-idp/ja/"]
+repo_url: https://github.com/son-risa/rust-idp
+repo_name: son-risa/rust-idp
+edit_uri: ""
+copyright: rust-idp は MIT License で公開しています。
+
+docs_dir: ja
+site_dir: public/ja
+use_directory_urls: true
+
+theme:
+  name: material
+  variant: modern
+  custom_dir: overrides
+  language: ja
+  font: false
+  features:
+    - navigation.footer
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: lucide/moon
+        name: 暗い表示へ
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: lucide/sun
+        name: 明るい表示へ
+
+extra_css:
+  - assets/site.css
+
+extra:
+  generator: false
+  alternate:
+    - name: English
+      link: ../
+      lang: en
+    - name: 日本語
+      link: ./
+      lang: ja
+
+markdown_extensions:
+  - tables
+  - attr_list
+  - md_in_html
+  - admonition
+  - toc:
+      permalink: true
+
+nav:
+  - ホーム: index.md
+  - 使い始める: get-started.md
+  - 検証: verification.md
+  - 要件:
+      - 要件一覧: requirements/index.md
+      - 要件一覧の決まり: requirements/rules.md
+  - 設計の文書: design-docs.md
