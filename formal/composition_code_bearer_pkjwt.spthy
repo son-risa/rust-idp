@@ -51,7 +51,8 @@ rule Setup_User:
 rule Reveal_User:
     [ !UserKey(U, ~uk) ] --[ RevealUser(U) ]-> [ Out(~uk) ]
 
-/* ---- client の登録。秘密鍵は client だけが持ち、AS は公開鍵（jwks）だけを持つ ---- */
+/* ---- client の登録。秘密鍵は client だけが持ち、AS は公開鍵（jwks）だけを持つ ----
+   P-NOLEGACYSECRET: この client は共有の秘密を持たず、Basic の口は置かない。 */
 rule Register_Client:
     [ Fr(~ck) ]
   --[ OnlyOnce(<'client', $C>) ]->
@@ -195,7 +196,7 @@ lemma consent_agreement:
 
 /* client のなりすまし: AS が C として認めた token 要求の assertion は、C 自身がこの code の償還のために作ったもの。
    秘密鍵が漏れない限り。処理を終えた要求の記録（assertion）が漏れても成り立つ（条件に RevealLog が無い）。
-   jti の単回を外した NEG 版は、手元で 4 分を超えても反例の跡が出なかったので置いていない（README のモデル #11）。 */
+   jti の単回を外すと falsified になる（29 steps）。全 lemma だと CI の時間を超えるおそれがあるので、NEG 版は置いていない（README のモデル #11）。 */
 lemma client_auth_sound:
     "All C jti code #i.
         AuthedAssertion(C, jti, code) @ #i

@@ -235,14 +235,6 @@
     "kani": ["refresh_family_walk_terminates"]
   },
   {
-    "id": "P-SINGLEUSE",
-    "model": "composition_code_bearer_secret.spthy",
-    "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
-    "assurance": "store の code 消費（単回）",
-    "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
-    "tests": ["store::tests::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::code_is_taken_once"]
-  },
-  {
     "id": "P-VERIFIER",
     "model": "composition_code_bearer_secret.spthy",
     "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
@@ -295,14 +287,6 @@
     "outside": "記録の設定は配備と RP の側にあり、rust-idp の試験で示せない"
   },
   {
-    "id": "P-SINGLEUSE",
-    "model": "composition_code_bearer_pkjwt.spthy",
-    "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
-    "assurance": "store の code 消費（単回）",
-    "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
-    "tests": ["store::tests::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::code_is_taken_once"]
-  },
-  {
     "id": "P-VERIFIER",
     "model": "composition_code_bearer_pkjwt.spthy",
     "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
@@ -347,5 +331,12 @@
     "guard": ["src/client_auth.rs: PrivateKeyJwt::authenticate", "src/nonce.rs: NonceStore::claim"],
     "tests": ["client_auth::tests::pkjwt_rejects_jti_replay", "client_auth::tests::pkjwt_rejects_alg_aud_and_expiry", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch_and_bad_signature"],
     "kani": ["jti_ttl_is_bounded", "exp_in_window_spec"]
+  },
+  {
+    "id": "P-NOLEGACYSECRET",
+    "model": "composition_code_bearer_pkjwt.spthy",
+    "premise": "private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない）",
+    "assurance": "**いまは担保が無い**。`ClientSecretBasic::authenticate` は登録された `token_endpoint_auth_method` を見ず、`client_secret` のハッシュが残っていれば Basic で通す。private_key_jwt に移した client にハッシュが残ると、漏れた秘密でなりすませる。本番の主な RP の移行の後で、登録された方式だけを受けるように直す予定",
+    "outside": "守るコードがまだ無い（本番の主な RP の移行の後で直す予定）"
   }
 ]
