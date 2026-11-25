@@ -7,7 +7,7 @@ rust-idp states each security claim as "promise Z holds against attacker X under
 | Method | Covers | Does not cover |
 |---|---|---|
 | Tamarin | 13 protocol models. 19 variants, each with one defence removed, must be falsified | Whether the code matches the models |
-| Kani | 9 functions in the code | The rest of the code |
+| Kani | 9 harnesses over parts of the code | The rest of the code |
 | Tests | Externally visible behaviour, and every premise that can be tested | Premises that cannot be tested |
 | Conformance tools | FIDO Alliance server tests on the `/fido` surface; OpenID Foundation FAPI 2.0 tests on the FAPI 2.0 client shape | Other client shapes. Production sign-in is a separate code path from `/fido` |
 

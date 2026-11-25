@@ -29,7 +29,7 @@ description: rust-idp は Rust 製の OSS の OpenID Provider。Cloud Run の 1 
     <article class="rh-card">
       <h3>サーバレスで安価に動かす</h3>
       <p>Cloud Run の 1 サービスに、状態は Firestore、署名鍵は Cloud KMS。独自のドメインは Cloud Run に直に割り当てるので、LB も、自分で持つ仮想機械も、パスワードの DB も運用しない。</p>
-      <p class="rh-gaveup"><span>諦めたこと</span>mTLS と、TLS の暗号の選択。送り主の束縛は DPoP で行い、TLS の終端は Google に任せる。</p>
+      <p class="rh-gaveup"><span>諦めたこと</span>mTLS。送り主の束縛は DPoP で行い、TLS の終端は Google に任せる。</p>
       <p class="rh-src"><a href="https://github.com/son-risa/rust-idp/blob/main/docs/zero-trust-assessment.md">docs/zero-trust-assessment.md</a></p>
     </article>
     <article class="rh-card">
@@ -82,7 +82,7 @@ description: rust-idp は Rust 製の OSS の OpenID Provider。Cloud Run の 1 
     </article>
     <article class="rh-card rh-feature">
       <h3>形式検証</h3>
-      <p>Tamarin のモデル 13 本と、守りを外した 19 本。Kani で 9 関数。</p>
+      <p>Tamarin のモデル 13 本と、守りを外した 19 本。Kani のハーネス 9 本。</p>
       <p class="rh-scope">範囲：モデルは手書き。コード全体の証明ではない。</p>
       <p class="rh-src"><a href="https://github.com/son-risa/rust-idp/blob/main/formal/expected.tsv">formal/expected.tsv</a> <a href="https://github.com/son-risa/rust-idp/blob/main/formal/kani-harnesses.txt">formal/kani-harnesses.txt</a></p>
     </article>
@@ -208,7 +208,7 @@ description: rust-idp は Rust 製の OSS の OpenID Provider。Cloud Run の 1 
       <thead><tr><th>確かめ方</th><th>対象</th><th>見ないもの</th></tr></thead>
       <tbody>
         <tr><td>Tamarin</td><td>プロトコルのモデル 13 本。守りを 1 つ外した 19 本は破れることを確かめる</td><td>コードとモデルの一致</td></tr>
-        <tr><td>Kani</td><td>コードの 9 関数（バイト列の解析、PKCE の格下げ、redirect の完全一致など）</td><td>残りのコード</td></tr>
+        <tr><td>Kani</td><td>ハーネス 9 本（バイト列の解析、PKCE の格下げ、redirect の完全一致など）</td><td>残りのコード</td></tr>
         <tr><td>試験と適合試験の道具</td><td>外から見える振る舞い</td><td>適合試験の道具を当てていない client の形</td></tr>
         <tr><td>前提の台帳</td><td>前提 44 件。25 件は守る試験の名前を持ち、19 件は試験にできない理由を書く</td><td>試験にできない前提が、運用で成り立っているか</td></tr>
       </tbody>

@@ -23,6 +23,7 @@ Passkey sign-in, PAR, dynamic client registration and the admin pages need the `
 - Website: [Get started](https://son-risa.github.io/rust-idp/get-started/) · [Verification](https://son-risa.github.io/rust-idp/verification/)
 - [docs/verification-map.md](docs/verification-map.md): which models, tests and premises apply to each client profile
 - [docs/routes.md](docs/routes.md): every HTTP route
+- [docs/development.md](docs/development.md): running locally, the FIDO2 conformance tool, heavy fuzzing, static clients, deploy notes (Japanese)
 - [formal/README.md](formal/README.md): Tamarin models and Kani harnesses
 - [docs/security-ladder.md](docs/security-ladder.md), [docs/zero-trust-assessment.md](docs/zero-trust-assessment.md), [docs/crypto-assumptions.md](docs/crypto-assumptions.md)
 

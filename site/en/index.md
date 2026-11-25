@@ -29,7 +29,7 @@ description: rust-idp is an open-source OpenID Provider in Rust. It runs as a si
     <article class="rh-card">
       <h3>Serverless and inexpensive</h3>
       <p>One Cloud Run service, Firestore for state and Cloud KMS for signing keys. The custom domain is mapped straight to Cloud Run, so there is no load balancer, no virtual machine of your own and no password database to operate.</p>
-      <p class="rh-gaveup"><span>Gave up</span> mTLS and the choice of TLS cipher suites. Sender-constraining is done with DPoP, and TLS terminates at Google.</p>
+      <p class="rh-gaveup"><span>Gave up</span> mTLS. Sender-constraining is done with DPoP, and TLS terminates at Google.</p>
       <p class="rh-src"><a href="https://github.com/son-risa/rust-idp/blob/main/docs/zero-trust-assessment.md">docs/zero-trust-assessment.md</a></p>
     </article>
     <article class="rh-card">
@@ -82,7 +82,7 @@ description: rust-idp is an open-source OpenID Provider in Rust. It runs as a si
     </article>
     <article class="rh-card rh-feature">
       <h3>Formal verification</h3>
-      <p>13 Tamarin models, plus 19 variants with a defence removed. 9 functions checked with Kani.</p>
+      <p>13 Tamarin models, plus 19 variants with a defence removed. 9 Kani harnesses.</p>
       <p class="rh-scope">Scope: the models are hand-written. This is not a proof of the whole code base.</p>
       <p class="rh-src"><a href="https://github.com/son-risa/rust-idp/blob/main/formal/expected.tsv">formal/expected.tsv</a> <a href="https://github.com/son-risa/rust-idp/blob/main/formal/kani-harnesses.txt">formal/kani-harnesses.txt</a></p>
     </article>
@@ -208,7 +208,7 @@ description: rust-idp is an open-source OpenID Provider in Rust. It runs as a si
       <thead><tr><th>Method</th><th>Covers</th><th>Does not cover</th></tr></thead>
       <tbody>
         <tr><td>Tamarin</td><td>13 protocol models; 19 variants with one defence removed must be falsified</td><td>Whether the code matches the models</td></tr>
-        <tr><td>Kani</td><td>9 functions (byte parsing, PKCE downgrade, exact redirect match, and others)</td><td>The rest of the code</td></tr>
+        <tr><td>Kani</td><td>9 harnesses (byte parsing, PKCE downgrade, exact redirect match, and others)</td><td>The rest of the code</td></tr>
         <tr><td>Tests and conformance tools</td><td>Externally visible behaviour</td><td>Client shapes the conformance tools were not run against</td></tr>
         <tr><td>Premise ledger</td><td>44 premises; 25 name a guarding test, 19 cannot be tested and say why</td><td>Whether the untestable premises hold in operation</td></tr>
       </tbody>
