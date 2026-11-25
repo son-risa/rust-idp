@@ -5,7 +5,7 @@
     "premise": "認可コードは**原子的に単回消費**される（`AS_Code` が linear）",
     "assurance": "store の code 消費（単回）。`Store` の契約の試験 `code_reuse_revokes_issued_tokens`（メモリと Firestore の両方に当てる）",
     "guard": ["src/store.rs: MemoryStore::take_code", "src/firestore_store.rs: FirestoreStore::take_code"],
-    "tests": ["store::tests::contract::code_reuse_revokes_issued_tokens", "grants::tests::auth_code_reuse_is_rejected", "firestore_store::tests::contract::code_reuse_revokes_issued_tokens"]
+    "tests": ["store::tests::contract::code_reuse_revokes_issued_tokens", "grants::tests::authorization_code::contract::redeems_once", "firestore_store::tests::contract::code_reuse_revokes_issued_tokens"]
   },
   {
     "id": "P-CODEFRESH",
@@ -21,7 +21,7 @@
     "premise": "PKCE の verifier は**秘密**で、`h(verifier)=challenge` を AS が検査",
     "assurance": "`CheckPkce`（S256 のみ受理、`auth_checks.rs`）",
     "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
-    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::auth_code_pkce_success_and_failure"],
+    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::authorization_code::contract::redeems_what_was_issued_to_the_client", "grants::tests::authorization_code::contract::refuses_any_altered_value"],
     "kani": ["pkce_method_no_downgrade"]
   },
   {
@@ -37,7 +37,7 @@
     "premise": "クライアントは**事前登録**され AS が公開鍵を知る",
     "assurance": "`with_client` / DCR（`clients` 登録、`resolve_client`）",
     "guard": ["src/provider.rs: Provider::resolve_client"],
-    "tests": ["auth_checks::tests::resolve_addressee_resolves_and_rejects_unknown_client", "client_auth::tests::secret_basic_unknown_client_rejected"]
+    "tests": ["auth_checks::tests::resolve_addressee_resolves_and_rejects_unknown_client", "client_auth::tests::client_secret_basic::contract::refuses_an_unknown_client"]
   },
   {
     "id": "P-TLS",
@@ -67,7 +67,7 @@
     "premise": "DPoP proof の署名検証（ES256）",
     "assurance": "`Es256Dpop`（`dpop.rs`）",
     "guard": ["src/dpop.rs: Es256Dpop::verify"],
-    "tests": ["dpop::tests::rejects_tampered_signature", "dpop::tests::rejects_proof_signed_by_different_key_than_embedded_jwk"]
+    "tests": ["dpop::tests::memory::contract::rejects_a_signature_the_embedded_key_did_not_make", "dpop::tests::firestore::contract::rejects_a_signature_the_embedded_key_did_not_make"]
   },
   {
     "id": "P-JTI",
@@ -75,7 +75,7 @@
     "premise": "DPoP proof の jti 単回（リプレイ防止）",
     "assurance": "jti 単回ストア（`NonceStore` / Firestore 分散）",
     "guard": ["src/nonce.rs: NonceStore::claim"],
-    "tests": ["dpop::tests::rejects_jti_replay", "nonce::tests::memory_claim_is_single_use", "nonce::tests::firestore_claim_is_single_use"]
+    "tests": ["dpop::tests::memory::contract::rejects_jti_replay", "dpop::tests::firestore::contract::rejects_jti_replay", "nonce::tests::memory_claim_is_single_use", "nonce::tests::firestore_claim_is_single_use"]
   },
   {
     "id": "P-BIND",
@@ -98,7 +98,7 @@
     "premise": "マンデート(auth_req_id) は**単回消費**",
     "assurance": "`mandate_consumed` CAS（/oauth/mandate/consume）+ CIBA store の単回",
     "guard": ["src/ciba.rs: MemoryCibaStore::consume_if_approved", "src/ciba.rs: FirestoreCibaStore::consume_if_approved", "src/store.rs: MemoryStore::consume_mandate_if_unused", "src/firestore_store.rs: FirestoreStore::consume_mandate_if_unused"],
-    "tests": ["ciba::tests::memory::contract::consume_if_approved_is_single_use", "store::tests::contract::consume_mandate_is_single_use", "firestore_store::tests::contract::consume_mandate_is_single_use", "grants::tests::ciba_approved_issues_tokens_once_then_rejects_reuse", "ciba::tests::firestore::contract::consume_if_approved_is_single_use"]
+    "tests": ["ciba::tests::memory::contract::consume_if_approved_is_single_use", "store::tests::contract::consume_mandate_is_single_use", "firestore_store::tests::contract::consume_mandate_is_single_use", "grants::tests::ciba::contract::redeems_once", "ciba::tests::firestore::contract::consume_if_approved_is_single_use"]
   },
   {
     "id": "P-CAUTH",
@@ -106,7 +106,7 @@
     "premise": "backchannel と poll で**クライアント認証**",
     "assurance": "ciba-rp Basic（live e2e で実機確認済）",
     "guard": ["src/client_auth.rs: ClientSecretBasic::authenticate", "src/client_auth.rs: PrivateKeyJwt::authenticate"],
-    "tests": ["client_auth::tests::secret_basic_wrong_secret_rejected", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch_and_bad_signature", "grants::tests::ciba_unknown_and_other_client_rejected"]
+    "tests": ["client_auth::tests::client_secret_basic::contract::refuses_forged_material", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch", "client_auth::tests::private_key_jwt::contract::refuses_forged_material", "grants::tests::ciba::contract::refuses_what_was_issued_to_another_client", "grants::tests::ciba::contract::refuses_any_altered_value"]
   },
   {
     "id": "P-UAUTH",
@@ -240,7 +240,7 @@
     "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
     "assurance": "`CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる）",
     "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
-    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::auth_code_pkce_success_and_failure"],
+    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::authorization_code::contract::redeems_what_was_issued_to_the_client", "grants::tests::authorization_code::contract::refuses_any_altered_value"],
     "kani": ["pkce_method_no_downgrade"]
   },
   {
@@ -277,7 +277,7 @@
     "premise": "AS は提示された秘密の**ハッシュ**を、登録したハッシュと比べる（`h(cs) = hs`）",
     "assurance": "`ClientSecretBasic::authenticate`（`hash_token` を定数時間で比べる。平文は保存しない）",
     "guard": ["src/client_auth.rs: ClientSecretBasic::authenticate", "src/client_auth.rs: secret_eq"],
-    "tests": ["client_auth::tests::secret_basic_correct_secret_authenticates", "client_auth::tests::secret_basic_wrong_secret_rejected", "client_auth::tests::secret_basic_unknown_client_rejected", "client_auth::tests::secret_client_helper_never_stores_plaintext"]
+    "tests": ["client_auth::tests::client_secret_basic::contract::authenticates_its_client_with_its_material", "client_auth::tests::client_secret_basic::contract::refuses_forged_material", "client_auth::tests::client_secret_basic::contract::refuses_an_unknown_client", "client_auth::tests::secret_client_helper_never_stores_plaintext"]
   },
   {
     "id": "P-NOCREDLOG",
@@ -292,7 +292,7 @@
     "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
     "assurance": "`CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる）",
     "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
-    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::auth_code_pkce_success_and_failure"],
+    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::authorization_code::contract::redeems_what_was_issued_to_the_client", "grants::tests::authorization_code::contract::refuses_any_altered_value"],
     "kani": ["pkce_method_no_downgrade"]
   },
   {
@@ -329,7 +329,7 @@
     "premise": "client_assertion の jti は **1 回だけ**受ける（記録から漏れた assertion を使い回させない）",
     "assurance": "`PrivateKeyJwt::authenticate` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ",
     "guard": ["src/client_auth.rs: PrivateKeyJwt::authenticate", "src/nonce.rs: NonceStore::claim"],
-    "tests": ["client_auth::tests::pkjwt_rejects_jti_replay", "client_auth::tests::pkjwt_rejects_alg_aud_and_expiry", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch_and_bad_signature"],
+    "tests": ["client_auth::tests::pkjwt_rejects_jti_replay", "client_auth::tests::pkjwt_rejects_alg_aud_and_expiry", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch", "client_auth::tests::private_key_jwt::contract::refuses_forged_material"],
     "kani": ["jti_ttl_is_bounded", "exp_in_window_spec"]
   },
   {

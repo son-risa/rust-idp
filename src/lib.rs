@@ -22,11 +22,15 @@ mod admin_command;
 mod admin_store;
 mod audit_log;
 mod auth_checks;
+#[cfg(test)]
+mod authorization_check_contract;
 mod ciba;
 #[cfg(test)]
 mod ciba_store_contract;
 mod claims;
 mod client_auth;
+#[cfg(test)]
+mod client_auth_contract;
 mod context;
 mod dcr;
 mod dcr_store;
@@ -36,6 +40,8 @@ mod document_store;
 #[cfg(test)]
 mod document_store_contract;
 mod dpop;
+#[cfg(test)]
+mod dpop_verifier_contract;
 mod error;
 mod es256;
 mod fcm;
@@ -51,6 +57,8 @@ mod formal_ledger_tests;
 mod fuzz_tests;
 #[cfg(feature = "gcp")]
 pub mod gcp;
+#[cfg(test)]
+mod grant_handler_contract;
 mod grants;
 mod http;
 mod interaction_policy;
@@ -72,6 +80,8 @@ mod provider;
 mod registration;
 mod request_object;
 mod response_mode;
+#[cfg(test)]
+mod response_mode_contract;
 mod sig;
 mod step_up;
 mod store;

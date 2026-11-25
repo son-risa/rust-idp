@@ -344,6 +344,27 @@ mod tests {
         );
     }
 
+    mod response_type {
+        async fn check() -> super::CheckResponseType {
+            super::CheckResponseType
+        }
+        crate::authorization_check_contract::authorization_check_contract_tests!(check);
+    }
+
+    mod scope {
+        async fn check() -> super::CheckScope {
+            super::CheckScope
+        }
+        crate::authorization_check_contract::authorization_check_contract_tests!(check);
+    }
+
+    mod pkce {
+        async fn check() -> super::CheckPkce {
+            super::CheckPkce
+        }
+        crate::authorization_check_contract::authorization_check_contract_tests!(check);
+    }
+
     /// method を省いた challenge は RFC 7636 §4.3 により plain とみなす。S256 とみなして通さない。
     #[tokio::test]
     async fn check_pkce_refuses_a_challenge_without_method() {
