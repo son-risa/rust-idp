@@ -69,6 +69,7 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | POST | `/account/passkeys/options` | ブラウザ | cookie（sid、確かめ済み） | はい | いいえ |
 | base | POST | `/account/passkeys/verify` | ブラウザ | cookie（sid、確かめ済み）、passkey | はい | いいえ |
 | base | POST | `/account/passkeys/delete` | ブラウザ | cookie（sid、確かめ済み） | はい | いいえ |
+| base | POST | `/account/profile` | ブラウザ | cookie（sid、確かめ済み） | はい | はい |
 | base | GET | `/recover` | ブラウザ | 無し（`t` があればメールの token） | いいえ | いいえ |
 | base | POST | `/recover` | ブラウザ | 無し | はい | いいえ |
 | base | POST | `/recover/options` | ブラウザ | メールの token | はい | いいえ |

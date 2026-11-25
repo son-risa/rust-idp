@@ -322,7 +322,12 @@ fn router_with_legacy_hosts(provider: Provider, legacy_hosts: &str) -> Router {
         .route("/admin/iats/flash/{flash_id}", get(admin::iat_show_once))
         .route_layer(axum::middleware::from_fn_with_state(shared.clone(), admin_same_origin));
 
-    let inner = inner.merge(admin).with_state(shared.clone());
+    // 本人の画面の form の POST も、同じ門で自分の origin から来たものだけを通す。
+    let account_forms = Router::new()
+        .route("/account/profile", post(account::save_name))
+        .route_layer(axum::middleware::from_fn_with_state(shared.clone(), admin_same_origin));
+
+    let inner = inner.merge(admin).merge(account_forms).with_state(shared.clone());
 
     // メールリンク /r はトップレベル（base_path 非依存、AASA の paths と一致）。
     let magic = Router::new()
