@@ -1944,6 +1944,81 @@ mod tests {
         }
     }
 
+    /// private_key_jwt で登録した client が secret を持っていても、secret だけでは通さない。
+    #[tokio::test]
+    async fn a_private_key_jwt_client_with_a_stored_secret_is_still_refused_with_client_secret_basic() {
+        let p = Arc::new(Provider::new("https://op.example").with_client(crate::model::Client {
+            client_id: "pk-rp".into(),
+            client_secret: Some(crate::dcr::hash_token("s3cret")),
+            grant_types: vec!["authorization_code".into()],
+            ..client("private_key_jwt")
+        }));
+        let (status, body) = token_error(
+            &p,
+            basic_header("pk-rp", "s3cret"),
+            &[("grant_type", "authorization_code"), ("code", "C"), ("redirect_uri", "https://rp.example/cb")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["error"], "invalid_client");
+    }
+
+    /// client 認証を取るほかの口（introspect・revoke・mandate の消費）も、登録と違う方式を断る。
+    #[tokio::test]
+    async fn introspect_revoke_and_mandate_consume_refuse_a_method_other_than_the_registered_one() {
+        let p = Arc::new(Provider::new("https://op.example").with_client(crate::model::Client {
+            client_id: "rs".into(),
+            client_secret: Some(crate::dcr::hash_token("s3cret")),
+            ..client("private_key_jwt")
+        }));
+        p.store.save_access_token(AccessToken { client_id: "rs".into(), ..at(None) }).await.unwrap();
+        let form = || Form(HashMap::from([("token".to_string(), "AT".to_string())]));
+        let h = || basic_header("rs", "s3cret");
+
+        assert_eq!(introspect(State(p.clone()), h(), form()).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(mandate_consume(State(p.clone()), h(), form()).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(revoke(State(p.clone()), h(), form()).await.status(), StatusCode::UNAUTHORIZED);
+        assert!(p.store.get_access_token("AT").await.unwrap().is_some(), "断ったはずの revoke が token を消した");
+    }
+
+    /// client_secret_basic で登録した client は、署名の正しい private_key_jwt の assertion で来ても断る。
+    #[tokio::test]
+    async fn a_client_secret_basic_client_is_refused_with_a_private_key_jwt_assertion() {
+        use p256::ecdsa::signature::Signer;
+        use p256::elliptic_curve::Generate;
+        let key = p256::ecdsa::SigningKey::generate();
+        let pt = key.verifying_key().to_sec1_point(false);
+        let b64 = |b: &[u8]| crate::es256::b64url_encode(b);
+        let p = Arc::new(Provider::new("https://op.example").with_client(crate::model::Client {
+            client_id: "rp".into(),
+            client_secret: Some(crate::dcr::hash_token("s3cret")),
+            grant_types: vec!["authorization_code".into()],
+            jwks: vec![crate::model::JwkPub { kid: "k1".into(), x: b64(pt.x().unwrap()), y: b64(pt.y().unwrap()) }],
+            ..client("client_secret_basic")
+        }));
+        let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 300;
+        let header = b64(&serde_json::to_vec(&serde_json::json!({ "alg": "ES256", "kid": "k1" })).unwrap());
+        let claims = serde_json::json!({ "iss": "rp", "sub": "rp", "aud": "https://op.example", "exp": exp, "jti": "j1" });
+        let signing_input = format!("{header}.{}", b64(&serde_json::to_vec(&claims).unwrap()));
+        let sig: p256::ecdsa::Signature = key.sign(signing_input.as_bytes());
+        let assertion = format!("{signing_input}.{}", b64(&sig.to_bytes()));
+
+        let (status, body) = token_error(
+            &p,
+            HeaderMap::new(),
+            &[
+                ("grant_type", "authorization_code"),
+                ("code", "C"),
+                ("redirect_uri", "https://rp.example/cb"),
+                ("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+                ("client_assertion", &assertion),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body["error"], "invalid_client");
+    }
+
     #[test]
     fn introspection_dpop_token_includes_cnf_jkt() {
         let b = introspection_active_body(&at(Some("JKT123")));

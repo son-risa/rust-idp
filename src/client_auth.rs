@@ -88,6 +88,10 @@ impl ClientAuthMethod for ClientSecretBasic {
             .resolve_client(id)
             .await
             .ok_or_else(|| OAuthError::InvalidClient(format!("unknown client {id}")))?;
+        // 登録した方式が別なら、secret を持っていても通さない。空は RFC 7591 §2 の既定（client_secret_basic）とみなす。
+        if !matches!(client.token_endpoint_auth_method.as_str(), "client_secret_basic" | "") {
+            return Err(OAuthError::InvalidClient("client is not client_secret_basic".into()));
+        }
         let presented_hash = crate::dcr::hash_token(secret);
         match &client.client_secret {
             Some(stored_hash) if secret_eq(stored_hash, &presented_hash) => Ok(client),
@@ -292,6 +296,22 @@ mod tests {
             .authenticate(&p, &input(None, None, Some(("rp", "wrong"))))
             .await;
         assert!(err.is_err());
+    }
+
+    /// 方式の欄が空の client は、RFC 7591 §2 の既定（client_secret_basic）として今までどおり secret で通る。
+    /// public（none）と private_key_jwt の client は secret を持っていても通らない。
+    #[tokio::test]
+    async fn secret_basic_accepts_an_unset_method_and_refuses_other_registered_methods() {
+        let p = provider()
+            .with_client(secret_client("unset", "hunter2", ""))
+            .with_client(secret_client("pub", "hunter2", "none"))
+            .with_client(secret_client("pk", "hunter2", "private_key_jwt"));
+        let auth = |id: &str| input(None, None, Some((id, "hunter2")));
+        assert!(ClientSecretBasic.authenticate(&p, &auth("unset")).await.is_ok());
+        for id in ["pub", "pk"] {
+            let r = ClientSecretBasic.authenticate(&p, &auth(id)).await;
+            assert!(matches!(r, Err(OAuthError::InvalidClient(_))), "{id}");
+        }
     }
 
     #[test]
