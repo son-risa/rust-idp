@@ -3,7 +3,7 @@ begin
 
 /*
   ロードマップ #1 変種: public client（クライアント認証なし・PKCE のみ）
-  rust-op の実主力クライアント demo-rp / mobile-rp（token_endpoint_auth_method = "none" + PKCE）に対応。
+  rust-idp の実主力クライアント demo-rp / mobile-rp（token_endpoint_auth_method = "none" + PKCE）に対応。
 
   狙い: confidential client では client認証とPKCEが多層防御で冗長だったが、
         public client では **PKCE が唯一の防御**になる。PKCE の“個別の必要性”を表に出す。

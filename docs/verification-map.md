@@ -7,7 +7,7 @@ client の profile ごとに並べる。「形式検証した」「適合試験�
   （`token_endpoint_auth_method`・`require_par`・`require_pkce`・`dpop_bound`、`model::Client`）に合わせる。
   旗を個別に決めた組み合わせと CIBA は、`ClientProfile` には無いので別の行に置く。
 - 前提の ID は [`formal/premises.json`](../formal/premises.json) の行（ID と model の組）。各モデルの節の
-  「表に出た前提 → rust-op の担保」（[`formal/README.md`](../formal/README.md)）が台帳から作った表。
+  「表に出た前提 → rust-idp の担保」（[`formal/README.md`](../formal/README.md)）が台帳から作った表。
 - 利用者の認証（passkey）は、どの profile にも共通に掛かる。`webauthn.spthy`（`authentication`・`challenge_single_use`、
   前提 P-AKEY・P-ORIGIN・P-CHAL・P-SIG）は下の表では繰り返さない。
 - refresh token のローテーションと系列の失効は、どの profile にも共通に掛かる。`refresh.spthy`（前提 P-RSINGLE・P-RFAMILY）も繰り返さない。

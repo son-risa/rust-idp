@@ -19,7 +19,7 @@ begin
 
 builtins: signing
 
-/* ---- OP の署名鍵（rust-op は ES256 / Cloud KMS）---- */
+/* ---- OP の署名鍵（rust-idp は ES256 / Cloud KMS）---- */
 rule Setup_OP:
     [ Fr(~sk) ]
   --[ ]->

@@ -76,7 +76,7 @@ gcloud logging metrics create rust_op_http_5xx \
 # kms_sign_failed: 1 件でも発火
 gcloud alpha monitoring policies create \
   --project=fido2-8b943 \
-  --display-name="rust-op: KMS sign failed" \
+  --display-name="rust-idp: KMS sign failed" \
   --condition-display-name="kms_sign_failed >= 1 (5m)" \
   --condition-filter='metric.type="logging.googleapis.com/user/rust_op_kms_sign_failed" resource.type="cloud_run_revision"' \
   --condition-threshold-value=0 \

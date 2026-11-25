@@ -3,7 +3,7 @@ begin
 
 /*
   ロードマップ #1: 認可コード + PKCE + クライアント認証 -> アクセストークン
-  rust-op の「委譲の核」を Tamarin で記号的にモデル化した第一版。
+  rust-idp の「委譲の核」を Tamarin で記号的にモデル化した第一版。
   対象は confidential client（private_key_jwt 相当 = DCR/FAPI クライアント）。
 
   狙い: 「防げる攻撃」と「そのための前提」を表に出す。完璧な証明より前提の明示が目的。
@@ -53,7 +53,7 @@ rule C_AuthRequest:
 
 /* ---- AS: 認可コード発行（ユーザ同意は抽象化）。フロントチャネルへ redirect ----
    前提[P-CODEFRESH]: code は推測不能（CSPRNG = Fr）。
-   前提[P-SINGLEUSE]: AS_Code は linear fact = 原子的単回消費（rust-op の code consume に対応）。
+   前提[P-SINGLEUSE]: AS_Code は linear fact = 原子的単回消費（rust-idp の code consume に対応）。
      これを !AS_Code（persistent）にすると code が再利用でき code_single_use が破れる
      → 「原子的単回消費」が必要前提だと見える。 */
 rule AS_IssueCode:

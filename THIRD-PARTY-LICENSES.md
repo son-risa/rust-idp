@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-rust-op をバイナリ（Cloud Run コンテナ等）としてビルドすると、以下のサードパーティ crate が
+rust-idp をバイナリ（Cloud Run コンテナ等）としてビルドすると、以下のサードパーティ crate が
 コンパイル時に組み込まれる。バイナリを第三者へ配布する際の OSS アトリビューション用一覧。
 
 - 対象: **実行時（normal）依存のみ**。dev-dependencies（proptest / coset 等）は配布バイナリに含まれないため除外。

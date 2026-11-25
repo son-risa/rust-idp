@@ -1,4 +1,4 @@
-//! `formal/premises.json`（Tamarin のモデルが表に出した前提 P-* → rust-op の担保）が
+//! `formal/premises.json`（Tamarin のモデルが表に出した前提 P-* → rust-idp の担保）が
 //! 実在するものだけを指していることを検める門。
 //!
 //! - README の前提の表は台帳から作る。`<!-- premises: {model} -->` と `<!-- /premises -->` の間が、台帳の
@@ -87,7 +87,7 @@ fn premise_tables(rows: &[Premise]) -> Result<BTreeMap<String, String>, Vec<Stri
         }
         tables
             .entry(p.model.clone())
-            .or_insert_with(|| "| ID | 前提（抽象） | rust-op の担保 |\n|---|---|---|\n".to_string())
+            .or_insert_with(|| "| ID | 前提（抽象） | rust-idp の担保 |\n|---|---|---|\n".to_string())
             .push_str(&format!("| {} | {} | {} |\n", p.id, p.premise, p.assurance));
     }
     if errors.is_empty() {

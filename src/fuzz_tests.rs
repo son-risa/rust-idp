@@ -5,7 +5,7 @@
 //! 内 panic = 500/中断 = DoS）。各 target は Result を返すだけで、Ok/Err は問わない。
 //! proptest は panic を最小化入力つきの失敗として報告するので、退行検出器として働く。
 //!
-//! ピュア Rust crypto は rust-op の差別化点であると同時に最大のリスク面（peer は
+//! ピュア Rust crypto は rust-idp の差別化点であると同時に最大のリスク面（peer は
 //! webauthn-rs/ring/openssl 等の枯れた実装に委譲する）。ここを継続的に締める。
 
 use crate::es256;

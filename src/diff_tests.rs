@@ -1,8 +1,8 @@
 //! 自前 COSE 鍵パーサ(`parse_cose_key`)を、独立実装 `coset`（ピュア Rust の RFC 8152
 //! 実装, openssl/ring 非依存）と突き合わせる**差分テスト**。
 //!
-//! 方向: coset が COSE_Key をエンコード → rust-op がパース。独立ライブラリが生成した
-//! 構造を rust-op が同一の (x,y) として解釈できることを確認する。これは fuzz（panic 安全性）
+//! 方向: coset が COSE_Key をエンコード → rust-idp がパース。独立ライブラリが生成した
+//! 構造を rust-idp が同一の (x,y) として解釈できることを確認する。これは fuzz（panic 安全性）
 //! では拾えない「ラベル取り違え・座標抽出ミス」のような**意味論バグ**を捕える。
 //!
 //! parse_cose_key は登録時に検証鍵そのものを取り出す最重要パーサ（ここが誤れば
@@ -14,7 +14,7 @@ use coset::{iana, CborSerializable, CoseKeyBuilder};
 use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::SecretKey;
 
-/// coset がエンコードした EC2/ES256/P-256 の COSE_Key を rust-op がパースし、
+/// coset がエンコードした EC2/ES256/P-256 の COSE_Key を rust-idp がパースし、
 /// 取り出した (x,y) が元の鍵と完全一致することを多数のランダム鍵で確認する。
 #[test]
 fn parse_cose_key_agrees_with_coset_oracle_es256() {
@@ -31,19 +31,19 @@ fn parse_cose_key_agrees_with_coset_oracle_es256() {
             .to_vec()
             .expect("coset encode COSE_Key");
 
-        // rust-op の手書きパーサが、独立実装の出力を同じ (x,y) として解釈すること。
+        // rust-idp の手書きパーサが、独立実装の出力を同じ (x,y) として解釈すること。
         match verify::parse_cose_key(&bytes) {
             Ok((CredKey::Es256 { x: rx, y: ry }, _)) => {
                 assert_eq!(rx, x, "x が coset オラクルと不一致（ラベル -2 の取り違え等）");
                 assert_eq!(ry, y, "y が coset オラクルと不一致（ラベル -3 の取り違え等）");
             }
             Ok((other, _)) => panic!("ES256 を期待したが alg {}", other.cose_alg()),
-            Err(e) => panic!("rust-op が coset 生成の正当な COSE_Key を拒否: {e}"),
+            Err(e) => panic!("rust-idp が coset 生成の正当な COSE_Key を拒否: {e}"),
         }
     }
 }
 
-/// coset がエンコードした OKP/EdDSA/Ed25519 の COSE_Key を rust-op が Ed25519 として
+/// coset がエンコードした OKP/EdDSA/Ed25519 の COSE_Key を rust-idp が Ed25519 として
 /// 解釈し、公開鍵バイトが一致すること（multi-alg 経路の差分）。
 #[test]
 fn parse_cose_key_agrees_with_coset_oracle_ed25519() {
@@ -73,7 +73,7 @@ fn parse_cose_key_agrees_with_coset_oracle_ed25519() {
                 assert_eq!(rpk, pk, "Ed25519 公開鍵が coset オラクルと不一致");
             }
             Ok((other, _)) => panic!("Ed25519 を期待したが alg {}", other.cose_alg()),
-            Err(e) => panic!("rust-op が coset 生成の OKP 鍵を拒否: {e}"),
+            Err(e) => panic!("rust-idp が coset 生成の OKP 鍵を拒否: {e}"),
         }
     }
 }

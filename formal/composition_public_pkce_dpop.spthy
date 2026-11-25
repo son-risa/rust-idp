@@ -3,7 +3,7 @@ begin
 
 /*
   backlog #8: public client の完全合成（認可コード × redirect_uri 完全一致 × PKCE × #2 DPoP × ユーザ同意）
-  rust-op の public client（token_endpoint_auth_method="none"、demo-rp / mobile-rp 型）。
+  rust-idp の public client（token_endpoint_auth_method="none"、demo-rp / mobile-rp 型）。
   #6（confidential = private_key_jwt の合成）と対になる **public 版**。
 
   ★ 形式検証が隠れた前提を炙り出した実例（#6 に続く2例目）:
