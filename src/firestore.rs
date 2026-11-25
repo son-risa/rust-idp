@@ -745,8 +745,11 @@ pub fn field_str<'a>(fields: &'a Value, name: &str) -> Option<&'a str> {
 /// 別途信頼する）。ここで検証するのは「クライアント側(このクレート)がプリコンディションを
 /// 正しく送り、勝敗のレスポンスを正しく解釈するか」「fcm.rs が Firestore とは別ホストへ
 /// 正しく POST するか」という、実際にこのコードベースがバグを混入しうる部分に限定する。
-#[cfg(all(test, feature = "gcp"))]
+// gcp は内側に書く。外側を #[cfg(test)] だけにしておくと、経路の照合の試験（web/routes_tests.rs）が試験の mod として除ける。
+#[allow(clippy::mixed_attributes_style)]
+#[cfg(test)]
 pub(crate) mod fake_firestore {
+    #![cfg(feature = "gcp")]
     use axum::extract::{Path, Query, State};
     use axum::http::StatusCode;
     use axum::response::{IntoResponse, Response};
@@ -1127,8 +1130,10 @@ pub(crate) mod fake_firestore {
     }
 }
 
-#[cfg(all(test, feature = "gcp"))]
+#[allow(clippy::mixed_attributes_style)]
+#[cfg(test)]
 mod tests {
+    #![cfg(feature = "gcp")]
     use std::assert_matches;
     use super::*;
 
