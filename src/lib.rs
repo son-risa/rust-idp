@@ -18,6 +18,7 @@
 #![cfg_attr(not(kani), forbid(unsafe_code))]
 
 mod account_admin;
+mod admin_command;
 mod admin_store;
 mod audit_log;
 mod auth_checks;
@@ -67,6 +68,8 @@ mod store;
 mod web;
 mod webauthn;
 
+#[doc(hidden)]
+pub use admin_command::AdminCommand;
 pub use auth_checks::AuthorizationCheck;
 pub use ciba::{AuthReqId, BackchannelAuthRequest, CibaHistoryEntry, CibaStatus, CibaStore, MemoryCibaStore};
 pub use client_auth::{ClientAuthInput, ClientAuthMethod};
@@ -82,7 +85,7 @@ pub use model::{
     AccessToken, Account, AuthParams, AuthorizationCode, Client, Interaction, JwkPub, RefreshToken, Session,
     TokenResponse,
 };
-pub use provider::Provider;
+pub use provider::{MobileApp, Provider};
 pub use response_mode::ResponseMode;
 pub use store::{CodeTake, MemoryStore, Store, StoreError, StoreResult};
 pub use web::i18n::Lang;

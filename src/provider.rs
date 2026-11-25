@@ -55,6 +55,21 @@ pub struct Provider {
     pub(crate) jwks_resolver: crate::jwks_resolver::JwksResolver,
     /// 招待の登録リンク（POST /invites）の発行を許す confidential client の client_id。空なら誰にも許さない。
     pub(crate) invite_clients: Vec<String>,
+    /// メールのリンクから passkey の登録を渡すネイティブのアプリ。None ならアプリへの誘導と AASA を出さない。
+    pub(crate) mobile_app: Option<MobileApp>,
+}
+
+/// 登録の画面からアプリを開く誘導（iOS の custom scheme・Android の intent）と、
+/// `/.well-known/apple-app-site-association` に出すアプリ。
+#[derive(Clone, Debug)]
+pub struct MobileApp {
+    /// 登録の画面に出すアプリの名前。
+    pub name: String,
+    /// アプリの custom scheme（`{scheme}://magic?t=...` で開く）。
+    pub scheme: String,
+    pub android_package: String,
+    /// AASA の appID（`TEAMID.bundle.id`）。
+    pub apple_app_id: String,
 }
 
 impl Provider {
@@ -102,6 +117,7 @@ impl Provider {
             response_modes,
             jwks_resolver: crate::jwks_resolver::JwksResolver::new(),
             invite_clients: Vec::new(),
+            mobile_app: None,
         }
     }
 
@@ -249,6 +265,11 @@ impl Provider {
 
     pub fn with_invite_clients(mut self, ids: Vec<String>) -> Self {
         self.invite_clients = ids;
+        self
+    }
+
+    pub fn with_mobile_app(mut self, app: MobileApp) -> Self {
+        self.mobile_app = Some(app);
         self
     }
 

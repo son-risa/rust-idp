@@ -233,7 +233,7 @@ __TARGET__<label for="nm" id="nml">[[Name]]</label>
 <input id="nm" autocomplete="name" maxlength="80">
 <p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
 <div id="mobile" hidden>
- <p>[[Register securely with the fido2demo app.]]</p>
+ <p>[[Register securely with the {app} app.]]</p>
  <button class="primary" onclick="openApp()">[[Open in the app]]</button>
  <p class="small">[[If the app is installed, it opens automatically. If it does not, continue on the web with the button below.]]</p>
  <p class="small">[[If you open the app, the name above is not saved. It is saved if you continue on the web.]]</p>
@@ -251,6 +251,7 @@ __TARGET__<label for="nm" id="nml">[[Name]]</label>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
 const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER,WEB_ONLY=__WEB_ONLY__;
+const APP_SCHEME=__APP_SCHEME__,APP_PACKAGE=__APP_PACKAGE__,MAGIC=__MAGIC__;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
@@ -259,8 +260,8 @@ document.getElementById((!AFTER&&!WEB_ONLY&&(isAndroid||isIOS))?'mobile':'deskto
 document.getElementById('ioshint').hidden=!isIOS;
 function openApp(){
  const url=isAndroid
-  ?('intent://magic?t='+TOKEN+'#Intent;scheme=jp.co.sonrisa.fido2demo;package=jp.co.sonrisa.fido2demo;S.browser_fallback_url='+encodeURIComponent('https://oidc.sonrisa.co.jp/r?t='+TOKEN)+';end')
-  :('jp.co.sonrisa.fido2demo://magic?t='+TOKEN);
+  ?('intent://magic?t='+TOKEN+'#Intent;scheme='+APP_SCHEME+';package='+APP_PACKAGE+';S.browser_fallback_url='+encodeURIComponent(MAGIC+'?t='+TOKEN)+';end')
+  :(APP_SCHEME+'://magic?t='+TOKEN);
  location.href=url;
 }
 async function reg(){
@@ -296,7 +297,14 @@ async function reg(){
         .replace("__SWITCH__", if current.is_some() { super::SWITCH_NOTICE } else { "" })
         .replace("__MAIN_HIDDEN__", if current.is_some() { "hidden" } else { "" })
         .replace("__TARGET__", if target.is_some() { "<p>{target}</p>\n" } else { "" });
+    // アプリが設定されていなければ、モバイルでも Web で登録する。
+    let app = p.mobile_app.as_ref();
+    let web_only = web_only || app.is_none();
     let html = localize(&body, lang)
+            .replace("{app}", &super::admin::esc(app.map_or("", |a| a.name.as_str())))
+            .replace("__APP_SCHEME__", &js_string_literal(app.map_or("", |a| a.scheme.as_str())))
+            .replace("__APP_PACKAGE__", &js_string_literal(app.map_or("", |a| a.android_package.as_str())))
+            .replace("__MAGIC__", &js_string_literal(&format!("{}/r", p.origin())))
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
@@ -328,14 +336,19 @@ pub(super) async fn magic_redirect(
     link_landing(&p, &jar, Lang::from_headers(&headers), &q.t, false).await
 }
 
-/// oidc.sonrisa.co.jp は Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
+/// IdP の host が Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
 /// ここで返す。applinks=Universal Link(/r でアプリ起動)、webcredentials=ネイティブ passkey。
-pub(super) async fn apple_app_site_association() -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"applinks":{"apps":[],"details":[{"appID":"RA5A5W7PJB.jp.co.sonrisa.fido2demo","paths":["/r","/r?*"]}]},"webcredentials":{"apps":["RA5A5W7PJB.jp.co.sonrisa.fido2demo"]}}"#,
-    )
-        .into_response()
+/// アプリが設定されていなければ 404。
+pub(super) async fn apple_app_site_association(State(p): State<Arc<Provider>>) -> Response {
+    let Some(app) = &p.mobile_app else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let id = app.apple_app_id.as_str();
+    Json(serde_json::json!({
+        "applinks": {"apps": [], "details": [{"appID": id, "paths": ["/r", "/r?*"]}]},
+        "webcredentials": {"apps": [id]},
+    }))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1215,9 +1228,19 @@ mod invite_tests {
         )
         .await;
         assert!(from_sign_in.contains("WEB_ONLY=true"), "{from_sign_in}");
+        let no_app = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
+        assert!(no_app.contains("WEB_ONLY=true"), "アプリを設定していなければ /r でも Web で済ませる");
+        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()).with_mobile_app(crate::MobileApp {
+            name: "Demo<App>".into(),
+            scheme: "com.example.demo".into(),
+            android_package: "com.example.pkg".into(),
+            apple_app_id: "TEAM123456.com.example.demo".into(),
+        }));
         let app_link = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
         assert!(app_link.contains("WEB_ONLY=false"));
         assert!(app_link.contains(r#"<div id="fallback">"#), "Web で続けるボタンが隠れている");
+        assert!(app_link.contains("Demo&lt;App&gt;"), "{app_link}");
+        assert!(app_link.contains(r#"APP_SCHEME="com.example.demo",APP_PACKAGE="com.example.pkg",MAGIC="https://idp.example/r";"#), "{app_link}");
     }
 
     /// iPhone のときだけ、保存先は iCloud がよいと案内する（AMATE の要件の一覧の #3）。

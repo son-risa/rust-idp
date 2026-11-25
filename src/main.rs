@@ -1,19 +1,7 @@
 // ピュア Rust 方針の明文化: unsafe を全面禁止する（lib.rs と同じ）。
 #![forbid(unsafe_code)]
 
-use rust_idp::{Client, JwkPub, Provider};
-
-#[cfg(not(feature = "gcp"))]
-const ADMIN_COMMANDS: &[&str] = &[
-    "mint",
-    "revoke-client",
-    "grant-admin",
-    "revoke-admin",
-    "disable-account",
-    "enable-account",
-    "migrate-static-clients",
-    "migrate-credentials",
-];
+use rust_idp::{Client, JwkPub, MobileApp, Provider};
 
 #[tokio::main]
 async fn main() {
@@ -38,7 +26,7 @@ async fn main() {
         return;
     }
     #[cfg(not(feature = "gcp"))]
-    if let Some(cmd) = argv.get(1).filter(|c| ADMIN_COMMANDS.contains(&c.as_str())) {
+    if let Some(cmd) = argv.get(1).filter(|c| rust_idp::AdminCommand::from_name(c).is_some()) {
         eprintln!("{cmd}: Firestore を使うので、gcp の feature を付けて build した binary でだけ使えます");
         std::process::exit(2);
     }
@@ -64,6 +52,10 @@ async fn main() {
             .map(str::to_string)
             .collect(),
     );
+
+    if let Some(app) = mobile_app_from_env() {
+        provider = provider.with_mobile_app(app);
+    }
 
     // FAPI2 conformance 用の静的クライアント（fapi-1 = client / fapi-2 = client2）。
     // FAPI 認定スイートは動的登録 variant を持たず静的クライアント専用なので、認定時のみ
@@ -127,6 +119,16 @@ async fn main() {
             }
         }
     }
+}
+
+/// 登録の画面から開くアプリと AASA。4 つが揃っていれば Some。
+fn mobile_app_from_env() -> Option<MobileApp> {
+    Some(MobileApp {
+        name: std::env::var("APP_NAME").ok()?,
+        scheme: std::env::var("APP_SCHEME").ok()?,
+        android_package: std::env::var("APP_ANDROID_PACKAGE").ok()?,
+        apple_app_id: std::env::var("APPLE_APP_ID").ok()?,
+    })
 }
 
 /// FAPI conformance クライアントを env から組む。`{prefix}_X` `{prefix}_Y` `{prefix}_KID`

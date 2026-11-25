@@ -172,7 +172,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Create a passkey", "パスキーを作成"),
     ("Name (required)", "氏名（必須）"),
     ("Name (optional)", "氏名（任意）"),
-    ("Register securely with the fido2demo app.", "fido2demo アプリで安全に登録します。"),
+    ("Register securely with the {app} app.", "{app} アプリで安全に登録します。"),
     ("Open in the app", "アプリで開く"),
     (
         "If the app is installed, it opens automatically. If it does not, continue on the web with the button below.",

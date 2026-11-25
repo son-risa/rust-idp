@@ -133,7 +133,22 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
             .with_ciba(std::sync::Arc::new(ciba::FirestoreCibaStore::new(fs.clone())))
             .with_firestore(fs);
         if let Ok(key) = std::env::var("RESEND_API_KEY") {
-            provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key)));
+            // 互換: 本番の Cloud Run に MAIL_FROM が入るまでは、今までの差出人に落とす。
+            let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| {
+                tracing::warn!("MAIL_FROM is not set; using the legacy sender");
+                "rust-idp <noreply@sonrisa.co.jp>".into()
+            });
+            provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from)));
+        }
+        // 互換: 本番の Cloud Run に APP_* が入るまでは、今までのアプリ（fido2demo）を出す。
+        if provider.mobile_app.is_none() && std::env::var("K_SERVICE").is_ok() {
+            tracing::warn!("APP_NAME / APP_SCHEME / APP_ANDROID_PACKAGE / APPLE_APP_ID are not set; using the legacy app");
+            provider = provider.with_mobile_app(crate::MobileApp {
+                name: "fido2demo".into(),
+                scheme: "jp.co.sonrisa.fido2demo".into(),
+                android_package: "jp.co.sonrisa.fido2demo".into(),
+                apple_app_id: "RA5A5W7PJB.jp.co.sonrisa.fido2demo".into(),
+            });
         }
     }
     provider
@@ -141,16 +156,20 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
 
 /// argv[1] が管理者用サブコマンドなら、それを実行して true を返す。サーバ起動前に呼ぶ。
 pub async fn run_admin_command(argv: &[String]) -> bool {
-    match argv.get(1).map(String::as_str) {
-        Some("mint") => mint_iat(&argv[2..]).await,
-        Some("revoke-client") => revoke_client(&argv[2..]).await,
-        Some("grant-admin") => grant_admin_cmd(&argv[2..]).await,
-        Some("revoke-admin") => revoke_admin_cmd(&argv[2..]).await,
-        Some("disable-account") => disable_account_cmd(&argv[2..]).await,
-        Some("enable-account") => enable_account_cmd(&argv[2..]).await,
-        Some("migrate-static-clients") => migrate_static_clients_cmd(&argv[2..]).await,
-        Some("migrate-credentials") => migrate_credentials_cmd(&argv[2..]).await,
-        _ => return false,
+    use crate::AdminCommand as C;
+    let Some(cmd) = argv.get(1).and_then(|c| C::from_name(c)) else {
+        return false;
+    };
+    let args = &argv[2..];
+    match cmd {
+        C::Mint => mint_iat(args).await,
+        C::RevokeClient => revoke_client(args).await,
+        C::GrantAdmin => grant_admin_cmd(args).await,
+        C::RevokeAdmin => revoke_admin_cmd(args).await,
+        C::DisableAccount => disable_account_cmd(args).await,
+        C::EnableAccount => enable_account_cmd(args).await,
+        C::MigrateStaticClients => migrate_static_clients_cmd(args).await,
+        C::MigrateCredentials => migrate_credentials_cmd(args).await,
     }
     true
 }
@@ -309,11 +328,15 @@ fn fail(msg: &str) -> ! {
 }
 
 /// 管理者用サブコマンド/Firestore配線が使う GCP プロジェクトIDの解決。
-/// GCLOUD_PROJECT → GOOGLE_CLOUD_PROJECT → 既定値("fido2-8b943")の順。
-fn resolve_project() -> String {
-    std::env::var("GCLOUD_PROJECT")
-        .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
-        .unwrap_or_else(|_| "fido2-8b943".into())
+/// GCLOUD_PROJECT → GOOGLE_CLOUD_PROJECT の順。どちらも無ければ止まる（別のプロジェクトへ書かないため）。
+pub(crate) fn resolve_project() -> String {
+    match std::env::var("GCLOUD_PROJECT").or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT")) {
+        Ok(project) => project,
+        Err(_) => {
+            tracing::error!("FATAL: set GCLOUD_PROJECT or GOOGLE_CLOUD_PROJECT to the GCP project id");
+            std::process::exit(2);
+        }
+    }
 }
 
 /// 管理者用クライアント revoke（制御つき DCR）。
