@@ -13,8 +13,9 @@ use crate::{
 /// Cloud Run 上 (K_SERVICE あり) では Firestore + KMS/Secret Manager + Resend を有効化。
 /// ローカルで FIRESTORE_EMULATOR_HOST のみ設定されている場合は、Firestore 関連の配線
 /// （Store/CibaStore/DPoP/private_key_jwt/registration 直叩き）だけをエミュレータへ向けて
-/// 有効化する。KMS・Secret Manager・Resend は実 GCP 前提なので K_SERVICE 限定のまま
-/// （ローカルは Provider::new の既定 ephemeral 鍵 + LogMailer で動かす）。
+/// 有効化する。KMS・Secret Manager は実 GCP 前提なので K_SERVICE 限定のまま
+/// （ローカルは Provider::new の既定 ephemeral 鍵で動かす）。Resend は RESEND_API_KEY と
+/// MAIL_FROM が両方あれば手元でも使い、無ければ LogMailer。
 /// どちらも無ければ何も足さずに返す。
 pub async fn configure_from_env(mut provider: Provider) -> Provider {
     let use_firestore =
@@ -133,7 +134,32 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
             .with_ciba(std::sync::Arc::new(ciba::FirestoreCibaStore::new(fs.clone())))
             .with_firestore(fs);
         if let Ok(key) = std::env::var("RESEND_API_KEY") {
-            provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key)));
+            // 互換: 本番の Cloud Run に MAIL_FROM が入るまでは、今までの差出人に落とす。手元（エミュレータ）では
+            // 落とさず Resend を使わない。メールはログに出るので、リンクはそこから拾える。
+            let from = match std::env::var("MAIL_FROM") {
+                Ok(from) => Some(from),
+                Err(_) if std::env::var("K_SERVICE").is_ok() => {
+                    tracing::warn!("MAIL_FROM is not set; using the legacy sender");
+                    Some("rust-idp <noreply@sonrisa.co.jp>".into())
+                }
+                Err(_) => {
+                    tracing::warn!("RESEND_API_KEY is set but MAIL_FROM is not; mail goes to the log instead of Resend");
+                    None
+                }
+            };
+            if let Some(from) = from {
+                provider = provider.with_mailer(std::sync::Arc::new(mailer::ResendMailer::new(key, from)));
+            }
+        }
+        // 互換: 本番の Cloud Run に APP_* が入るまでは、今までのアプリ（fido2demo）を出す。
+        if provider.mobile_app.is_none() && std::env::var("K_SERVICE").is_ok() {
+            tracing::warn!("APP_NAME / APP_SCHEME / APP_ANDROID_PACKAGE / APPLE_APP_ID are not set; using the legacy app");
+            provider = provider.with_mobile_app(crate::MobileApp {
+                name: "fido2demo".into(),
+                scheme: "jp.co.sonrisa.fido2demo".into(),
+                android_package: "jp.co.sonrisa.fido2demo".into(),
+                apple_app_id: "RA5A5W7PJB.jp.co.sonrisa.fido2demo".into(),
+            });
         }
     }
     provider
@@ -141,16 +167,20 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
 
 /// argv[1] が管理者用サブコマンドなら、それを実行して true を返す。サーバ起動前に呼ぶ。
 pub async fn run_admin_command(argv: &[String]) -> bool {
-    match argv.get(1).map(String::as_str) {
-        Some("mint") => mint_iat(&argv[2..]).await,
-        Some("revoke-client") => revoke_client(&argv[2..]).await,
-        Some("grant-admin") => grant_admin_cmd(&argv[2..]).await,
-        Some("revoke-admin") => revoke_admin_cmd(&argv[2..]).await,
-        Some("disable-account") => disable_account_cmd(&argv[2..]).await,
-        Some("enable-account") => enable_account_cmd(&argv[2..]).await,
-        Some("migrate-static-clients") => migrate_static_clients_cmd(&argv[2..]).await,
-        Some("migrate-credentials") => migrate_credentials_cmd(&argv[2..]).await,
-        _ => return false,
+    use crate::AdminCommand as C;
+    let Some(cmd) = argv.get(1).and_then(|c| C::from_name(c)) else {
+        return false;
+    };
+    let args = &argv[2..];
+    match cmd {
+        C::Mint => mint_iat(args).await,
+        C::RevokeClient => revoke_client(args).await,
+        C::GrantAdmin => grant_admin_cmd(args).await,
+        C::RevokeAdmin => revoke_admin_cmd(args).await,
+        C::DisableAccount => disable_account_cmd(args).await,
+        C::EnableAccount => enable_account_cmd(args).await,
+        C::MigrateStaticClients => migrate_static_clients_cmd(args).await,
+        C::MigrateCredentials => migrate_credentials_cmd(args).await,
     }
     true
 }
@@ -309,11 +339,15 @@ fn fail(msg: &str) -> ! {
 }
 
 /// 管理者用サブコマンド/Firestore配線が使う GCP プロジェクトIDの解決。
-/// GCLOUD_PROJECT → GOOGLE_CLOUD_PROJECT → 既定値("fido2-8b943")の順。
-fn resolve_project() -> String {
-    std::env::var("GCLOUD_PROJECT")
-        .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
-        .unwrap_or_else(|_| "fido2-8b943".into())
+/// GCLOUD_PROJECT → GOOGLE_CLOUD_PROJECT の順。どちらも無ければ止まる（別のプロジェクトへ書かないため）。
+pub(crate) fn resolve_project() -> String {
+    match std::env::var("GCLOUD_PROJECT").or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT")) {
+        Ok(project) => project,
+        Err(_) => {
+            tracing::error!("FATAL: set GCLOUD_PROJECT or GOOGLE_CLOUD_PROJECT to the GCP project id");
+            std::process::exit(2);
+        }
+    }
 }
 
 /// 管理者用クライアント revoke（制御つき DCR）。
@@ -453,7 +487,8 @@ async fn revoke_admin_cmd(args: &[String]) {
 /// `rust-idp disable-account --email <email>`
 async fn disable_account_cmd(args: &[String]) {
     let email = parse_email_arg("disable-account", args);
-    let fs = firestore::Firestore::new(resolve_project());
+    let fs = std::sync::Arc::new(firestore::Firestore::new(resolve_project()));
+    let store = firestore_store::FirestoreStore::new(fs.clone());
     let report = |label: &str, counts: &account_admin::RevocationCounts| {
         println!(
             "{label}: {email} (sessions={} access_tokens={} refresh_tokens={})",
@@ -470,7 +505,7 @@ async fn disable_account_cmd(args: &[String]) {
             std::process::exit(1);
         }
     };
-    match account_admin::disable_account(&fs, "cli", &email).await {
+    match account_admin::disable_account(&*fs, &store, "cli", &email).await {
         Ok(account_admin::DisableOutcome::Disabled(counts)) => report("disabled", &counts),
         Ok(account_admin::DisableOutcome::AlreadyDisabled(counts)) => {
             report("already disabled", &counts)

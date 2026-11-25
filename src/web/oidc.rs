@@ -113,7 +113,7 @@ pub(super) async fn authorize(
     } else {
         match q0.get("request_uri") {
             Some(request_uri) if request_uri.starts_with(crate::par::URN_PREFIX) => {
-                let fs = match &p.firestore {
+                let fs = match p.docs.as_deref() {
                     Some(fs) => fs,
                     None => return app_error(lang, "server_error", "PAR unavailable (no Firestore)"),
                 };
@@ -339,7 +339,7 @@ async fn issue_code(
     }
     // 認可完了: PAR の request_uri をコードを作る前に単回消費する（RFC 9126）。
     // 並行した完了のうち消費に勝った 1 つだけがコードを受け取る。
-    if let (Some(ru), Some(fs)) = (&req.request_uri, &p.firestore) {
+    if let (Some(ru), Some(fs)) = (&req.request_uri, p.docs.as_deref()) {
         match crate::par::consume(fs, ru).await {
             Ok(true) => {}
             Ok(false) => {
@@ -830,7 +830,7 @@ fn hidden(name: &str, value: &str) -> String {
 /* ===== PAR (RFC 9126) ===== */
 
 pub(super) async fn par(State(p): State<Arc<Provider>>, headers: HeaderMap, body: String) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -932,7 +932,7 @@ pub(super) async fn profile_get(State(p): State<Arc<Provider>>, headers: HeaderM
         Ok(at) => at,
         Err(r) => return r,
     };
-    let profile = match &p.firestore {
+    let profile = match p.docs.as_deref() {
         Some(fs) => crate::registration::get_profile(fs, &at.account_id)
             .await
             .unwrap_or_default(),
@@ -946,7 +946,7 @@ pub(super) async fn profile_put(State(p): State<Arc<Provider>>, headers: HeaderM
         Ok(at) => at,
         Err(r) => return r,
     };
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => return (StatusCode::NOT_IMPLEMENTED, "profile store unavailable").into_response(),
     };
@@ -995,7 +995,7 @@ pub(super) async fn register(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(f) => f,
         None => {
             return dcr_error(
@@ -1199,7 +1199,7 @@ mod tests {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let p = Arc::new(Provider::new("https://op.example").with_firestore(fs.clone()));
-        let ru = crate::par::create(&fs, "dcr-y", "client_id=dcr-y&response_type=code&scope=openid").await.unwrap();
+        let ru = crate::par::create(&*fs, "dcr-y", "client_id=dcr-y&response_type=code&scope=openid").await.unwrap();
         let authorize_as = |client: &str| {
             let q = serde_urlencoded::to_string([("client_id", client), ("request_uri", ru.0.as_str())]).unwrap();
             authorize(State(p.clone()), HeaderMap::new(), CookieJar::default(), RawQuery(Some(q)))
@@ -1599,7 +1599,7 @@ mod tests {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let p = Provider::new("https://op.example").with_firestore(fs.clone());
-        let ru = crate::par::create(&fs, "dcr-x", "response_type=code").await.unwrap();
+        let ru = crate::par::create(&*fs, "dcr-x", "response_type=code").await.unwrap();
         let req = crate::context::AddressedRequest {
             params: crate::model::AuthParams {
                 client_id: Some("dcr-x".into()),
@@ -1678,7 +1678,7 @@ mod tests {
             let resp = put(serde_json::json!({ "name": bad })).await;
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad:?}");
         }
-        let saved = crate::registration::get_profile(&fs, "user@example.com").await.unwrap();
+        let saved = crate::registration::get_profile(&*fs, "user@example.com").await.unwrap();
         assert_eq!(saved.get("name").map(String::as_str), Some("山田 太郎"));
     }
 

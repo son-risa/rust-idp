@@ -161,7 +161,7 @@ pub struct AuthorizationCodeGrant;
 /// 凍結の失効（account_admin::revoke_all）はコードと CIBA の要求を消さず、RT の回しと競りうるので、
 /// 発行の時にも見る。Firestore を使わない構成（テスト・PoC）には凍結が無いので見ない。
 async fn ensure_account_active(p: &Provider, account_id: &str) -> Result<(), OAuthError> {
-    let Some(fs) = &p.firestore else {
+    let Some(fs) = p.docs.as_deref() else {
         return Ok(());
     };
     // accountsByUuid の逆引きは書き損ねても登録を通す作りで、消したアカウントでは先に消えるので使わない。
@@ -648,7 +648,7 @@ mod tests {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
         let outcome = crate::webauthn::RegOutcome { credential_id: "cred-1".into(), pub_x: "x".into(), pub_y: "y".into(), sign_count: 0, aaguid: String::new() };
-        crate::registration::save_credential(&fs, "u@example.com", "acc-1", &outcome).await.unwrap();
+        crate::registration::save_credential(&*fs, "u@example.com", "acc-1", &outcome).await.unwrap();
         use crate::ciba::CibaStore;
         let ciba = std::sync::Arc::new(crate::ciba::MemoryCibaStore::default());
         let req_id = ciba.create("mobile-rp", "acc-1", "openid", "msg", None).await.unwrap();
@@ -667,11 +667,11 @@ mod tests {
         p.store.save_refresh_token(rt2).await.unwrap();
         assert!(RefreshTokenGrant.handle(&p, &c, &form(&[("refresh_token", "RT2")]), Some("KEY-A".into())).await.is_ok());
 
-        crate::registration::set_disabled(&fs, "u@example.com", true).await.unwrap();
+        crate::registration::set_disabled(&*fs, "u@example.com", true).await.unwrap();
         assert_no_tokens(&p, &c, &refresh, req_id.as_str()).await;
 
         // 消した後も（逆引きが消えても）出さない。
-        crate::account_admin::delete_account(&fs, "cli", "u@example.com").await.unwrap();
+        crate::account_admin::delete_account(&*fs, &crate::firestore_store::FirestoreStore::new(fs.clone()), "cli", "u@example.com").await.unwrap();
         let mut code = base_code("C1", "mobile-rp");
         code.account_id = "acc-1".into();
         let p2 = provider().with_firestore(fs.clone());
@@ -1158,6 +1158,7 @@ mod tests {
         async fn complete_interaction(&self, uid: &str, account_id: &str, auth_time: u64) -> bool { self.inner.complete_interaction(uid, account_id, auth_time).await }
         async fn save_session(&self, s: crate::model::Session) { self.inner.save_session(s).await }
         async fn get_session(&self, sid: &str) -> Option<crate::model::Session> { self.inner.get_session(sid).await }
+        async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> crate::store::RevocationCounts { self.inner.revoke_account(account_id, keep_sid).await }
         async fn delete_session(&self, sid: &str) { self.inner.delete_session(sid).await }
         async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> { self.inner.save_code(c).await }
         async fn take_code(&self, code: &str) -> StoreResult<crate::store::CodeTake> { self.inner.take_code(code).await }

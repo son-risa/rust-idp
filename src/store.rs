@@ -129,6 +129,10 @@ pub trait Store: Send + Sync {
     /// sub からアカウントを解決。未登録なら自動生成する（PoC 用）。
     async fn find_account(&self, sub: &str) -> Account;
 
+    /// account_id の SSO セッション（`keep_sid` のものは残す。空なら全部）・access token・refresh token を消す。
+    /// アカウントの凍結・削除、passkey の削除、復旧のときに呼ばれる。消せなかった種類は query_errors に入れる。
+    async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> RevocationCounts;
+
     /// 期限切れエントリを物理削除する(active sweep)。既定は no-op。
     /// In-memory 実装のみ意味を持つ(Firestore 等は TTL ポリシーで自己失効するため)。
     /// Provider の定期タスクが呼ぶ。
@@ -169,6 +173,16 @@ struct CodeRecord {
     issued_refresh: Option<String>,
 }
 
+/// セッション/トークン失効の結果。query_errors に列挙されたコレクションは「0件だった」
+/// のではなく「検索自体が失敗し存否不明」であることを示す（呼び出し側はこれを区別できる）。
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RevocationCounts {
+    pub sessions: usize,
+    pub access_tokens: usize,
+    pub refresh_tokens: usize,
+    pub query_errors: Vec<&'static str>,
+}
+
 #[derive(Default)]
 pub struct MemoryStore {
     interactions: Mutex<HashMap<String, Expiring<Interaction>>>,
@@ -177,6 +191,16 @@ pub struct MemoryStore {
     access_tokens: Mutex<HashMap<String, Expiring<AccessToken>>>,
     refresh_tokens: Mutex<HashMap<String, Expiring<RefreshToken>>>,
     revoked_families: Mutex<HashMap<String, Expiring<()>>>,
+    /// find_account が claim を引く登録の保存先。None なら試し用の決まった claim を返す。
+    documents: Option<std::sync::Arc<dyn crate::document_store::DocumentStore>>,
+}
+
+impl MemoryStore {
+    /// find_account が、[`Provider::with_document_store`](crate::Provider::with_document_store) に渡したのと
+    /// 同じ保存先から、登録された account の email と保存済みの claim を引く MemoryStore。
+    pub fn with_documents(documents: std::sync::Arc<dyn crate::document_store::DocumentStore>) -> Self {
+        Self { documents: Some(documents), ..Self::default() }
+    }
 }
 
 
@@ -362,8 +386,26 @@ impl Store for MemoryStore {
             cur = map.remove(&t).and_then(|e| e.value.replaced_by);
         }
     }
+    async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> RevocationCounts {
+        fn remove<T>(map: &Mutex<HashMap<String, Expiring<T>>>, doomed: impl Fn(&str, &T) -> bool) -> usize {
+            let mut m = map.lock().unwrap();
+            let before = m.len();
+            m.retain(|k, e| !doomed(k, &e.value));
+            before - m.len()
+        }
+        RevocationCounts {
+            sessions: remove(&self.sessions, |sid, s: &Session| s.account_id == account_id && sid != keep_sid),
+            access_tokens: remove(&self.access_tokens, |_, t: &AccessToken| t.account_id == account_id),
+            refresh_tokens: remove(&self.refresh_tokens, |_, t: &RefreshToken| t.account_id == account_id),
+            query_errors: Vec::new(),
+        }
+    }
+
     async fn find_account(&self, sub: &str) -> Account {
-        account_for(sub)
+        match &self.documents {
+            Some(docs) => crate::registration::account_from_documents(&**docs, sub).await,
+            None => account_for(sub),
+        }
     }
 
     /// 全マップから期限切れを物理削除(retain_alive の実体)。ロックは各マップ毎に

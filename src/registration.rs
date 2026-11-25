@@ -7,7 +7,10 @@
 //!   passkey ログイン（userHandle = accountId しか分からない）で email を引くために使う。
 //!   sub/account_id は email ではなく accountId（登録時に発行する UUID v4）。
 
-use crate::firestore::{self, Firestore};
+use crate::firestore;
+use crate::document_store::DocumentStore;
+#[cfg(all(test, feature = "gcp"))]
+use crate::firestore::Firestore;
 use crate::jws::b64url;
 use crate::webauthn::RegOutcome;
 use serde_json::json;
@@ -57,12 +60,12 @@ fn with_came_from(mut fields: serde_json::Value, from: &CameFrom) -> serde_json:
     fields
 }
 
-#[cfg(all(test, feature = "gcp"))]
-pub async fn create_email_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
+#[cfg(test)]
+pub async fn create_email_challenge(fs: &dyn DocumentStore, email: &str) -> Result<String, String> {
     create_email_challenge_from(fs, email, &CameFrom::default()).await
 }
 
-pub async fn create_email_challenge_from(fs: &Firestore, email: &str, from: &CameFrom) -> Result<String, String> {
+pub async fn create_email_challenge_from(fs: &dyn DocumentStore, email: &str, from: &CameFrom) -> Result<String, String> {
     let token = random_token();
     let fields = json!({
         "email": firestore::s(email),
@@ -73,7 +76,7 @@ pub async fn create_email_challenge_from(fs: &Firestore, email: &str, from: &Cam
 }
 
 /// token の文書が持つ CameFrom。無い・読めないときは空。
-pub async fn came_from(fs: &Firestore, token: &str) -> CameFrom {
+pub async fn came_from(fs: &dyn DocumentStore, token: &str) -> CameFrom {
     if !token_ok(token) {
         return CameFrom::default();
     }
@@ -89,7 +92,7 @@ pub async fn came_from(fs: &Firestore, token: &str) -> CameFrom {
 /// 招待（RP の管理者が発行を頼む登録リンク）。emailChallenges に置くので、
 /// passkey の options / verify は通常の登録と同じ口をそのまま使う。
 /// returnTo は登録後の戻り先（RP の登録済み origin 配下であることは呼び出し側が確かめる）。
-pub async fn create_invite_challenge(fs: &Firestore, email: &str, return_to: &str) -> Result<String, String> {
+pub async fn create_invite_challenge(fs: &dyn DocumentStore, email: &str, return_to: &str) -> Result<String, String> {
     let token = random_token();
     fs.set_doc(
         "emailChallenges",
@@ -105,7 +108,7 @@ pub async fn create_invite_challenge(fs: &Firestore, email: &str, return_to: &st
 }
 
 /// 招待の token を消費せず覗き、(email, returnTo) を返す。returnTo を持たない（通常の登録の）token は None。
-pub async fn peek_invite(fs: &Firestore, token: &str) -> Result<Option<(String, String)>, String> {
+pub async fn peek_invite(fs: &dyn DocumentStore, token: &str) -> Result<Option<(String, String)>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
@@ -123,12 +126,12 @@ pub async fn peek_invite(fs: &Firestore, token: &str) -> Result<Option<(String, 
 }
 
 /// 復旧のリンク（登録済みの人が、メールで確かめて passkey を 1 本足す）。
-#[cfg(all(test, feature = "gcp"))]
-pub async fn create_recovery_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
+#[cfg(test)]
+pub async fn create_recovery_challenge(fs: &dyn DocumentStore, email: &str) -> Result<String, String> {
     create_recovery_challenge_from(fs, email, &CameFrom::default()).await
 }
 
-pub async fn create_recovery_challenge_from(fs: &Firestore, email: &str, from: &CameFrom) -> Result<String, String> {
+pub async fn create_recovery_challenge_from(fs: &dyn DocumentStore, email: &str, from: &CameFrom) -> Result<String, String> {
     let token = random_token();
     let fields = json!({
         "email": firestore::s(email),
@@ -150,14 +153,14 @@ fn token_email(fields: &serde_json::Value, recovery: bool) -> Option<String> {
     firestore::field_str(fields, "email").map(|s| s.to_string())
 }
 
-async fn peek_token(fs: &Firestore, token: &str, recovery: bool) -> Result<Option<String>, String> {
+async fn peek_token(fs: &dyn DocumentStore, token: &str, recovery: bool) -> Result<Option<String>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
     Ok(fs.get_doc("emailChallenges", token).await?.and_then(|f| token_email(&f, recovery)))
 }
 
-async fn consume_token(fs: &Firestore, token: &str, recovery: bool) -> Result<Option<String>, String> {
+async fn consume_token(fs: &dyn DocumentStore, token: &str, recovery: bool) -> Result<Option<String>, String> {
     if !token_ok(token) {
         return Ok(None);
     }
@@ -165,20 +168,20 @@ async fn consume_token(fs: &Firestore, token: &str, recovery: bool) -> Result<Op
 }
 
 /// 消費せず email を覗く（passkey options 生成時に使用）。復旧の token は None。
-pub async fn peek_email_challenge(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+pub async fn peek_email_challenge(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
     peek_token(fs, token, false).await
 }
 
 /// 単回消費して email を返す（passkey verify 成功時）。復旧の token は None。
-pub async fn consume_email_challenge(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+pub async fn consume_email_challenge(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
     consume_token(fs, token, false).await
 }
 
-pub async fn peek_recovery(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+pub async fn peek_recovery(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
     peek_token(fs, token, true).await
 }
 
-pub async fn consume_recovery(fs: &Firestore, token: &str) -> Result<Option<String>, String> {
+pub async fn consume_recovery(fs: &dyn DocumentStore, token: &str) -> Result<Option<String>, String> {
     consume_token(fs, token, true).await
 }
 
@@ -211,7 +214,7 @@ impl ChallengeKind {
 }
 
 pub async fn create_webauthn_challenge(
-    fs: &Firestore,
+    fs: &dyn DocumentStore,
     email: &str,
     kind: ChallengeKind,
     uid: &str,
@@ -236,7 +239,7 @@ pub async fn create_webauthn_challenge(
 /// (email, kind, uid, accountId) を単回消費で返す。kind が未知なら None。
 /// accountId は ChallengeKind::Reg のときのみ意味を持つ（登録時に払い出した/再利用する UUID）。
 pub async fn consume_webauthn_challenge(
-    fs: &Firestore,
+    fs: &dyn DocumentStore,
     challenge: &str,
 ) -> Result<Option<(String, ChallengeKind, String, String)>, String> {
     if !token_ok(challenge) {
@@ -327,11 +330,35 @@ fn account_from(email: &str, f: &serde_json::Value) -> Account {
     }
 }
 
-pub async fn get_account(fs: &Firestore, email: &str) -> Result<Option<Account>, String> {
+/// 文書の保存先に登録された account の claim（sub・email・保存済みの編集できる claim）。
+/// 登録の無い sub には sub だけを返す（値をでっち上げない）。
+pub(crate) async fn account_from_documents(fs: &dyn DocumentStore, sub: &str) -> crate::model::Account {
+    // sub は account_id(UUID)。profiles/{sub} は accountId をキーとして保存済み編集可能 claim を持つ
+    // （profile_get/profile_put が at.account_id をそのまま渡すため、re-key 不要で自然に対応する）。
+    let saved = get_profile(fs, sub)
+        .await
+        .unwrap_or_default();
+    // 実データ（sub / email / email_verified / 保存済み編集 claim）のみを返す。
+    // 未設定 claim はダミーで埋めず欠落させる（OP は“真の属性”だけを主張する）。
+    let mut claims: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    claims.insert("sub".to_string(), json!(sub));
+    // sub(account_id) から email を逆引き（accountsByUuid）。取れた場合のみ email claim を出す。
+    if let Ok(Some(email)) = find_email_by_account_id(fs, sub).await {
+        claims.insert("email".to_string(), json!(email));
+        // 登録時にメール確認を経ている（registration の email-challenge/verify）。
+        claims.insert("email_verified".to_string(), json!(true));
+    }
+    for (k, v) in saved {
+        claims.insert(k, json!(v));
+    }
+    crate::model::Account { sub: sub.to_string(), claims }
+}
+
+pub async fn get_account(fs: &dyn DocumentStore, email: &str) -> Result<Option<Account>, String> {
     Ok(fs.get_doc("accounts", email).await?.map(|f| account_from(email, &f)))
 }
 
-pub async fn list_credentials(fs: &Firestore, account: &Account) -> Result<Vec<Credential>, String> {
+pub async fn list_credentials(fs: &dyn DocumentStore, account: &Account) -> Result<Vec<Credential>, String> {
     if !account.migrated {
         return Ok(account.legacy.iter().cloned().collect());
     }
@@ -350,7 +377,7 @@ pub async fn list_credentials(fs: &Firestore, account: &Account) -> Result<Vec<C
 
 /// assertion が名乗った credential id を、このアカウントの passkey として引く。
 /// 文書を id で直に引き、持ち主の accountId が合うことを確かめる。
-pub async fn find_credential(fs: &Firestore, account: &Account, credential_id: &str) -> Result<Option<Credential>, String> {
+pub async fn find_credential(fs: &dyn DocumentStore, account: &Account, credential_id: &str) -> Result<Option<Credential>, String> {
     if !account.migrated {
         return Ok(account.legacy.clone().filter(|c| c.credential_id == credential_id));
     }
@@ -367,7 +394,7 @@ pub async fn find_credential(fs: &Firestore, account: &Account, credential_id: &
 /// 登録済み（passkey が 1 本以上ある）か。passkey を全部消したアカウントは、同じ accountId のまま
 /// 登録し直せる。
 /// accountId の無い壊れた文書は登録済みとして扱う（登録し直しで上書きさせない。前の版と同じ）。
-pub async fn has_passkey(fs: &Firestore, email: &str) -> Result<bool, String> {
+pub async fn has_passkey(fs: &dyn DocumentStore, email: &str) -> Result<bool, String> {
     match get_account(fs, email).await? {
         Some(a) if a.account_id.is_empty() => Ok(true),
         Some(a) => Ok(!list_credentials(fs, &a).await?.is_empty()),
@@ -404,7 +431,7 @@ fn credential_fields(email: &str, account_id: &str, c: &Credential) -> serde_jso
 /// （別のアカウントの passkey を、同じ id を名乗る登録で乗っ取らせない）。
 /// まだ移していないアカウントの passkey は credentials に無いので、accounts の古いフィールドも見る
 /// （id はログインの options で誰でも知れる。先に取られると、持ち主がいつまでも移れなくなる）。
-async fn create_credential(fs: &Firestore, email: &str, account_id: &str, c: &Credential) -> Result<(), String> {
+async fn create_credential(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &Credential) -> Result<(), String> {
     if !credential_id_ok(&c.credential_id) {
         return Err(format!("credential id not storable (len {})", c.credential_id.len()));
     }
@@ -423,14 +450,14 @@ async fn create_credential(fs: &Firestore, email: &str, account_id: &str, c: &Cr
 /// 途中で止まっても古い形のまま読める。既に写してあれば（前回の途中で止まった）その文書を使う。
 /// 返り値は、このときに移したか。
 #[cfg(feature = "gcp")]
-pub async fn migrate_account(fs: &Firestore, email: &str) -> Result<bool, String> {
+pub async fn migrate_account(fs: &dyn DocumentStore, email: &str) -> Result<bool, String> {
     let lock = lock_account(fs, email).await?;
     let r = migrate_locked(fs, email).await;
     lock.release().await;
     r
 }
 
-async fn migrate_locked(fs: &Firestore, email: &str) -> Result<bool, String> {
+async fn migrate_locked(fs: &dyn DocumentStore, email: &str) -> Result<bool, String> {
     let Some(a) = get_account(fs, email).await? else {
         return Ok(false);
     };
@@ -464,14 +491,14 @@ async fn migrate_locked(fs: &Firestore, email: &str) -> Result<bool, String> {
 ///
 /// accountsByUuid の逆引きの書き込みが失敗しても登録自体は失敗させない（email 入力でのログインは
 /// 影響を受けない、discoverable ログインのみ縮退する）。
-pub async fn save_credential(fs: &Firestore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
+pub async fn save_credential(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
     let lock = lock_account(fs, email).await?;
     let r = save_locked(fs, email, account_id, c).await;
     lock.release().await;
     r
 }
 
-async fn save_locked(fs: &Firestore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
+async fn save_locked(fs: &dyn DocumentStore, email: &str, account_id: &str, c: &RegOutcome) -> Result<(), String> {
     let cred = Credential {
         credential_id: c.credential_id.clone(),
         pub_x: c.pub_x.clone(),
@@ -527,7 +554,7 @@ async fn save_locked(fs: &Firestore, email: &str, account_id: &str, c: &RegOutco
 
 /// 古いフィールド（前の版が読む 1 本）を c に向ける。None なら空にする（前の版へ戻しても、
 /// 消した passkey で入れないように）。createdAt はアカウントの登録日時なので書き換えない。
-async fn point_mirror(fs: &Firestore, email: &str, c: Option<&Credential>) -> Result<(), String> {
+async fn point_mirror(fs: &dyn DocumentStore, email: &str, c: Option<&Credential>) -> Result<(), String> {
     let (id, x, y, count, aaguid) = match c {
         Some(c) => (c.credential_id.as_str(), c.pub_x.as_str(), c.pub_y.as_str(), c.sign_count, c.aaguid.as_str()),
         None => ("", "", "", 0, ""),
@@ -555,14 +582,14 @@ pub enum RemoveOutcome {
 }
 
 /// 本人が passkey を 1 本消す。
-pub async fn remove_credential(fs: &Firestore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
+pub async fn remove_credential(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
     let lock = lock_account(fs, email).await?;
     let r = remove_locked(fs, email, credential_id).await;
     lock.release().await;
     r
 }
 
-async fn remove_locked(fs: &Firestore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
+async fn remove_locked(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<RemoveOutcome, String> {
     migrate_locked(fs, email).await?;
     let Some(a) = get_account(fs, email).await? else {
         return Ok(RemoveOutcome::NotFound);
@@ -594,7 +621,7 @@ async fn remove_locked(fs: &Firestore, email: &str, credential_id: &str) -> Resu
 
 /// 足したばかりの passkey を取り消す（足している間にセッションが失効していたとき）。最後の 1 本でも消し、
 /// 古いフィールドが指していれば、残りの 1 本へ向け直す（無ければ空にする）。
-pub async fn discard_credential(fs: &Firestore, email: &str, credential_id: &str) -> Result<(), String> {
+pub async fn discard_credential(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<(), String> {
     let lock = lock_account(fs, email).await?;
     let r = async {
         let Some(a) = get_account(fs, email).await? else {
@@ -615,14 +642,14 @@ pub async fn discard_credential(fs: &Firestore, email: &str, credential_id: &str
 
 /// passkey を全部消し、アカウントは残す（同じ accountId のまま登録し直せる）。消した本数を返す。
 /// アカウントが無ければ None。
-pub async fn remove_all_credentials(fs: &Firestore, email: &str) -> Result<Option<usize>, String> {
+pub async fn remove_all_credentials(fs: &dyn DocumentStore, email: &str) -> Result<Option<usize>, String> {
     let lock = lock_account(fs, email).await?;
     let r = remove_all_locked(fs, email).await;
     lock.release().await;
     r
 }
 
-async fn remove_all_locked(fs: &Firestore, email: &str) -> Result<Option<usize>, String> {
+async fn remove_all_locked(fs: &dyn DocumentStore, email: &str) -> Result<Option<usize>, String> {
     migrate_locked(fs, email).await?;
     let Some(a) = get_account(fs, email).await? else {
         return Ok(None);
@@ -642,7 +669,7 @@ const LOCK_TTL_SECS: u64 = 30;
 
 #[must_use]
 struct AccountLock<'a> {
-    fs: &'a Firestore,
+    fs: &'a dyn DocumentStore,
     email: String,
 }
 
@@ -654,7 +681,7 @@ impl AccountLock<'_> {
     }
 }
 
-async fn lock_account<'a>(fs: &'a Firestore, email: &str) -> Result<AccountLock<'a>, String> {
+async fn lock_account<'a>(fs: &'a dyn DocumentStore, email: &str) -> Result<AccountLock<'a>, String> {
     for _ in 0..30 {
         let f = json!({ "expiresAt": firestore::ts(&firestore::rfc3339(now() + LOCK_TTL_SECS)) });
         if fs.create_if_absent(LOCKS, email, f).await? {
@@ -673,7 +700,7 @@ async fn lock_account<'a>(fs: &'a Firestore, email: &str) -> Result<AccountLock<
 
 /// ログインで使った passkey の signCount と lastUsedAt を書く。文書が在るときだけ書く
 /// （並行して消された passkey を作り直さない）。
-pub async fn record_use(fs: &Firestore, account: &Account, c: &Credential, sign_count: u32) -> Result<(), String> {
+pub async fn record_use(fs: &dyn DocumentStore, account: &Account, c: &Credential, sign_count: u32) -> Result<(), String> {
     if !account.migrated {
         return fs.update_field("accounts", &account.email, "signCount", firestore::int(sign_count as u64)).await;
     }
@@ -698,7 +725,7 @@ pub struct AccountSummary {
 
 /// accounts/ 全件を列挙する（管理UIの一覧表示用）。accountId が欠落/空の壊れたドキュメントは
 /// tracing::error! で痕跡を残しつつスキップする（1件の壊れたドキュメントで一覧全体が失敗しないようにする）。
-pub async fn list_accounts(fs: &Firestore) -> Result<Vec<AccountSummary>, String> {
+pub async fn list_accounts(fs: &dyn DocumentStore) -> Result<Vec<AccountSummary>, String> {
     let (rows, creds) = tokio::try_join!(fs.list_collection("accounts"), fs.list_collection("credentials"))?;
     let mut counts: std::collections::HashMap<String, usize> = Default::default();
     for (_, f, _) in &creds {
@@ -720,8 +747,8 @@ pub async fn list_accounts(fs: &Firestore) -> Result<Vec<AccountSummary>, String
 }
 
 /// 試験用: アカウントの passkey が 1 本ならそれを返す（0 本なら None、2 本以上なら panic）。
-#[cfg(all(test, feature = "gcp"))]
-pub async fn sole_credential(fs: &Firestore, email: &str) -> Option<Credential> {
+#[cfg(test)]
+pub async fn sole_credential(fs: &dyn DocumentStore, email: &str) -> Option<Credential> {
     let a = get_account(fs, email).await.unwrap()?;
     let mut v = list_credentials(fs, &a).await.unwrap();
     assert!(v.len() <= 1, "{email}: passkey が {} 本", v.len());
@@ -730,7 +757,7 @@ pub async fn sole_credential(fs: &Firestore, email: &str) -> Option<Credential> 
 
 /// アカウントの passkey を全部消す（アカウントを消すとき）。
 /// 印の有無に関わらず accountId で引く（写し終えて印を付ける前に止まったアカウントの分も消す）。
-pub async fn delete_all_credentials(fs: &Firestore, account: &Account) -> Result<usize, String> {
+pub async fn delete_all_credentials(fs: &dyn DocumentStore, account: &Account) -> Result<usize, String> {
     if account.account_id.is_empty() {
         return Ok(0);
     }
@@ -746,13 +773,13 @@ pub async fn delete_all_credentials(fs: &Firestore, account: &Account) -> Result
 /// 呼び出し側が事前に get_account でアカウントの存在を確認している前提（重複読み取りを避けるため、
 /// ここでは再確認しない。存在しなければ update_field が currentDocument.exists 制約で
 /// エラーを返す）。
-pub async fn set_disabled(fs: &Firestore, email: &str, disabled: bool) -> Result<(), String> {
+pub async fn set_disabled(fs: &dyn DocumentStore, email: &str, disabled: bool) -> Result<(), String> {
     fs.update_field("accounts", email, "disabled", firestore::b(disabled)).await
 }
 
 /// メールで passkey を足す直前に、その時刻と足す passkey を残す。この時刻までに作られたほかの passkey は、
 /// しばらく本人の画面から消せない（メールを奪った人が、本人の passkey を消して締め出せないように）。
-pub async fn mark_recovered(fs: &Firestore, email: &str, credential_id: &str) -> Result<(), String> {
+pub async fn mark_recovered(fs: &dyn DocumentStore, email: &str, credential_id: &str) -> Result<(), String> {
     fs.update_fields(
         "accounts",
         email,
@@ -766,7 +793,7 @@ pub async fn mark_recovered(fs: &Firestore, email: &str, credential_id: &str) ->
 
 /// accountId(UUID) -> email の逆引き。discoverable ログイン（userHandle=accountId のみ判明）で使う。
 pub async fn find_email_by_account_id(
-    fs: &Firestore,
+    fs: &dyn DocumentStore,
     account_id: &str,
 ) -> Result<Option<String>, String> {
     let fields = match fs.get_doc("accountsByUuid", account_id).await? {
@@ -780,7 +807,7 @@ pub async fn find_email_by_account_id(
 
 /// profiles/{email} の編集可能 claim を返す（未保存なら空）。
 pub async fn get_profile(
-    fs: &Firestore,
+    fs: &dyn DocumentStore,
     email: &str,
 ) -> Result<std::collections::HashMap<String, String>, String> {
     let mut out = std::collections::HashMap::new();
@@ -835,7 +862,7 @@ impl std::fmt::Display for ProfileError {
 /// 他の field には触れないので、RP の PUT /me/profile と /account の保存が重なっても互いの更新を消さない。
 /// 値は登録の画面と同じ検査（normalize_profile_value）を通し、1 つでも通らなければ何も書かない。
 pub async fn save_profile(
-    fs: &Firestore,
+    fs: &dyn DocumentStore,
     email: &str,
     updates: &std::collections::HashMap<String, String>,
 ) -> Result<(), ProfileError> {
@@ -999,7 +1026,7 @@ mod tests {
     }
 
     /// #1 の前の版が書いた形（accounts のフィールドに passkey が 1 本）。
-    async fn legacy_account(fs: &Firestore, email: &str, account_id: &str, cred_id: &str) {
+    async fn legacy_account(fs: &dyn DocumentStore, email: &str, account_id: &str, cred_id: &str) {
         fs.set_doc(
             "accounts",
             email,
@@ -1018,7 +1045,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn ids(fs: &Firestore, email: &str) -> Vec<String> {
+    async fn ids(fs: &dyn DocumentStore, email: &str) -> Vec<String> {
         let a = get_account(fs, email).await.unwrap().unwrap();
         list_credentials(fs, &a).await.unwrap().into_iter().map(|c| c.credential_id).collect()
     }

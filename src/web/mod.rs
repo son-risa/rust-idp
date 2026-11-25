@@ -111,7 +111,7 @@ fn requested_client_id(i: &crate::model::Interaction) -> String {
 /// メールのリンクで passkey を作ると、このブラウザのセッションはリンクのアカウントに替わる。
 /// 攻撃者が自分のアカウントのリンクを踏ませると、被害者は気づかずに攻撃者として RP に入る（ログイン CSRF）。
 async fn signed_in_as_other(p: &Provider, jar: &CookieJar, target_email: &str) -> Option<String> {
-    let fs = p.firestore.as_ref()?;
+    let fs = p.docs.as_deref()?;
     let session = p.store.get_session(jar.get(SID_COOKIE)?.value()).await?;
     let email = match crate::registration::find_email_by_account_id(fs, &session.account_id).await {
         Ok(e) => e?,
@@ -1088,10 +1088,32 @@ mod legacy_host_tests {
         assert_eq!(location(&r), "https://new.example/no/such/path");
     }
 
+    fn with_app(p: Provider) -> Provider {
+        p.with_mobile_app(crate::MobileApp {
+            name: "Demo".into(),
+            scheme: "com.example.demo".into(),
+            android_package: "com.example.demo".into(),
+            apple_app_id: "TEAM123456.com.example.demo".into(),
+        })
+    }
+
     #[tokio::test]
     async fn aasa_is_served_on_a_legacy_host_without_redirect() {
-        let r = send(app("old.example"), "GET", "/.well-known/apple-app-site-association", Some("old.example")).await;
+        let p = with_app(Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"));
+        let r = send(router_with_legacy_hosts(p, "old.example"), "GET", "/.well-known/apple-app-site-association", Some("old.example")).await;
         assert_eq!(r.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            r#"{"applinks":{"apps":[],"details":[{"appID":"TEAM123456.com.example.demo","paths":["/r","/r?*"]}]},"webcredentials":{"apps":["TEAM123456.com.example.demo"]}}"#
+        );
+    }
+
+    /// アプリを設定していなければ AASA を出さない（他社のアプリを名乗らない）。
+    #[tokio::test]
+    async fn aasa_is_not_found_without_a_mobile_app() {
+        let r = send(app(""), "GET", "/.well-known/apple-app-site-association", None).await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

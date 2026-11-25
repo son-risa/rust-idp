@@ -110,10 +110,11 @@ pub struct ResendMailer {
 
 #[cfg(feature = "gcp")]
 impl ResendMailer {
-    pub fn new(api_key: String) -> Self {
+    /// from は Resend で確かめ済みの domain の差出人（例 `rust-idp <noreply@example.com>`）。
+    pub fn new(api_key: String, from: String) -> Self {
         Self {
             api_key,
-            from: "rust-idp <noreply@sonrisa.co.jp>".into(),
+            from,
             http: crate::http::client(),
         }
     }

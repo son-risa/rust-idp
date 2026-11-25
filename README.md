@@ -46,13 +46,15 @@ cargo deny check            # advisories and licences
 |---|---|
 | `ORIGIN` | スキーム+ホスト（例 `https://<issuer-host>`） |
 | `BASE_PATH` | パス接頭辞（例 `/oidc`）。issuer = ORIGIN + BASE_PATH |
-| `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT` | Firestore / KMS のプロジェクト |
+| `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT` | Firestore / KMS のプロジェクト。gcp 付きで Firestore を使うとき（`K_SERVICE` か `FIRESTORE_EMULATOR_HOST` があるとき）と管理者用サブコマンドでは必須で、どちらも無ければ起動も CLI も止まる |
 | `PORT` / `ADDR` | 待受ポート（Cloud Run は PORT、ローカルは ADDR） |
 | `KMS_ES256_KEY` / `KMS_RS256_KEY` | Cloud KMS 署名鍵（無ければ Secret Manager にフォールバック） |
 | `FIDO_RP_ID` / `FIDO_ORIGIN` / `FIDO_RP_NAME` | FIDO/WebAuthn の RP 設定 |
 | `FIDO_CONFORMANCE_ENABLED` | `/fido` conformance 面の有効化 |
 | `CIBA_RP_SECRET` | CIBA クライアントの secret |
 | `RESEND_API_KEY` | メール送信（Secret Manager） |
+| `MAIL_FROM` | Resend で送るメールの差出人（例 `rust-idp <noreply@example.com>`） |
+| `APP_NAME` / `APP_SCHEME` / `APP_ANDROID_PACKAGE` / `APPLE_APP_ID` | メールのリンクから passkey の登録を渡すネイティブのアプリ（表示名・custom scheme・Android の package・`<Team ID>.<Bundle ID>`）。4 つが揃ったときだけ、登録の画面のアプリへの誘導と AASA（`/.well-known/apple-app-site-association`）を出す |
 | `FAPI1_X/Y/KID` / `FAPI2_X/Y/KID` | FAPI2 conformance 静的クライアント `fapi-1`/`fapi-2` の公開鍵（**設定時のみ登録 = ON/OFF 切替**。staging にだけ入れ、本番には入れない） |
 | `CONFORMANCE_FAPI_CALLBACK` | FAPI conformance の redirect 上書き |
 | `LOG_PSEUDONYM_KEY` | ログ内 sub の擬似化キー |

@@ -6,6 +6,8 @@ use crate::ciba::{CibaRateLimiter, CibaStore, MemoryCibaStore};
 use crate::client_auth::*;
 use crate::dpop::{DpopVerifier, Es256Dpop};
 use crate::error::OAuthError;
+use crate::document_store::DocumentStore;
+#[cfg(feature = "gcp")]
 use crate::firestore::Firestore;
 use crate::grants::*;
 use crate::jws::{Es256Signer, JwsSigner};
@@ -22,12 +24,18 @@ pub struct Provider {
     /// 転送するので、内部リダイレクトの Location もこの接頭辞を付ける必要がある。
     pub(crate) base_path: String,
     pub(crate) store: Arc<dyn Store>,
+    /// store が new() の MemoryStore のまま（with_store を呼んでいない）か。with_document_store が見る。
+    store_is_default: bool,
     /// 既定の署名鍵（ES256）。client が alg を指定しない場合に使う。
     pub(crate) signer: Arc<dyn JwsSigner>,
     /// 追加の署名鍵（RS256 等）。jwks 公開と alg 選択に使う。
     pub(crate) extra_signers: Vec<Arc<dyn JwsSigner>>,
-    /// メール確認登録用（Cloud Run 上でのみ Some）。gcp の feature 無しでは常に None。
-    pub(crate) firestore: Option<Arc<Firestore>>,
+    /// パスキーの登録とログイン・復旧・管理画面・PAR・DCR・CIBA の承認などの保存先。
+    /// None ならそれらの経路は 503 などで断る（既定）。本番（Cloud Run）は Firestore。
+    pub(crate) docs: Option<Arc<dyn DocumentStore>>,
+    /// FCM の push の送り先（project とアクセストークン）。本番の Firestore と同じもの。
+    #[cfg(feature = "gcp")]
+    pub(crate) fcm: Option<Arc<Firestore>>,
     /// CIBA バックチャネル要求の永続化。既定は In-memory、本番は Firestore 実装を注入する。
     pub(crate) ciba: Arc<dyn CibaStore>,
     /// CIBA の (client_id, account) ごとレート制限。push スパム抑止のバックストップ。
@@ -52,6 +60,21 @@ pub struct Provider {
     /// ほかの client に出た access token も introspection・mandate 消費できる RS の client_id。
     /// ここに無い client は、自分に出た token しか引けない。
     pub(crate) introspection_clients: Vec<String>,
+    /// メールのリンクから passkey の登録を渡すネイティブのアプリ。None ならアプリへの誘導と AASA を出さない。
+    pub(crate) mobile_app: Option<MobileApp>,
+}
+
+/// 登録の画面からアプリを開く誘導（iOS の custom scheme・Android の intent）と、
+/// `/.well-known/apple-app-site-association` に出すアプリ。
+#[derive(Clone, Debug)]
+pub struct MobileApp {
+    /// 登録の画面に出すアプリの名前。
+    pub name: String,
+    /// アプリの custom scheme（`{scheme}://magic?t=...` で開く）。
+    pub scheme: String,
+    pub android_package: String,
+    /// AASA の appID（`TEAMID.bundle.id`）。
+    pub apple_app_id: String,
 }
 
 impl Provider {
@@ -80,9 +103,12 @@ impl Provider {
             issuer: issuer.into(),
             base_path: String::new(),
             store: Arc::new(MemoryStore::default()),
+            store_is_default: true,
             signer: Arc::new(Es256Signer::generate()),
             extra_signers: Vec::new(),
-            firestore: None,
+            docs: None,
+            #[cfg(feature = "gcp")]
+            fcm: None,
             mailer: Arc::new(LogMailer),
             ciba: Arc::new(MemoryCibaStore::default()),
             ciba_rate: Arc::new(CibaRateLimiter::default()),
@@ -98,6 +124,7 @@ impl Provider {
             jwks_resolver: crate::jwks_resolver::JwksResolver::new(),
             invite_clients: Vec::new(),
             introspection_clients: Vec::new(),
+            mobile_app: None,
         }
     }
 
@@ -167,8 +194,8 @@ impl Provider {
         if let Some(c) = self.clients.get(id) {
             return Some(c.clone());
         }
-        let fs = self.firestore.as_ref()?;
-        crate::dcr_store::load_client(fs, id).await
+        let docs = self.docs.as_deref()?;
+        crate::dcr_store::load_client(docs, id).await
     }
 
     pub fn with_base_path(mut self, base_path: impl Into<String>) -> Self {
@@ -180,7 +207,26 @@ impl Provider {
     pub(crate) fn with_firestore(mut self, fs: Arc<Firestore>) -> Self {
         // JAR jti もインスタンス跨ぎで単回化する（DPoP / client_assertion と同様）。
         self.jar_jti = crate::nonce::NonceStore::firestore(fs.clone());
-        self.firestore = Some(fs);
+        self.docs = Some(fs.clone());
+        self.fcm = Some(fs);
+        self
+    }
+
+    /// パスキーの登録とログイン・復旧・管理画面・PAR・DCR・CIBA の承認などの保存先を差し込む。
+    /// 差し込まなければ、それらの経路は 503 などで断る。1 つの process で試すなら
+    /// [`MemoryDocumentStore`](crate::MemoryDocumentStore)。
+    ///
+    /// userinfo などの claim は [`Store::find_account`] が返し、この保存先は見ない。
+    /// [`MemoryStore`] の find_account は、[`MemoryStore::with_documents`] で同じ保存先を渡さないと、
+    /// 登録とは無関係の試し用の claim（`<sub>@example.com`、`email_verified: true` など）を返す。
+    /// そこで with_store をまだ呼んでいなければ、ここで store を `MemoryStore::with_documents(docs)` に替える。
+    /// 後から with_store で別の Store を差し込むときは、その find_account が同じ保存先を引くようにすること
+    /// （例 `.with_store(Arc::new(MemoryStore::with_documents(docs.clone())))`）。
+    pub fn with_document_store(mut self, docs: Arc<dyn DocumentStore>) -> Self {
+        if self.store_is_default {
+            self.store = Arc::new(MemoryStore::with_documents(docs.clone()));
+        }
+        self.docs = Some(docs);
         self
     }
 
@@ -191,6 +237,7 @@ impl Provider {
 
     pub fn with_store(mut self, store: Arc<dyn Store>) -> Self {
         self.store = store;
+        self.store_is_default = false;
         self
     }
 
@@ -244,6 +291,11 @@ impl Provider {
         self
     }
 
+    pub fn with_mobile_app(mut self, app: MobileApp) -> Self {
+        self.mobile_app = Some(app);
+        self
+    }
+
     pub fn with_mailer(mut self, m: Arc<dyn Mailer>) -> Self {
         self.mailer = m;
         self
@@ -292,5 +344,19 @@ mod tests {
             p.signer_for(Some("PS256")),
             Err(crate::error::OAuthError::ServerError(_))
         ));
+    }
+
+    /// with_document_store だけでも、find_account は試し用の claim を返さない。with_store が先なら替えない。
+    #[tokio::test]
+    async fn document_store_alone_does_not_make_up_claims() {
+        let docs: Arc<dyn DocumentStore> = Arc::new(crate::document_store::MemoryDocumentStore::default());
+        let p = Provider::new("https://op").with_document_store(docs.clone());
+        let a = p.store.find_account("not-registered").await;
+        assert_eq!(a.claims.get("email"), None);
+        assert_eq!(a.claims.get("email_verified"), None);
+
+        let p = Provider::new("https://op").with_store(Arc::new(MemoryStore::default())).with_document_store(docs);
+        let a = p.store.find_account("not-registered").await;
+        assert_eq!(a.claims.get("email_verified"), Some(&serde_json::json!(true)));
     }
 }
