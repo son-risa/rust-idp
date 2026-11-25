@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export SITE_URL="${SITE_URL:-https://son-risa.github.io/rust-idp/}"
+export SITE_URL="${SITE_URL:-https://docs.amate.ai/idp/}"
 export SITE_URL_JA="${SITE_URL%/}/ja/"
 
 rm -rf public
