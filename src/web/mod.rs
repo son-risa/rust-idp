@@ -35,6 +35,8 @@ mod recover;
 mod register;
 #[cfg(test)]
 mod flow_tests;
+#[cfg(test)]
+mod routes_tests;
 
 /// ブラウザは、`__Host-` の cookie を Secure・Path=/・Domain 無しの Set-Cookie でしか張らず、消しもしない。
 #[cfg(test)]
