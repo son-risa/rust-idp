@@ -107,6 +107,7 @@ fn escape(s: &str) -> String {
 pub struct ResendMailer {
     api_key: String,
     from: String,
+    endpoint: String,
     http: reqwest::Client,
 }
 
@@ -114,9 +115,14 @@ pub struct ResendMailer {
 impl ResendMailer {
     /// from は Resend で確かめ済みの domain の差出人（例 `rust-idp <noreply@example.com>`）。
     pub fn new(api_key: String, from: String) -> Self {
+        Self::at(api_key, from, "https://api.resend.com/emails".into())
+    }
+
+    fn at(api_key: String, from: String, endpoint: String) -> Self {
         Self {
             api_key,
             from,
+            endpoint,
             http: crate::http::client(),
         }
     }
@@ -124,7 +130,7 @@ impl ResendMailer {
     async fn send(&self, to: &str, subject: &str, html: String) -> Result<(), String> {
         let r = self
             .http
-            .post("https://api.resend.com/emails")
+            .post(&self.endpoint)
             .bearer_auth(&self.api_key)
             .json(&json!({ "from": self.from, "to": to, "subject": subject, "html": html }))
             .send()
@@ -196,5 +202,180 @@ impl Mailer for LogMailer {
     async fn send_passkey_added(&self, to: &str, _lang: Option<Lang>) -> Result<(), String> {
         tracing::info!("[LogMailer] passkey-added notice to {to}");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mailer_contract::{Outbox, Sent};
+
+    mod log {
+        use super::*;
+        use std::io;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct VecWriter(Arc<Mutex<Vec<u8>>>);
+        impl io::Write for VecWriter {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for VecWriter {
+            type Writer = VecWriter;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        /// LogMailer が届ける先は記録なので、この thread の記録を受けて読む。
+        struct LogOutbox {
+            buf: VecWriter,
+            _guard: tracing::subscriber::DefaultGuard,
+            // 生きている Dispatch が 1 つだけだと、callsite の interest を最初に踏んだ thread の既定の subscriber で
+            // 決めて固定する（web/mod.rs の記録の試験と同じ）。2 つ目を生かしておき、ほかの試験に固定されないようにする。
+            _second_dispatch: tracing::Dispatch,
+        }
+
+        impl Outbox for LogOutbox {
+            fn mailer(&self) -> &dyn Mailer {
+                &LogMailer
+            }
+            fn sent(&self) -> Vec<Sent> {
+                let out = String::from_utf8(self.buf.0.lock().unwrap().clone()).unwrap();
+                out.lines()
+                    .filter_map(|line| line.trim().strip_prefix("[LogMailer] "))
+                    .map(|rest| {
+                        let after = [
+                            "verify ",
+                            "already-registered notice to ",
+                            "recovery ",
+                            "passkey-added notice to ",
+                        ]
+                        .iter()
+                        .find_map(|p| rest.strip_prefix(p))
+                        .unwrap_or_else(|| panic!("知らない形の行: {rest}"));
+                        Sent {
+                            to: after.split(':').next().unwrap().to_string(),
+                            text: rest.to_string(),
+                        }
+                    })
+                    .collect()
+            }
+        }
+
+        async fn outbox() -> LogOutbox {
+            let _second_dispatch =
+                tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+            let buf = VecWriter::default();
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_level(false)
+                .with_target(false)
+                .with_ansi(false)
+                .with_writer(buf.clone())
+                .finish();
+            LogOutbox {
+                buf,
+                _guard: tracing::subscriber::set_default(subscriber),
+                _second_dispatch,
+            }
+        }
+
+        crate::mailer_contract::mailer_contract_tests!(outbox);
+    }
+
+    #[cfg(feature = "gcp")]
+    mod resend {
+        use super::*;
+        use axum::extract::State;
+        use axum::http::StatusCode;
+        use axum::routing::post;
+        use axum::{Json, Router};
+        use serde_json::Value;
+        use std::sync::{Arc, Mutex};
+
+        /// Resend の `POST /emails` を模す。受けた要求を取っておき、`refuse` なら 422 で断る。
+        #[derive(Default)]
+        struct Fake {
+            bodies: Mutex<Vec<Value>>,
+            refuse: bool,
+        }
+
+        async fn emails(State(f): State<Arc<Fake>>, Json(body): Json<Value>) -> StatusCode {
+            if f.refuse {
+                return StatusCode::UNPROCESSABLE_ENTITY;
+            }
+            f.bodies.lock().unwrap().push(body);
+            StatusCode::OK
+        }
+
+        struct ResendOutbox {
+            mailer: ResendMailer,
+            fake: Arc<Fake>,
+        }
+
+        impl Outbox for ResendOutbox {
+            fn mailer(&self) -> &dyn Mailer {
+                &self.mailer
+            }
+            fn sent(&self) -> Vec<Sent> {
+                let unescape = |s: &str| {
+                    s.replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&amp;", "&")
+                };
+                self.fake
+                    .bodies
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|b| Sent {
+                        to: b["to"].as_str().unwrap_or_default().to_string(),
+                        text: format!(
+                            "{}\n{}",
+                            b["subject"].as_str().unwrap_or_default(),
+                            unescape(b["html"].as_str().unwrap_or_default())
+                        ),
+                    })
+                    .collect()
+            }
+        }
+
+        async fn on_fake(refuse: bool) -> ResendOutbox {
+            let fake = Arc::new(Fake {
+                refuse,
+                ..Default::default()
+            });
+            let app = Router::new()
+                .route("/emails", post(emails))
+                .with_state(fake.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/emails", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            ResendOutbox {
+                mailer: ResendMailer::at(
+                    "re_test".into(),
+                    "rust-idp <noreply@example.com>".into(),
+                    endpoint,
+                ),
+                fake,
+            }
+        }
+
+        async fn outbox() -> ResendOutbox {
+            on_fake(false).await
+        }
+
+        async fn refusing() -> ResendOutbox {
+            on_fake(true).await
+        }
+
+        crate::mailer_contract::mailer_contract_tests!(outbox, refused: refusing);
     }
 }

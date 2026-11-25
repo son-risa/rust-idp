@@ -158,56 +158,39 @@ impl JwsSigner for Rs256Signer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 
-    fn b64d(s: &str) -> Vec<u8> {
-        URL_SAFE_NO_PAD.decode(s).unwrap()
+    mod es256 {
+        async fn signer() -> super::Es256Signer {
+            super::Es256Signer::generate()
+        }
+        crate::jws_signer_contract::jws_signer_contract_tests!(signer);
     }
 
-    fn vk_from_jwk(jwk: &serde_json::Value) -> VerifyingKey {
-        crate::es256::verifying_key_from_xy(
-            &b64d(jwk["x"].as_str().unwrap()),
-            &b64d(jwk["y"].as_str().unwrap()),
-        )
-        .unwrap()
+    mod rs256 {
+        async fn signer() -> super::Rs256Signer {
+            super::Rs256Signer::generate()
+        }
+        crate::jws_signer_contract::jws_signer_contract_tests!(signer);
     }
 
-    #[tokio::test]
-    async fn sign_produces_verifiable_compact_jws() {
-        let signer = Es256Signer::generate();
-        let claims = serde_json::json!({"sub": "alice", "iss": "https://op.example"});
-        let jwt = signer.sign(&claims).await;
-        let parts: Vec<&str> = jwt.split('.').collect();
-        assert_eq!(parts.len(), 3);
-
-        // header に alg/typ/kid。
-        let header: serde_json::Value = serde_json::from_slice(&b64d(parts[0])).unwrap();
-        assert_eq!(header["alg"], "ES256");
-        assert_eq!(header["typ"], "JWT");
-        assert_eq!(header["kid"], signer.kid);
-
-        // payload はラウンドトリップする。
-        let payload: serde_json::Value = serde_json::from_slice(&b64d(parts[1])).unwrap();
-        assert_eq!(payload, claims);
-
-        // 公開 JWK の (x,y) で署名検証できる。
-        let vk = vk_from_jwk(&signer.public_jwk());
-        let signing_input = format!("{}.{}", parts[0], parts[1]);
-        let sig = Signature::from_slice(&b64d(parts[2])).unwrap();
-        assert!(vk.verify(signing_input.as_bytes(), &sig).is_ok());
+    /// Secret Manager に置いた秘密スカラーから読んだ鍵。
+    mod es256_scalar {
+        async fn signer() -> super::Es256Signer {
+            use p256::elliptic_curve::Generate;
+            let key = p256::ecdsa::SigningKey::generate();
+            super::Es256Signer::from_scalar_b64(&super::b64url(key.to_bytes())).unwrap()
+        }
+        crate::jws_signer_contract::jws_signer_contract_tests!(signer);
     }
 
-    #[tokio::test]
-    async fn tampered_payload_fails_verification() {
-        let signer = Es256Signer::generate();
-        let jwt = signer.sign(&serde_json::json!({"sub": "alice"})).await;
-        let parts: Vec<&str> = jwt.split('.').collect();
-        // payload を別物に差し替えると signing_input が変わり検証が落ちる。
-        let forged_payload = b64url(serde_json::json!({"sub": "attacker"}).to_string());
-        let vk = vk_from_jwk(&signer.public_jwk());
-        let signing_input = format!("{}.{}", parts[0], forged_payload);
-        let sig = Signature::from_slice(&b64d(parts[2])).unwrap();
-        assert!(vk.verify(signing_input.as_bytes(), &sig).is_err());
+    /// Secret Manager に置いた PKCS#8 PEM から読んだ鍵。
+    mod rs256_pem {
+        async fn signer() -> super::Rs256Signer {
+            use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+            let key = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048).unwrap();
+            super::Rs256Signer::from_pkcs8_pem(&key.to_pkcs8_pem(LineEnding::LF).unwrap()).unwrap()
+        }
+        crate::jws_signer_contract::jws_signer_contract_tests!(signer);
     }
 
     #[test]
@@ -223,48 +206,5 @@ mod tests {
     #[test]
     fn from_scalar_b64_rejects_garbage() {
         assert!(Es256Signer::from_scalar_b64("!!!notb64!!!").is_err());
-    }
-
-    #[test]
-    fn kid_equals_jwk_thumbprint() {
-        let signer = Es256Signer::generate();
-        assert_eq!(
-            signer.kid,
-            crate::es256::jwk_thumbprint_p256(&signer.x, &signer.y)
-        );
-    }
-
-    #[tokio::test]
-    async fn rs256_sign_produces_verifiable_jws() {
-        use rsa::traits::PublicKeyParts;
-        use rsa::{BoxedUint, Pkcs1v15Sign, PublicKey as RsaPublicKey};
-        use sha2::Digest;
-        let signer = Rs256Signer::generate();
-        let jwt = signer.sign(&serde_json::json!({"sub": "alice"})).await;
-        let parts: Vec<&str> = jwt.split('.').collect();
-        assert_eq!(parts.len(), 3);
-        let header: serde_json::Value = serde_json::from_slice(&b64d(parts[0])).unwrap();
-        assert_eq!(header["alg"], "RS256");
-        assert_eq!(header["kid"], signer.kid);
-        // 公開 JWK の n,e で署名検証できる。
-        let jwk = signer.public_jwk();
-        let n = BoxedUint::from_be_slice_vartime(&b64d(jwk["n"].as_str().unwrap()));
-        let e = BoxedUint::from_be_slice_vartime(&b64d(jwk["e"].as_str().unwrap()));
-        let pk = RsaPublicKey::new(n, e).unwrap();
-        let signing_input = format!("{}.{}", parts[0], parts[1]);
-        let hashed = sha2::Sha256::digest(signing_input.as_bytes());
-        assert!(
-            pk.verify(
-                Pkcs1v15Sign::new::<sha2::Sha256>(),
-                &hashed,
-                &b64d(parts[2])
-            )
-            .is_ok()
-        );
-        // public_jwk の e は本物の指数（PublicKeyParts と一致）。
-        assert_eq!(
-            b64d(jwk["e"].as_str().unwrap()),
-            signer.key.e().to_be_bytes_trimmed_vartime().into_vec()
-        );
     }
 }
