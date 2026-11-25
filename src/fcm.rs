@@ -3,7 +3,9 @@
 //! 最後に登録した token だけが生存する）。送信は metadata トークンで v1 を直叩き。
 
 use crate::firestore::{self, Firestore};
-use serde_json::{json, Value};
+use serde_json::json;
+#[cfg(feature = "gcp")]
+use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const COL: &str = "fcmTokens";
@@ -25,6 +27,7 @@ pub async fn save_token(fs: &Firestore, account_id: &str, token: &str, platform:
     .await
 }
 
+#[cfg(feature = "gcp")]
 async fn get_token(fs: &Firestore, account_id: &str) -> Result<Option<String>, String> {
     match fs.get_doc(COL, account_id).await? {
         Some(f) => Ok(firestore::field_str(&f, "token").map(|s| s.to_string())),
@@ -34,6 +37,7 @@ async fn get_token(fs: &Firestore, account_id: &str) -> Result<Option<String>, S
 
 /// CIBA 承認要求の data メッセージを送る。token 未登録なら no-op（Web 承認に委ねる）。
 /// Cloud Run の suspend を避けるため呼び出し側で .await すること。
+#[cfg(feature = "gcp")]
 pub async fn send_ciba_request(
     fs: &Firestore,
     account_id: &str,
@@ -70,6 +74,7 @@ pub async fn send_ciba_request(
     send(fs, message).await
 }
 
+#[cfg(feature = "gcp")]
 async fn send(fs: &Firestore, message: Value) -> Result<(), String> {
     let access = fs.token().await?;
     let url = format!(
@@ -91,7 +96,7 @@ async fn send(fs: &Firestore, message: Value) -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

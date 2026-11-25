@@ -220,7 +220,7 @@ pub async fn revoke_client(fs: &Firestore, client_id: &str) -> Result<bool, Stri
     Ok(existed)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

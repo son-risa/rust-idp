@@ -102,6 +102,7 @@ pub struct PrivateKeyJwt {
     jti: crate::nonce::NonceStore,
 }
 
+#[cfg(feature = "gcp")]
 impl PrivateKeyJwt {
     /// 本番: Firestore 連携で client_assertion の jti をインスタンス跨ぎ単回化。
     pub fn with_store(fs: std::sync::Arc<crate::firestore::Firestore>) -> Self {

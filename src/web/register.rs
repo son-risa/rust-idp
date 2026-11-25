@@ -810,7 +810,7 @@ pub(super) async fn register_passkey_verify(
         .into_response()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod invite_tests {
     use p256::elliptic_curve::Generate;
     use super::*;

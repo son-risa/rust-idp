@@ -1,11 +1,17 @@
 //! 単回 nonce / jti ストア。リプレイ防止に使う。
 //! ローカル/テストは in-memory、本番（Cloud Run）は Firestore（インスタンス跨ぎで単回保証）。
 
+#[cfg(feature = "gcp")]
 use crate::firestore::{self, Firestore};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(feature = "gcp")]
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+#[cfg(feature = "gcp")]
+use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "gcp")]
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
@@ -13,6 +19,7 @@ fn now_secs() -> u64 {
 /// jti / nonce の単回 claim を提供する。
 pub enum NonceStore {
     Memory(Mutex<HashMap<String, Instant>>),
+    #[cfg(feature = "gcp")]
     Firestore(Arc<Firestore>),
 }
 
@@ -21,6 +28,7 @@ impl NonceStore {
         NonceStore::Memory(Mutex::new(HashMap::new()))
     }
 
+    #[cfg(feature = "gcp")]
     pub fn firestore(fs: Arc<Firestore>) -> Self {
         NonceStore::Firestore(fs)
     }
@@ -43,6 +51,7 @@ impl NonceStore {
                     true
                 }
             }
+            #[cfg(feature = "gcp")]
             NonceStore::Firestore(fs) => {
                 let exp = firestore::rfc3339(now_secs() + ttl.as_secs());
                 let fields = serde_json::json!({ "expiresAt": firestore::ts(&exp) });
@@ -88,6 +97,7 @@ mod tests {
         assert!(s.claim("x", Duration::from_millis(20)).await); // TTL 経過で再claim可
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn firestore_claim_is_single_use() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -98,6 +108,7 @@ mod tests {
         assert!(s.claim("jti-2", Duration::from_secs(300)).await); // 別keyは独立
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn firestore_claim_fails_closed_on_store_error() {
         // 到達不能ホスト(127.0.0.1:1、他テストでも「確実に閉じたポート」として使用)への

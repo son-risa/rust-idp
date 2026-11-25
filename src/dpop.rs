@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::Signature;
 use sha2::{Digest, Sha256};
+#[cfg(feature = "gcp")]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +53,7 @@ pub struct Es256Dpop {
     jti: NonceStore,
 }
 
+#[cfg(feature = "gcp")]
 impl Es256Dpop {
     /// 本番: Firestore 連携で jti をインスタンス跨ぎで単回化する。
     pub fn with_store(fs: Arc<crate::firestore::Firestore>) -> Self {

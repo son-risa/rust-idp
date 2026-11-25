@@ -250,6 +250,7 @@ pub(super) async fn backchannel_auth(
             // FCM で iPhone に承認要求を通知（Cloud Run suspend を避けるため await）。
             // token 未登録/送信失敗でも Web 承認は可能なのでベストエフォート。
             // fcm::save_token は at.account_id（UUID）で保存するため、宛先解決も account_id で行う。
+            #[cfg(feature = "gcp")]
             let _ = crate::fcm::send_ciba_request(fs, &account_id, &client.client_id, &scope, &binding, id.as_str(), authorization_details.as_deref()).await;
             (
                 [(header::CACHE_CONTROL, "no-store")],
@@ -524,7 +525,7 @@ pub(super) async fn ciba_reject(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use p256::elliptic_curve::Generate;
     use super::*;

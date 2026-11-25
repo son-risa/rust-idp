@@ -57,7 +57,7 @@ fn with_came_from(mut fields: serde_json::Value, from: &CameFrom) -> serde_json:
     fields
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 pub async fn create_email_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
     create_email_challenge_from(fs, email, &CameFrom::default()).await
 }
@@ -123,7 +123,7 @@ pub async fn peek_invite(fs: &Firestore, token: &str) -> Result<Option<(String, 
 }
 
 /// 復旧のリンク（登録済みの人が、メールで確かめて passkey を 1 本足す）。
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 pub async fn create_recovery_challenge(fs: &Firestore, email: &str) -> Result<String, String> {
     create_recovery_challenge_from(fs, email, &CameFrom::default()).await
 }
@@ -422,6 +422,7 @@ async fn create_credential(fs: &Firestore, email: &str, account_id: &str, c: &Cr
 /// 移行前のアカウントの passkey を credentials へ写し、印を付ける。写し終えてから印を付けるので、
 /// 途中で止まっても古い形のまま読める。既に写してあれば（前回の途中で止まった）その文書を使う。
 /// 返り値は、このときに移したか。
+#[cfg(feature = "gcp")]
 pub async fn migrate_account(fs: &Firestore, email: &str) -> Result<bool, String> {
     let lock = lock_account(fs, email).await?;
     let r = migrate_locked(fs, email).await;
@@ -719,7 +720,7 @@ pub async fn list_accounts(fs: &Firestore) -> Result<Vec<AccountSummary>, String
 }
 
 /// 試験用: アカウントの passkey が 1 本ならそれを返す（0 本なら None、2 本以上なら panic）。
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 pub async fn sole_credential(fs: &Firestore, email: &str) -> Option<Credential> {
     let a = get_account(fs, email).await.unwrap()?;
     let mut v = list_credentials(fs, &a).await.unwrap();
@@ -861,7 +862,7 @@ fn challenge_expired(fields: &serde_json::Value) -> bool {
     exp < now()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use std::assert_matches;
     use super::*;

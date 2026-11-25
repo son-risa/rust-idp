@@ -39,7 +39,9 @@ mod fuzz_tests;
 mod fcm;
 mod fido;
 mod firestore;
+#[cfg(feature = "gcp")]
 mod firestore_store;
+#[cfg(feature = "gcp")]
 pub mod gcp;
 mod grants;
 mod http;
@@ -48,6 +50,7 @@ mod jwks_resolver;
 mod jws;
 #[cfg(kani)]
 mod kani_harness;
+#[cfg(feature = "gcp")]
 mod kms;
 mod mailer;
 mod model;

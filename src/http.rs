@@ -7,6 +7,7 @@ pub fn builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
 }
 
+#[cfg(any(feature = "gcp", test))]
 pub fn client() -> reqwest::Client {
     builder().build().expect("reqwest client")
 }

@@ -1,8 +1,11 @@
 //! メール送信の概念トレイトと Resend 実装。
 //! ローカル用に送らず URL をログに出す LogMailer も用意する。
 
-use crate::web::i18n::{bilingual, localize, Lang};
+#[cfg(any(feature = "gcp", test))]
+use crate::web::i18n::{bilingual, localize};
+use crate::web::i18n::Lang;
 use async_trait::async_trait;
+#[cfg(feature = "gcp")]
 use serde_json::json;
 
 /// `lang` は送信のきっかけになったブラウザの言語。None（ブラウザの要求が無い）なら日本語と英語の両方で送る。
@@ -24,6 +27,7 @@ pub trait Mailer: Send + Sync {
 }
 
 /// (件名, HTML 本文)。両言語のときは本文を日本語、英語の順に並べる。
+#[cfg(any(feature = "gcp", test))]
 fn compose(subject: &str, html: &str, lang: Option<Lang>) -> (String, String) {
     match lang {
         Some(lang) => (localize(subject, lang), localize(html, lang)),
@@ -38,6 +42,7 @@ fn compose(subject: &str, html: &str, lang: Option<Lang>) -> (String, String) {
     }
 }
 
+#[cfg(any(feature = "gcp", test))]
 pub(crate) fn verification_mail(verify_url: &str, lang: Option<Lang>) -> (String, String) {
     let html = format!(
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
@@ -51,6 +56,7 @@ pub(crate) fn verification_mail(verify_url: &str, lang: Option<Lang>) -> (String
     compose("[[[rust-idp] Verify your email]]", &html, lang)
 }
 
+#[cfg(any(feature = "gcp", test))]
 pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, String) {
     let html = format!(
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
@@ -64,6 +70,7 @@ pub(crate) fn already_registered_mail(to: &str, lang: Option<Lang>) -> (String, 
     compose("[[[rust-idp] An account already exists]]", &html, lang)
 }
 
+#[cfg(feature = "gcp")]
 pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String, String) {
     let html = format!(
         r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
@@ -79,6 +86,7 @@ pub(crate) fn recovery_mail(to: &str, url: &str, lang: Option<Lang>) -> (String,
     compose("[[[rust-idp] Add a passkey on this device]]", &html, lang)
 }
 
+#[cfg(feature = "gcp")]
 pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {
     let html = r#"<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#222;max-width:560px;margin:auto;padding:24px">
 <h2 style="margin:0 0 16px">[[A passkey was added]]</h2>
@@ -88,16 +96,19 @@ pub(crate) fn passkey_added_mail(lang: Option<Lang>) -> (String, String) {
     compose("[[[rust-idp] A passkey was added]]", html, lang)
 }
 
+#[cfg(any(feature = "gcp", test))]
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+#[cfg(feature = "gcp")]
 pub struct ResendMailer {
     api_key: String,
     from: String,
     http: reqwest::Client,
 }
 
+#[cfg(feature = "gcp")]
 impl ResendMailer {
     pub fn new(api_key: String) -> Self {
         Self {
@@ -124,6 +135,7 @@ impl ResendMailer {
     }
 }
 
+#[cfg(feature = "gcp")]
 #[async_trait]
 impl Mailer for ResendMailer {
     async fn send_verification(

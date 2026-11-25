@@ -642,6 +642,7 @@ mod tests {
     }
 
     /// A3: 凍結の直前に出たコード・凍結の前の RT・承認済みの CIBA から、凍結の後に発行しない。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_disabled_account_gets_no_tokens_from_a_code_a_refresh_token_or_ciba() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -683,6 +684,7 @@ mod tests {
         assert!(matches!(rt_r, Err(OAuthError::InvalidGrant(_))), "deleted refresh: {:?}", rt_r.map(|r| r.access_token));
     }
 
+    #[cfg(feature = "gcp")]
     async fn assert_no_tokens(p: &Provider, c: &Client, refresh: &HashMap<String, String>, req_id: &str) {
         let code_r = AuthorizationCodeGrant.handle(p, c, &form(&[("code", "C1"), ("redirect_uri", "https://rp/cb")]), None).await;
         assert!(matches!(code_r, Err(OAuthError::InvalidGrant(_))), "code: {:?}", code_r.map(|r| r.access_token));
@@ -707,6 +709,7 @@ mod tests {
 
     /// ストアに書けない・読めないときは server_error。invalid_grant にすると RP はコードや RT を捨て、
     /// 200 にすると保存されていないトークンを渡すことになる。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_store_failure_is_a_server_error_not_a_grant_error() {
         for (method, col) in [("PATCH", "accessTokens"), ("PATCH", "authCodes"), ("GET", "authCodes")] {
@@ -919,6 +922,7 @@ mod tests {
         a_leaked_used_code_cannot_revoke_the_owners_refresh_token(provider()).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_leaked_used_code_cannot_revoke_the_owners_refresh_token_in_firestore() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -932,6 +936,7 @@ mod tests {
         code_reuse_after_rotation_revokes_the_rotated_refresh_token(provider()).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn code_reuse_after_rotation_revokes_the_rotated_refresh_token_in_firestore() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -1118,6 +1123,7 @@ mod tests {
         reuse_after_many_rotations_revokes_the_whole_family(provider()).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn reuse_after_100_rotations_revokes_the_whole_family_in_firestore() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -1222,10 +1228,12 @@ mod tests {
         assert!(p.store.get_refresh_token(new_rts[0]).await.unwrap().is_none(), "負けたローテーションの新しい RT が残っている");
     }
 
+    #[cfg(feature = "gcp")]
     async fn fake_store() -> std::sync::Arc<dyn Store> {
         fake_store_and_state().await.0
     }
 
+    #[cfg(feature = "gcp")]
     async fn fake_store_and_state() -> (std::sync::Arc<dyn Store>, std::sync::Arc<crate::firestore::fake_firestore::FakeState>) {
         let (host, state) = crate::firestore::fake_firestore::spawn().await;
         let fs = std::sync::Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
@@ -1247,12 +1255,14 @@ mod tests {
         a_revoke_between_the_save_and_the_cas_is_caught(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_revoke_between_the_save_and_the_cas_is_caught_in_firestore() {
         a_revoke_between_the_save_and_the_cas_is_caught(fake_store().await).await;
     }
 
     /// 後片付けで消せなかった RT（削除の誤りが続く F4、先頭の読みの誤りが続く F5）も、札があるので使えない。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn an_rt_the_cleanup_could_not_delete_is_still_refused() {
         for (method, target) in [("DELETE", "RT1"), ("GET", "RT0")] {
@@ -1275,6 +1285,7 @@ mod tests {
 
     /// 札を引けない（ストアの誤り）ときは server_error で断る。invalid_grant だと RP が RT を捨てる。
     /// 1 回目（使用済みにする前）なら RT はそのまま、障害が明けたら同じ RT で続けられる。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_failed_tombstone_lookup_refuses_the_rotation() {
         let (store, fake) = fake_store_and_state().await;
@@ -1290,6 +1301,7 @@ mod tests {
 
     /// 古い RT を使用済みにする書き込み、またはその後の札の確認が誤ったときは server_error。
     /// 先に作った新しい RT と AT は渡していないので消す。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_failure_after_minting_discards_the_unissued_tokens() {
         for case in ["mark", "second lookup"] {
@@ -1313,6 +1325,7 @@ mod tests {
     }
 
     /// familyId を持たない RT（2026-06-11 より前に始まった鎖）はローテーションせず、ログインし直させる。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn an_rt_without_a_family_is_not_rotated() {
         for store in [std::sync::Arc::new(crate::store::MemoryStore::default()) as std::sync::Arc<dyn Store>, fake_store().await] {
@@ -1325,6 +1338,7 @@ mod tests {
     }
 
     /// familyId の欄そのものが無い Firestore の文書（2026-06-11 より前の書き方）も、空と同じく断る。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn an_rt_document_without_the_family_field_is_not_rotated() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -1350,6 +1364,7 @@ mod tests {
     }
 
     /// 後片付けは 1 回の失効で扱う RT の数に上限があり（F6）、上限を超えた鎖でも必ず終わる。残った RT も札で使えない。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_cleanup_longer_than_its_limit_stops_and_the_rest_is_still_refused() {
         let store = fake_store().await;
@@ -1375,6 +1390,7 @@ mod tests {
         a_revoke_right_after_the_cas_reaches_the_new_rt(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn rotation_racing_a_family_revoke_in_firestore() {
         a_revoke_right_after_the_cas_reaches_the_new_rt(fake_store().await).await;
@@ -1385,6 +1401,7 @@ mod tests {
         a_rotation_that_loses_the_cas_leaves_no_new_rt(std::sync::Arc::new(crate::store::MemoryStore::default())).await;
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn rotation_losing_the_cas_leaves_no_new_rt_in_firestore() {
         a_rotation_that_loses_the_cas_leaves_no_new_rt(fake_store().await).await;

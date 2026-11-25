@@ -1050,6 +1050,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_request_uri_cannot_be_used_by_another_client() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -1182,6 +1183,7 @@ mod tests {
         assert_eq!(v["mandate_consume"], "https://op.example/oidc/oauth/mandate/consume");
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn a_par_request_uri_yields_a_code_only_once() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;
@@ -1224,6 +1226,7 @@ mod tests {
     }
 
     /// 失効できなかったのに 200 を返すと、RP はトークンが死んだと思い込む。503 で試し直させる。
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn revoke_answers_503_when_the_token_could_not_be_removed() {
         let (host, state) = crate::firestore::fake_firestore::spawn().await;
@@ -1249,6 +1252,7 @@ mod tests {
         assert!(p.store.get_access_token("AT").await.unwrap().is_none());
     }
 
+    #[cfg(feature = "gcp")]
     #[tokio::test]
     async fn profile_put_refuses_the_values_the_registration_page_refuses() {
         let (host, _state) = crate::firestore::fake_firestore::spawn().await;

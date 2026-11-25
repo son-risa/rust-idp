@@ -3,6 +3,18 @@
 
 use rust_idp::{Client, JwkPub, Provider};
 
+#[cfg(not(feature = "gcp"))]
+const ADMIN_COMMANDS: &[&str] = &[
+    "mint",
+    "revoke-client",
+    "grant-admin",
+    "revoke-admin",
+    "disable-account",
+    "enable-account",
+    "migrate-static-clients",
+    "migrate-credentials",
+];
+
 #[tokio::main]
 async fn main() {
     // ログ: Cloud Run では構造化 JSON（Cloud Logging がフィールド解析→log-based metric/alert）。
@@ -21,8 +33,14 @@ async fn main() {
 
     // 管理者用サブコマンド（out-of-band）。サーバ起動前に分岐する。
     let argv: Vec<String> = std::env::args().collect();
+    #[cfg(feature = "gcp")]
     if rust_idp::gcp::run_admin_command(&argv).await {
         return;
+    }
+    #[cfg(not(feature = "gcp"))]
+    if let Some(cmd) = argv.get(1).filter(|c| ADMIN_COMMANDS.contains(&c.as_str())) {
+        eprintln!("{cmd}: Firestore を使うので、gcp の feature を付けて build した binary でだけ使えます");
+        std::process::exit(2);
     }
 
     // ORIGIN = スキーム+ホスト（例 https://oidc.sonrisa.co.jp）。
@@ -58,7 +76,19 @@ async fn main() {
         }
     }
 
+    #[cfg(feature = "gcp")]
     let provider = rust_idp::gcp::configure_from_env(provider).await;
+    // gcp 無しの binary を Cloud Run に載せると、起動ごとの鍵とメモリ上の保存先で本番を名乗ってしまう。
+    // gcp 付きの binary が正規の鍵を読めないときと同じく、起動しない。
+    #[cfg(not(feature = "gcp"))]
+    if std::env::var("K_SERVICE").is_ok() {
+        tracing::error!("FATAL: built without the gcp feature; refusing to start on Cloud Run");
+        std::process::exit(1);
+    }
+    #[cfg(not(feature = "gcp"))]
+    if std::env::var("FIRESTORE_EMULATOR_HOST").is_ok() {
+        tracing::warn!("FIRESTORE_EMULATOR_HOST is ignored: built without the gcp feature");
+    }
     let app = rust_idp::router(provider);
 
     if std::env::var("K_SERVICE").is_ok() {

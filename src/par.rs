@@ -71,7 +71,7 @@ pub async fn consume(fs: &Firestore, request_uri: &str) -> Result<bool, String> 
     Ok(fs.take_doc(COL, id).await?.is_some())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

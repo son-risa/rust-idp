@@ -7,6 +7,12 @@ license = "MIT"
 # 非公開バイナリ（crates.io へ publish しない）。cargo-deny の private 除外対象になる。
 publish = false
 
+[features]
+default = []
+# Firestore・Cloud KMS・Secret Manager・FCM・Resend へ出る実装と、本番の配線・管理者用サブコマンド。
+# Cloud Run の本番の binary はこれを有効にして build する（Dockerfile）。
+gcp = []
+
 [dependencies]
 axum = "0.8"
 axum-extra = { version = "0.12", features = ["cookie"] }

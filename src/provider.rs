@@ -26,7 +26,7 @@ pub struct Provider {
     pub(crate) signer: Arc<dyn JwsSigner>,
     /// 追加の署名鍵（RS256 等）。jwks 公開と alg 選択に使う。
     pub(crate) extra_signers: Vec<Arc<dyn JwsSigner>>,
-    /// メール確認登録用（Cloud Run 上でのみ Some）。
+    /// メール確認登録用（Cloud Run 上でのみ Some）。gcp の feature 無しでは常に None。
     pub(crate) firestore: Option<Arc<Firestore>>,
     /// CIBA バックチャネル要求の永続化。既定は In-memory、本番は Firestore 実装を注入する。
     pub(crate) ciba: Arc<dyn CibaStore>,
@@ -172,6 +172,7 @@ impl Provider {
         self
     }
 
+    #[cfg(feature = "gcp")]
     pub(crate) fn with_firestore(mut self, fs: Arc<Firestore>) -> Self {
         // JAR jti もインスタンス跨ぎで単回化する（DPoP / client_assertion と同様）。
         self.jar_jti = crate::nonce::NonceStore::firestore(fs.clone());

@@ -72,7 +72,7 @@ pub async fn list_for_target(fs: &Firestore, target: &str) -> Result<Vec<AuditEn
     Ok(entries)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
     use crate::firestore::fake_firestore;

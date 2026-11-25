@@ -3,7 +3,9 @@
 //! 日本語（ja）には `lang="ja"` と今までの日本語の見出しが出ること。
 
 use super::*;
+#[cfg(feature = "gcp")]
 use crate::firestore::fake_firestore;
+#[cfg(feature = "gcp")]
 use crate::firestore::Firestore;
 use crate::web::i18n::has_japanese;
 use std::future::Future;
@@ -119,6 +121,7 @@ fn english_words_shown(html: &str) -> Vec<String> {
 }
 
 /// ブラウザにそのまま出る素の文言。
+#[cfg(feature = "gcp")]
 async fn check_text<F, Fut>(name: &str, ja_text: &str, render: F)
 where
     F: Fn(HeaderMap) -> Fut,
@@ -182,6 +185,7 @@ async fn login_page_drops_prefetched_challenge_before_the_server_expires_it() {
     assert!(!html.contains("__CEREMONY_TTL_SECS__"));
 }
 
+#[cfg(feature = "gcp")]
 async fn with_firestore() -> (Arc<Provider>, Arc<Firestore>) {
     let (host, _state) = fake_firestore::spawn().await;
     let fs = Arc::new(Firestore::new_for_test("proj", host));
@@ -205,6 +209,7 @@ async fn login_as(p: &Provider, account_id: &str) -> CookieJar {
     CookieJar::default().add(Cookie::new(SID_COOKIE, sid))
 }
 
+#[cfg(feature = "gcp")]
 async fn register(fs: &Firestore, email: &str, account_id: &str) {
     let outcome = crate::webauthn::RegOutcome {
         credential_id: format!("cred-{account_id}"),
@@ -237,6 +242,7 @@ pub(super) fn client(id: &str) -> crate::model::Client {
 }
 
 /// 管理者 me、一般利用者 u（凍結）、管理者 boss（凍結）、一般利用者 active を持つ Firestore。
+#[cfg(feature = "gcp")]
 async fn admin_world() -> (Arc<Provider>, Arc<Firestore>) {
     let (p, fs) = with_firestore().await;
     register(&fs, "me@example.com", "acc-me").await;
@@ -306,6 +312,7 @@ async fn the_profile_page_keeps_its_japanese_labels_in_japanese() {
     }
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn registration_pages_follow_the_browser_language() {
     check_page("signup form", "ユーザー登録", |h| async move {
@@ -386,6 +393,7 @@ async fn the_ciba_approval_page_follows_the_browser_language() {
     .await;
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn admin_pages_follow_the_browser_language() {
     let (p, fs) = admin_world().await;
@@ -487,6 +495,7 @@ async fn admin_pages_follow_the_browser_language() {
     }
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn giving_up_admin_rights_shows_a_page_in_the_browser_language() {
     check_page(
@@ -504,6 +513,7 @@ async fn giving_up_admin_rights_shows_a_page_in_the_browser_language() {
     .await;
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn admin_messages_follow_the_browser_language() {
     let (p, fs) = admin_world().await;
@@ -615,6 +625,7 @@ async fn admin_messages_follow_the_browser_language() {
     assert!(crate::dcr_store::load_client(&fs, "rp-1").await.unwrap().initiate_login_uri.is_none());
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn the_last_admin_message_follows_the_browser_language() {
     check_text(
@@ -679,6 +690,7 @@ fn mails_follow_the_browser_language_and_are_bilingual_without_one() {
     );
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn the_admin_navigation_and_badges_follow_the_browser_language() {
     let (p, _fs) = admin_world().await;
@@ -699,6 +711,7 @@ async fn the_admin_navigation_and_badges_follow_the_browser_language() {
     }
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn passkey_pages_translate_the_api_failures_they_show() {
     let login = |h| async move {
@@ -722,6 +735,7 @@ async fn passkey_pages_translate_the_api_failures_they_show() {
     .await;
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn sign_in_and_admin_refusals_follow_the_browser_language() {
     check_text(
@@ -763,6 +777,7 @@ async fn sign_in_and_admin_refusals_follow_the_browser_language() {
 }
 
 /// 英語は sign in / sign out、日本語はログイン / ログアウト。
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
     for (lang, expected) in [
@@ -813,6 +828,7 @@ async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
     }
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
     let authorize = |query: &'static str| {
@@ -890,6 +906,7 @@ async fn protocol_errors_shown_in_the_browser_follow_the_browser_language() {
 }
 
 // 障害は 500、要求の不備は 400 で返し、en でも文そのものを固定する。
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn protocol_errors_keep_their_status_and_english_text() {
     let call = |p: Arc<Provider>, query: &str| {
@@ -1212,6 +1229,7 @@ async fn authorize_puts_the_client_on_the_sign_in_url_for_after_expiry() {
     );
 }
 
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn the_account_page_is_in_the_viewers_language() {
     let (p, fs) = with_firestore().await;
@@ -1239,6 +1257,7 @@ async fn the_account_page_is_in_the_viewers_language() {
 
 /// /account はログイン中だけログアウトを出し、登録日を持たない パスキーに 1970 年を出さない。
 /// ログアウト後の「ログインへ」は demo RP（/）でなく /account を指す。
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn the_account_page_signs_out_and_hides_unknown_dates() {
     let (p, fs) = with_firestore().await;
@@ -1284,6 +1303,7 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
 
 /// パソコンのログイン画面には QR コードでスマホのパスキーを使う案内を、メールのリンクで作り終えた
 /// /account には元のパソコンでの続け方を添える（どちらも端末の種類で JS が出し分ける）。
+#[cfg(feature = "gcp")]
 #[tokio::test]
 async fn sign_in_screens_explain_using_a_phone_passkey_by_qr_code() {
     let qr = "このパソコンにパスキーが無いときは、ログインを押すと出る QR コードを、パスキーのあるスマホで読み取ってください。";
