@@ -2407,6 +2407,47 @@ mod tests {
         );
     }
 
+    /// 資格情報で認証できる confidential client でも、token を受けた client でも挙げた RS でもなければ、mandate を消費できない。
+    #[tokio::test]
+    async fn another_confidential_client_cannot_consume_a_mandate_it_was_not_given() {
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_client(crate::model::Client {
+                    client_id: "rp".into(),
+                    client_secret: Some(crate::dcr::hash_token("s3cret")),
+                    ..client("client_secret_basic")
+                })
+                .with_client(crate::model::Client {
+                    client_id: "other-rp".into(),
+                    client_secret: Some(crate::dcr::hash_token("0ther")),
+                    ..client("client_secret_basic")
+                }),
+        );
+        p.store.save_access_token(at(None)).await.unwrap();
+        let mut other = HeaderMap::new();
+        other.insert(
+            header::AUTHORIZATION,
+            format!("Basic {}", B64.encode("other-rp:0ther"))
+                .parse()
+                .unwrap(),
+        );
+        let form = Form(HashMap::from([("token".to_string(), "AT".to_string())]));
+        let r = mandate_consume(State(p.clone()), other, form).await;
+        assert_eq!(r.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(r.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["consumed"], false, "ほかの client が消費できた");
+        let at = p.store.get_access_token("AT").await.unwrap().unwrap();
+        assert!(
+            !at.mandate_consumed,
+            "ほかの client の呼び出しで消費済みになった"
+        );
+    }
+
     async fn token_error(
         p: &Arc<Provider>,
         headers: HeaderMap,
