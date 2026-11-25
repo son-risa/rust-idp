@@ -171,7 +171,7 @@ pub(super) async fn account_page(
 {gpm_hint}
 <button class="primary" onclick="add()">[[Add a passkey on this device]]</button>
 <p class="small">[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey.]]</p>
-<p class="small"><a href="__LOGOUT__">[[Sign out]]</a></p>"#,
+<form class="small" method="post" action="__LOGOUT__"><input type="hidden" name="confirm" value="1"><button type="submit" class="signout">[[Sign out]]</button></form>"#,
                     email = esc(&m.account.email),
                     // メールのリンクで作り終えて来た（別の端末で始めたかもしれない）ときだけ、元のパソコンでの続け方を添える。
                     phone = if q.recovered.is_some() || q.client_id.is_some() {
@@ -196,6 +196,7 @@ h1{font-size:20px;margin:0 0 8px}p{font-size:14px;line-height:1.6}.sub{color:#5f
 .small{font-size:12px;color:#5f6368;margin-top:8px}
 button.primary,a.primary{display:block;box-sizing:border-box;width:100%;padding:13px;margin-top:16px;font-size:16px;border:0;border-radius:8px;cursor:pointer;background:#3367d6;color:#fff;text-align:center;text-decoration:none}
 button.link{background:none;border:0;color:#c5221f;padding:4px 0;font-size:13px;cursor:pointer}
+button.signout{background:none;border:0;padding:0;font:inherit;color:#3367d6;text-decoration:underline;cursor:pointer}
 ul.pk{list-style:none;padding:0;margin:12px 0}ul.pk li{border:1px solid #e0e0e0;border-radius:8px;padding:10px 12px;margin:8px 0}
 .nm{font-size:15px}#msg{font-size:14px;margin-top:14px;min-height:1.4em}</style></head><body>
 <h1>[[Passkeys]]</h1>

@@ -78,7 +78,7 @@ pub(super) fn esc(s: &str) -> String {
 
 fn nav(p: &Provider) -> String {
     format!(
-        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">[[IATs]]</a><a href="{audit}">[[Audit log]]</a><a href="{logout}">[[Sign out]]</a></nav>"#,
+        r#"<nav><a href="{home}">[[Admin console]]</a><a href="{users}">[[Users]]</a><a href="{clients}">[[Clients]]</a><a href="{iats}">[[IATs]]</a><a href="{audit}">[[Audit log]]</a><form method="post" action="{logout}"><input type="hidden" name="confirm" value="1"><button type="submit">[[Sign out]]</button></form></nav>"#,
         home = p.path("/admin"),
         users = p.path("/admin/users"),
         clients = p.path("/admin/clients"),
@@ -98,7 +98,9 @@ fn page(p: &Provider, lang: Lang, title: &str, body: &str) -> Html<String> {
 body{{font-family:-apple-system,'Helvetica Neue',sans-serif;max-width:960px;margin:0 auto;padding:24px 16px;line-height:1.6;color:#1a1a1a}}
 nav{{margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid var(--border)}}
 nav a{{margin-right:16px;color:var(--indigo);text-decoration:none;font-weight:500}}
-nav a:hover{{text-decoration:underline}}
+nav a:hover,nav button:hover{{text-decoration:underline}}
+nav form{{display:inline}}
+nav button{{font:inherit;background:none;border:0;padding:0;color:var(--indigo);font-weight:500;cursor:pointer}}
 h1{{font-size:1.4rem}}
 table{{width:100%;border-collapse:collapse;margin:16px 0}}
 th,td{{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);font-size:14px;vertical-align:top}}
