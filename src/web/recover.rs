@@ -27,7 +27,7 @@ pub(super) enum Recovery {
 }
 
 /// メールで passkey を足してよいアカウントか。
-pub(super) async fn recovery_for(fs: &crate::firestore::Firestore, email: &str) -> Result<Recovery, String> {
+pub(super) async fn recovery_for(fs: &dyn crate::document_store::DocumentStore, email: &str) -> Result<Recovery, String> {
     let Some(a) = registration::get_account(fs, email).await? else {
         return Ok(Recovery::NoPasskey);
     };
@@ -112,7 +112,7 @@ pub(super) async fn recover_page(
             ),
         );
     }
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -221,7 +221,7 @@ pub(super) async fn recover_submit(
     Form(form): Form<RecoverForm>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -251,7 +251,7 @@ pub(super) struct RecoverOptionsReq {
 }
 
 pub(super) async fn recover_options(State(p): State<Arc<Provider>>, Json(req): Json<RecoverOptionsReq>) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -295,7 +295,7 @@ pub(super) async fn recover_verify(
     jar: CookieJar,
     Json(req): Json<RecoverVerifyReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -386,10 +386,10 @@ async fn add_and_revoke(
     account_id: &str,
     outcome: &crate::webauthn::RegOutcome,
 ) -> Result<bool, String> {
-    let fs = p.firestore.as_ref().ok_or("no firestore")?;
+    let fs = p.docs.as_deref().ok_or("no firestore")?;
     registration::mark_recovered(fs, email, &outcome.credential_id).await?;
     registration::save_credential(fs, email, account_id, outcome).await?;
-    let c = crate::account_admin::revoke_other_sessions(fs, account_id, "").await;
+    let c = p.store.revoke_account(account_id, "").await;
     if !c.query_errors.is_empty() {
         tracing::error!("recover_passkey: revocation incomplete for account_id={account_id}: {:?}", c.query_errors);
     }

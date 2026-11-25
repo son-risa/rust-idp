@@ -57,7 +57,7 @@ pub(super) struct RegisterForm {
 /// `lang` はブラウザのフォームから来たときだけ Some。ネイティブの JSON API は None（両言語で送る）。
 pub(super) async fn issue_register_email(
     p: &Provider,
-    fs: &crate::firestore::Firestore,
+    fs: &dyn crate::document_store::DocumentStore,
     email: &str,
     ip: &str,
     lang: Option<Lang>,
@@ -109,7 +109,7 @@ pub(super) async fn register_submit(
     Form(form): Form<RegisterForm>,
 ) -> Response {
     let email = form.email.trim().to_lowercase();
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return plain_error(&localize("[[Something went wrong. Please try again.]]", Lang::from_headers(&headers))),
     };
@@ -152,7 +152,7 @@ pub(super) async fn register_email_challenge(
     Json(req): Json<EmailChallengeReq>,
 ) -> Response {
     let email = req.email.trim().to_lowercase();
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -179,7 +179,7 @@ pub(super) async fn register_verify_email(
     State(p): State<Arc<Provider>>,
     Json(req): Json<VerifyEmailReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -233,7 +233,7 @@ __TARGET__<label for="nm" id="nml">[[Name]]</label>
 <input id="nm" autocomplete="name" maxlength="80">
 <p class="small" id="ioshint" hidden>[[On iPhone, choose “Passwords” (iCloud) when asked where to save the passkey. A passkey saved in Google Password Manager may ask for a PIN at sign-in.]]</p>
 <div id="mobile" hidden>
- <p>[[Register securely with the fido2demo app.]]</p>
+ <p>[[Register securely with the {app} app.]]</p>
  <button class="primary" onclick="openApp()">[[Open in the app]]</button>
  <p class="small">[[If the app is installed, it opens automatically. If it does not, continue on the web with the button below.]]</p>
  <p class="small">[[If you open the app, the name above is not saved. It is saved if you continue on the web.]]</p>
@@ -251,6 +251,7 @@ __TARGET__<label for="nm" id="nml">[[Name]]</label>
 __WEBAUTHN_JS__
 __SERVER_ERROR_JS__
 const TOKEN="__TOKEN__",OPT="__OPT__",VER="__VER__",ACCOUNT="__ACCOUNT__",AFTER=__AFTER__,NAME_REQUIRED=!!AFTER,WEB_ONLY=__WEB_ONLY__;
+const APP_SCHEME=__APP_SCHEME__,APP_PACKAGE=__APP_PACKAGE__,MAGIC=__MAGIC__;
 document.getElementById('nml').textContent=NAME_REQUIRED?'[[Name (required)]]':'[[Name (optional)]]';
 const ua=navigator.userAgent;
 const isAndroid=/Android/i.test(ua);
@@ -259,8 +260,8 @@ document.getElementById((!AFTER&&!WEB_ONLY&&(isAndroid||isIOS))?'mobile':'deskto
 document.getElementById('ioshint').hidden=!isIOS;
 function openApp(){
  const url=isAndroid
-  ?('intent://magic?t='+TOKEN+'#Intent;scheme=jp.co.sonrisa.fido2demo;package=jp.co.sonrisa.fido2demo;S.browser_fallback_url='+encodeURIComponent('https://oidc.sonrisa.co.jp/r?t='+TOKEN)+';end')
-  :('jp.co.sonrisa.fido2demo://magic?t='+TOKEN);
+  ?('intent://magic?t='+TOKEN+'#Intent;scheme='+APP_SCHEME+';package='+APP_PACKAGE+';S.browser_fallback_url='+encodeURIComponent(MAGIC+'?t='+TOKEN)+';end')
+  :(APP_SCHEME+'://magic?t='+TOKEN);
  location.href=url;
 }
 async function reg(){
@@ -296,7 +297,14 @@ async function reg(){
         .replace("__SWITCH__", if current.is_some() { super::SWITCH_NOTICE } else { "" })
         .replace("__MAIN_HIDDEN__", if current.is_some() { "hidden" } else { "" })
         .replace("__TARGET__", if target.is_some() { "<p>{target}</p>\n" } else { "" });
+    // アプリが設定されていなければ、モバイルでも Web で登録する。
+    let app = p.mobile_app.as_ref();
+    let web_only = web_only || app.is_none();
     let html = localize(&body, lang)
+            .replace("{app}", &super::admin::esc(app.map_or("", |a| a.name.as_str())))
+            .replace("__APP_SCHEME__", &js_string_literal(app.map_or("", |a| a.scheme.as_str())))
+            .replace("__APP_PACKAGE__", &js_string_literal(app.map_or("", |a| a.android_package.as_str())))
+            .replace("__MAGIC__", &js_string_literal(&format!("{}/r", p.origin())))
             .replace("__WEBAUTHN_JS__", WEBAUTHN_JS)
             .replace("__TOKEN__", &token)
             .replace("__OPT__", &p.path("/signup/passkey/options"))
@@ -328,14 +336,19 @@ pub(super) async fn magic_redirect(
     link_landing(&p, &jar, Lang::from_headers(&headers), &q.t, false).await
 }
 
-/// oidc.sonrisa.co.jp は Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
+/// IdP の host が Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
 /// ここで返す。applinks=Universal Link(/r でアプリ起動)、webcredentials=ネイティブ passkey。
-pub(super) async fn apple_app_site_association() -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        r#"{"applinks":{"apps":[],"details":[{"appID":"RA5A5W7PJB.jp.co.sonrisa.fido2demo","paths":["/r","/r?*"]}]},"webcredentials":{"apps":["RA5A5W7PJB.jp.co.sonrisa.fido2demo"]}}"#,
-    )
-        .into_response()
+/// アプリが設定されていなければ 404。
+pub(super) async fn apple_app_site_association(State(p): State<Arc<Provider>>) -> Response {
+    let Some(app) = &p.mobile_app else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let id = app.apple_app_id.as_str();
+    Json(serde_json::json!({
+        "applinks": {"apps": [], "details": [{"appID": id, "paths": ["/r", "/r?*"]}]},
+        "webcredentials": {"apps": [id]},
+    }))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -360,7 +373,7 @@ async fn link_landing(p: &Provider, jar: &CookieJar, lang: Lang, token: &str, we
     if token.is_empty() {
         return plain_error(&localize("[[This link is incomplete. Please open the link in the email again.]]", lang));
     }
-    let target = match &p.firestore {
+    let target = match p.docs.as_deref() {
         Some(fs) => crate::registration::peek_email_challenge(fs, token).await.unwrap_or_else(|e| {
             tracing::warn!("peek_email_challenge: {e}");
             None
@@ -409,7 +422,7 @@ pub(super) async fn invite_create(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -494,7 +507,7 @@ pub(super) async fn account_disable(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -521,7 +534,7 @@ pub(super) async fn account_disable(
         }
     }
     let actor = format!("client:{}", client.client_id);
-    let status = match crate::account_admin::disable_account(fs, &actor, &email).await {
+    let status = match crate::account_admin::disable_account(fs, &*p.store, &actor, &email).await {
         Ok(crate::account_admin::DisableOutcome::Disabled(_)) => "disabled",
         Ok(crate::account_admin::DisableOutcome::AlreadyDisabled(_)) => "already_disabled",
         Ok(crate::account_admin::DisableOutcome::NotFound) => "not_found",
@@ -542,7 +555,7 @@ pub(super) async fn invite_page(
     Query(q): Query<MagicQuery>,
 ) -> Response {
     let lang = Lang::from_headers(&headers);
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => {
             return (
@@ -583,7 +596,7 @@ pub(super) async fn invite_page(
 
 /// 登録の token（招待を含む）は、宛先が既に登録済みなら使わせない。確認のメールが複数残っていても、
 /// 登録の後に残りの token で、通知も失効も無しに passkey を足せないようにする。
-async fn refuse_token_for_registered(fs: &crate::firestore::Firestore, token: &str) -> Option<Response> {
+async fn refuse_token_for_registered(fs: &dyn crate::document_store::DocumentStore, token: &str) -> Option<Response> {
     let email = match crate::registration::peek_email_challenge(fs, token).await {
         Ok(Some(email)) => email,
         Ok(None) => return None,
@@ -611,7 +624,7 @@ pub(super) async fn register_passkey_options(
     State(p): State<Arc<Provider>>,
     Json(req): Json<RegPkOptionsReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -714,7 +727,7 @@ pub(super) async fn register_passkey_verify(
     jar: CookieJar,
     Json(req): Json<RegVerifyReq>,
 ) -> Response {
-    let fs = match &p.firestore {
+    let fs = match p.docs.as_deref() {
         Some(fs) => fs,
         None => return (StatusCode::SERVICE_UNAVAILABLE, "no firestore").into_response(),
     };
@@ -940,7 +953,7 @@ mod invite_tests {
         assert!(html.contains(&format!("AFTER=\"{return_to}\"")), "戻り先が焼き込まれる");
 
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         assert!(crate::registration::has_passkey(fs, "new@example.com").await.unwrap());
         let cred = crate::registration::get_account(fs, "new@example.com").await.unwrap().unwrap();
         let claims = p.store.find_account(&cred.account_id).await.claims;
@@ -970,7 +983,7 @@ mod invite_tests {
         let first = token_of(body_json(first).await["url"].as_str().unwrap());
         let second = invite(&p, basic("amate", "s3cret"), "a@example.com", &rt).await;
         let second = token_of(body_json(second).await["url"].as_str().unwrap());
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let second_opts = body_json(
             register_passkey_options(
                 State(p.clone()),
@@ -1049,7 +1062,7 @@ mod invite_tests {
         let resp = disable(&p, basic("amate", "s3cret"), " A@Example.com").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_json(resp).await["status"], "disabled");
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         assert!(crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
         let audit = fs.query_eq("auditLog", "action", "disable_account").await.unwrap();
         assert_eq!(audit.len(), 1);
@@ -1072,7 +1085,7 @@ mod invite_tests {
         let first = invite(&p, basic("amate", "s3cret"), "boss@example.com", &rt).await;
         let token = token_of(body_json(first).await["url"].as_str().unwrap());
         assert_eq!(register_with_token(&p, &token).await, StatusCode::CREATED);
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let account_id = crate::registration::get_account(fs, "boss@example.com").await.unwrap().unwrap().account_id;
         crate::admin_store::grant_admin(fs, &account_id, "cli").await.unwrap();
 
@@ -1106,7 +1119,7 @@ mod invite_tests {
                 .await;
         assert_eq!(public.status(), StatusCode::FORBIDDEN);
         assert_eq!(disable(&p, basic("amate", "s3cret"), "not-an-email").await.status(), StatusCode::BAD_REQUEST);
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         assert!(!crate::registration::get_account(fs, "a@example.com").await.unwrap().unwrap().disabled);
     }
 
@@ -1130,7 +1143,7 @@ mod invite_tests {
     #[tokio::test]
     async fn ordinary_signup_token_is_not_an_invite() {
         let p = provider(&["amate"]).await;
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let token = crate::registration::create_email_challenge(fs, "a@example.com")
             .await
             .unwrap();
@@ -1141,7 +1154,7 @@ mod invite_tests {
     }
 
     async fn claims_of(p: &Arc<Provider>, email: &str) -> HashMap<String, serde_json::Value> {
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let cred = crate::registration::get_account(fs, email).await.unwrap().unwrap();
         p.store.find_account(&cred.account_id).await.claims
     }
@@ -1160,7 +1173,7 @@ mod invite_tests {
     #[tokio::test]
     async fn ordinary_signup_takes_the_name_optionally() {
         let p = provider(&[]).await;
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         let without = crate::registration::create_email_challenge(fs, "plain@example.com").await.unwrap();
         assert_eq!(register_named(&p, &without, None).await, StatusCode::CREATED, "fido2demo のように氏名を送らない登録は今までどおり");
         assert!(!claims_of(&p, "plain@example.com").await.contains_key("name"));
@@ -1172,7 +1185,7 @@ mod invite_tests {
     #[tokio::test]
     async fn a_name_that_is_too_long_or_has_control_characters_is_refused() {
         let p = provider(&[]).await;
-        let fs = p.firestore.as_ref().unwrap();
+        let fs = p.docs.as_deref().unwrap();
         for bad in [
             "あ".repeat(81),
             "a\nb".to_string(),
@@ -1215,9 +1228,19 @@ mod invite_tests {
         )
         .await;
         assert!(from_sign_in.contains("WEB_ONLY=true"), "{from_sign_in}");
+        let no_app = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
+        assert!(no_app.contains("WEB_ONLY=true"), "アプリを設定していなければ /r でも Web で済ませる");
+        let p = Arc::new(Provider::new("https://idp.example/oidc".to_string()).with_mobile_app(crate::MobileApp {
+            name: "Demo<App>".into(),
+            scheme: "com.example.demo".into(),
+            android_package: "com.example.pkg".into(),
+            apple_app_id: "TEAM123456.com.example.demo".into(),
+        }));
         let app_link = body_text(magic_redirect(State(p.clone()), HeaderMap::new(), CookieJar::default(), Query(MagicQuery { t: "tok".into() })).await).await;
         assert!(app_link.contains("WEB_ONLY=false"));
         assert!(app_link.contains(r#"<div id="fallback">"#), "Web で続けるボタンが隠れている");
+        assert!(app_link.contains("Demo&lt;App&gt;"), "{app_link}");
+        assert!(app_link.contains(r#"APP_SCHEME="com.example.demo",APP_PACKAGE="com.example.pkg",MAGIC="https://idp.example/r";"#), "{app_link}");
     }
 
     /// iPhone のときだけ、保存先は iCloud がよいと案内する（AMATE の要件の一覧の #3）。

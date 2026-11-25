@@ -28,6 +28,10 @@ default = []
 # Cloud Run の本番の binary はこれを有効にして build する（Dockerfile）。
 gcp = []
 
+[[example]]
+name = "passkey_memory"
+test = true
+
 [dependencies]
 axum = "0.8"
 axum-extra = { version = "0.12", features = ["cookie"] }

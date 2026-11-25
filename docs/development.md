@@ -9,7 +9,7 @@ ADDR=127.0.0.1:8099 cargo run                                     # gcp 無し�
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8180 cargo run --features gcp   # Firestore だけエミュレータへ
 ```
 
-KMS・Secret Manager・Resend は、`K_SERVICE`（Cloud Run が設定する）があるときだけ有効になる。
+KMS と Secret Manager は、`K_SERVICE`（Cloud Run が設定する）があるときだけ有効になる。Resend は、Firestore を使う起動で `RESEND_API_KEY` と `MAIL_FROM` が両方あれば手元でも使う。どちらかが無ければ、メールはログに出る（Cloud Run の上だけは、`MAIL_FROM` が無いと今の差出人に落とす）。
 
 ### FIDO2 の適合試験の道具を手元で当てる
 
@@ -43,3 +43,4 @@ PROPTEST_CASES=30000 cargo test fuzz_tests  # 重いファジング
 - 再デプロイしても、Cloud Run の env と secret の割り当ては保たれる。
 - issuer の独自ドメインは Cloud Run のドメインの割り当てで直に結ぶ。保護するリソースサーバは別のサービスに分ける。
 - 署名鍵と Firestore は、実行用のサービスアカウント（`cloudkms.signerVerifier` と `datastore.user`）で使う。
+- 互換の既定（`MAIL_FROM` と `APP_*` が無いと、Cloud Run の上では今の会社の差出人とアプリに落とす。`src/gcp.rs`）は、crates.io に出す前に消す。

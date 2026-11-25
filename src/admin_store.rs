@@ -18,7 +18,10 @@
 //! Conflict を返す（管理者の付与/剥奪は低頻度の手動操作なので、衝突時は呼び出し側=人間が
 //! 再実行すれば足りる）。
 
-use crate::firestore::{self, Firestore};
+use crate::firestore;
+use crate::document_store::DocumentStore;
+#[cfg(all(test, feature = "gcp"))]
+use crate::firestore::Firestore;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -37,7 +40,7 @@ struct AdminEntry {
 }
 
 /// レジストリを読む。ドキュメントが無ければ「管理者ゼロ人・未作成」として扱う。
-async fn load_registry(fs: &Firestore) -> Result<(Vec<AdminEntry>, Option<String>), String> {
+async fn load_registry(fs: &dyn DocumentStore) -> Result<(Vec<AdminEntry>, Option<String>), String> {
     match fs.get_doc_with_update_time(REGISTRY_COL, REGISTRY_ID).await? {
         Some((fields, update_time)) => Ok((parse_entries(&fields), Some(update_time))),
         None => Ok((vec![], None)),
@@ -57,13 +60,13 @@ fn entries_field(entries: &[AdminEntry]) -> serde_json::Value {
 
 /// account_id が管理者か。読み取り失敗は Err を返す（呼び出し側が「非管理者(403)」と
 /// 「判定不能(503)」を区別できるようにするため、ここでは bool に丸めない）。
-pub async fn is_admin(fs: &Firestore, account_id: &str) -> Result<bool, String> {
+pub async fn is_admin(fs: &dyn DocumentStore, account_id: &str) -> Result<bool, String> {
     let (entries, _) = load_registry(fs).await?;
     Ok(entries.iter().any(|e| e.account_id == account_id))
 }
 
 /// 現在の管理者 account_id 一覧。web/admin.rs::users_list が管理者バッジ表示に使う。
-pub async fn list_admins(fs: &Firestore) -> Result<Vec<String>, String> {
+pub async fn list_admins(fs: &dyn DocumentStore) -> Result<Vec<String>, String> {
     let (entries, _) = load_registry(fs).await?;
     Ok(entries.into_iter().map(|e| e.account_id).collect())
 }
@@ -78,7 +81,7 @@ pub enum GrantAdminResult {
 
 /// account_id を管理者にする。既に管理者なら書き込まず AlreadyAdmin を返す（冪等）。
 pub async fn grant_admin(
-    fs: &Firestore,
+    fs: &dyn DocumentStore,
     account_id: &str,
     granted_by: &str,
 ) -> Result<GrantAdminResult, String> {
@@ -122,7 +125,7 @@ fn decide_revoke(entries: &[AdminEntry], target: &str) -> RevokeAdminResult {
 /// account_id の管理者権限を剥奪する。ガード判定と削除を同じ読み取り(updateTime)の上で
 /// 行い、CAS 書き込みで確定させるため、2つの revoke が競合しても両方が Revoked になることはない
 /// （片方は Conflict になる）。
-pub async fn revoke_admin(fs: &Firestore, account_id: &str) -> Result<RevokeAdminResult, String> {
+pub async fn revoke_admin(fs: &dyn DocumentStore, account_id: &str) -> Result<RevokeAdminResult, String> {
     let (entries, update_time) = load_registry(fs).await?;
     match decide_revoke(&entries, account_id) {
         RevokeAdminResult::Revoked => {
