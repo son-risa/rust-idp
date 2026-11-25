@@ -123,6 +123,8 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
   消す前に確かめの画面を出す。画面の form は `confirm` を付けて同じ path へ POST し、その POST だけは
   `admin_same_origin` と同じ考え方（`from_own_origin`）で自分の origin に限る。RP の POST は他の origin から来るので、門は掛けない。
   確かめに失敗した hint の要求は、post_logout_redirect_uri へ戻さない。
+  post_logout_redirect_uri がその client の登録と食い違う要求も、戻り先を捨て、セッションがあれば確かめの画面を出す（誤りで終わらせてセッションを残さない）。
+  自分の画面（`/account` と管理画面）のログアウトは、`confirm` を付けた form の POST なので、確かめの画面を出さない。
 - `/ciba/{auth_req_id}/passkey-options` と `/reject` は、`auth_req_id` を知っているだけでは呼べない（`auth_req_id` は path に載り、ログに残る）。
   `Authorization` があれば access token（`/ciba/pending` と同じ）、無ければ cookie（sid）で名乗り、要求の宛先の利用者でなければ 404。
   cookie で名乗るときは、管理画面の門と同じ `from_own_origin` で自分の origin からの要求に限る（違えば 403）。

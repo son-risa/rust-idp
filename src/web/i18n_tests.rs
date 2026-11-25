@@ -700,7 +700,7 @@ async fn the_admin_navigation_and_badges_follow_the_browser_language() {
         "<title>ユーザー</title>",
         ">ユーザー</a>",
         ">監査ログ</a>",
-        ">ログアウト</a>",
+        ">ログアウト</button>",
         "<h1>ユーザー（4）</h1>",
         "<th>メールアドレス</th>",
         ">凍結中</span>",
@@ -787,7 +787,7 @@ async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
                 "<title>Sign in</title>",
                 "Sign in with a passkey",
                 "You have signed out",
-                ">Sign out</a>",
+                ">Sign out</button>",
             ],
         ),
         (
@@ -796,7 +796,7 @@ async fn sign_in_and_sign_out_are_worded_the_same_everywhere() {
                 "<title>ログイン</title>",
                 "パスキーでログイン",
                 "ログアウトしました",
-                ">ログアウト</a>",
+                ">ログアウト</button>",
             ],
         ),
     ] {
@@ -1274,7 +1274,7 @@ async fn the_account_page_signs_out_and_hides_unknown_dates() {
     f.as_object_mut().unwrap().remove("createdAt");
     fs.set_doc("credentials", "cred-legacy", f).await.unwrap();
 
-    let logout = format!(r#"href="{}""#, p.path("/end-session"));
+    let logout = format!(r#"action="{}""#, p.path("/end-session"));
     let out = body_of(
         account::account_page(State(p.clone()), accept(Some("ja")), CookieJar::default(), Query(account::AccountQuery::default())).await,
     )

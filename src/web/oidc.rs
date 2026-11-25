@@ -714,6 +714,9 @@ async fn sign_out(p: &Provider, headers: &HeaderMap, jar: CookieJar, q: EndSessi
 
     // post_logout_redirect_uri は client 登録値のみ許可（オープンリダイレクト防止）。
     // hint が確かめに失敗した要求は、仕様第 4 節に従い RP へ戻さない（ログアウトは確かめの画面を経て行う）。
+    // 戻り先が登録と食い違う要求も、hint の確かめに失敗したときと同じに扱う: 戻り先は捨て、確かめの画面へ回す。
+    // 誤りで終わらせてセッションを残すと、共用の端末で OP にログインしたままになる。
+    let mut unregistered = false;
     let return_to = match &q.post_logout_redirect_uri {
         Some(uri) if !hint_failed => {
             let registered = match client_id.as_deref() {
@@ -723,17 +726,20 @@ async fn sign_out(p: &Provider, headers: &HeaderMap, jar: CookieJar, q: EndSessi
                 },
                 None => false,
             };
-            if !registered {
+            if registered {
+                Some(uri.clone())
+            } else {
                 tracing::warn!("end_session: post_logout_redirect_uri not registered: {uri}");
-                let msg = localize(
-                    "[[The return address after sign-out is not registered for this app. Please contact the app provider.]]",
-                    lang,
-                );
-                return plain_error(&msg);
+                unregistered = true;
+                None
             }
-            Some(uri.clone())
         }
         _ => None,
+    };
+    let notice = if unregistered {
+        "<p>[[The return address after sign-out is not registered for this app. Please contact the app provider.]]</p>"
+    } else {
+        ""
     };
 
     // 仕様第 2 節: hint が無い・確かめに失敗した・今のセッションの利用者の ID Token でない、のどれかなら、
@@ -743,8 +749,10 @@ async fn sign_out(p: &Provider, headers: &HeaderMap, jar: CookieJar, q: EndSessi
         Some(s) => p.store.get_session(s).await,
         None => None,
     };
-    let needs_confirm =
-        !confirmed && session.as_ref().is_some_and(|s| hint.as_ref().is_none_or(|h| h.sub != s.account_id));
+    let needs_confirm = !confirmed
+        && session
+            .as_ref()
+            .is_some_and(|s| unregistered || hint.as_ref().is_none_or(|h| h.sub != s.account_id));
     if needs_confirm {
         let carried = match (&return_to, &client_id) {
             (Some(uri), Some(id)) => {
@@ -763,11 +771,13 @@ async fn sign_out(p: &Provider, headers: &HeaderMap, jar: CookieJar, q: EndSessi
 <style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
 button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f51b5;color:#fff;cursor:pointer}}</style></head><body>
 <h1 style="font-size:1.3rem;font-weight:500">[[Do you want to sign out?]]</h1>
-<p>[[You will need to sign in again to use apps that sign in with this account.]]</p>
-<form method="post" action="{action}"><input type="hidden" name="confirm" value="1">{carried}
+{notice}<p>[[You will need to sign in again to use apps that sign in with this account.]]</p>
+<form method="post" action="{action}"><input type="hidden" name="confirm" value="1">__CARRIED__
 <button type="submit">[[Sign out]]</button></form></body></html>"##
         );
-        return ([(header::CACHE_CONTROL, "no-store")], Html(localize(&html, lang))).into_response();
+        // 訳は、RP から来た値（state など）を差し込む前に掛ける。後に掛けると、値の中の `__LANG__` や訳の印が書き換わる。
+        let html = localize(&html, lang).replacen("__CARRIED__", &carried, 1);
+        return ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response();
     }
 
     if let Some(sid) = &sid {
@@ -792,7 +802,7 @@ button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f
 <style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
 a{{color:#3f51b5}}</style></head><body>
 <h1 style="font-size:1.3rem;font-weight:500">[[You have signed out]]</h1>
-<p><a href="{home}">[[Go to sign in]]</a></p></body></html>"##
+{notice}<p><a href="{home}">[[Go to sign in]]</a></p></body></html>"##
     );
     (jar, Html(localize(&html, lang))).into_response()
 }
@@ -1230,9 +1240,12 @@ mod tests {
             (Some("unknown"), "https://rp.example.com/bye"),
             (None, "https://rp.example.com/bye"),
         ] {
+            // 戻さずにログアウトを済ませ、戻り先が登録されていないことを画面で知らせる。
             let resp = end(client, uri).await;
-            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{client:?} {uri}");
+            assert_eq!(resp.status(), StatusCode::OK, "{client:?} {uri}");
             assert!(resp.headers().get(header::LOCATION).is_none());
+            let body = String::from_utf8(axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+            assert!(body.contains("is not registered for this app"), "{client:?} {uri}: {body}");
         }
     }
 
@@ -1445,6 +1458,44 @@ mod tests {
                 assert!(!html.contains("post_logout_redirect_uri"), "{name}: 戻り先を引き継いだ");
                 assert!(w.still_signed_in(&sid).await, "{name}");
             }
+        }
+
+        /// 戻り先が登録と食い違えば、正しい hint があっても戻り先を捨てて確かめに回す。誤りで終わらせてセッションを残さない。
+        #[tokio::test]
+        async fn an_unregistered_return_address_asks_first_and_does_not_return() {
+            let w = world().await;
+            w.signed_in("s-bad-uri").await;
+            let html = asks_first(
+                w.send(
+                    "GET",
+                    "s-bad-uri",
+                    &[("id_token_hint", &w.hint), ("client_id", "dcr-x"), ("post_logout_redirect_uri", "https://evil.example/"), ("state", "s1")],
+                    None,
+                )
+                .await,
+            )
+            .await;
+            assert!(!html.contains("post_logout_redirect_uri"), "戻り先を引き継いだ: {html}");
+            assert!(html.contains("is not registered for this app"), "{html}");
+            assert!(w.still_signed_in("s-bad-uri").await);
+
+            let r = w.send("POST", "s-bad-uri", &[("confirm", "1")], Some(OP)).await;
+            assert_eq!(r.status(), StatusCode::OK);
+            assert!(r.headers().get(header::LOCATION).is_none());
+            assert!(!w.still_signed_in("s-bad-uri").await);
+        }
+
+        /// RP から来た state は、訳の印や言語の差し込み口に見えても書き換えずに引き継ぐ。
+        #[tokio::test]
+        async fn the_carried_state_is_not_touched_by_translation() {
+            let w = world().await;
+            w.signed_in("s-state").await;
+            let state = "__LANG__[[Sign out]]";
+            let html = asks_first(
+                w.send("GET", "s-state", &[("client_id", "dcr-x"), ("post_logout_redirect_uri", BYE), ("state", state)], None).await,
+            )
+            .await;
+            assert!(html.contains(r#"name="state" value="__LANG__[[Sign out]]""#), "{html}");
         }
 
         /// 正しい hint でも、今ログインしている利用者のものでなければ確かめる（仕様第 2 節）。
