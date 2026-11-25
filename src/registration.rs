@@ -789,7 +789,8 @@ pub async fn get_profile(
         None => return Ok(out),
     };
     for k in crate::claims::EDITABLE {
-        if let Some(v) = firestore::field_str(&fields, k) {
+        // 空にする保存は field を消すが、それより前に空のまま保存された値も、未設定として扱う。
+        if let Some(v) = firestore::field_str(&fields, k).filter(|v| !v.is_empty()) {
             out.insert(k.to_string(), v.to_string());
         }
     }
@@ -830,26 +831,30 @@ impl std::fmt::Display for ProfileError {
     }
 }
 
-/// 既存値とマージして profiles/{email} を保存（EDITABLE 以外は無視）。
+/// profiles/{email} の、updates に在る field だけを書く（EDITABLE 以外は無視、空にした field は消す）。
+/// 他の field には触れないので、RP の PUT /me/profile と /account の保存が重なっても互いの更新を消さない。
 /// 値は登録の画面と同じ検査（normalize_profile_value）を通し、1 つでも通らなければ何も書かない。
 pub async fn save_profile(
     fs: &Firestore,
     email: &str,
     updates: &std::collections::HashMap<String, String>,
 ) -> Result<(), ProfileError> {
-    let mut current = get_profile(fs, email).await.map_err(ProfileError::Store)?;
-    for (k, v) in updates {
-        if crate::claims::EDITABLE.contains(&k.as_str()) {
-            let v = normalize_profile_value(v).map_err(|()| ProfileError::Invalid(k.clone()))?;
-            current.insert(k.clone(), v.unwrap_or_default());
-        }
-    }
     let mut fields = serde_json::Map::new();
     fields.insert("email".into(), firestore::s(email));
-    for (k, v) in &current {
-        fields.insert(k.clone(), firestore::s(v));
+    let mut remove = Vec::new();
+    for (k, v) in updates {
+        if crate::claims::EDITABLE.contains(&k.as_str()) {
+            match normalize_profile_value(v).map_err(|()| ProfileError::Invalid(k.clone()))? {
+                Some(v) => {
+                    fields.insert(k.clone(), firestore::s(&v));
+                }
+                None => remove.push(k.clone()),
+            }
+        }
     }
-    fs.set_doc("profiles", email, serde_json::Value::Object(fields)).await.map_err(ProfileError::Store)
+    fs.merge_fields("profiles", email, serde_json::Value::Object(fields), &remove)
+        .await
+        .map_err(ProfileError::Store)
 }
 
 fn challenge_expired(fields: &serde_json::Value) -> bool {

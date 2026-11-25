@@ -175,6 +175,9 @@ impl Firestore {
     pub async fn update_fields(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
         match *self {}
     }
+    pub async fn merge_fields(&self, _: &str, _: &str, _: Value, _: &[String]) -> Result<(), String> {
+        match *self {}
+    }
     pub async fn get_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
         match *self {}
     }
@@ -688,13 +691,19 @@ impl Firestore {
     /// 指定フィールドのみを部分更新（updateMask 付き PATCH）。他フィールドは保持される。
     /// set_doc は updateMask 無しで全体置換になるため、既存ドキュメントへの追記はこちらを使う。
     pub async fn merge_doc(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        self.merge_fields(col, id, fields, &[]).await
+    }
+
+    /// merge_doc に加え、`remove` のフィールドを消す（updateMask に在って fields に無いフィールドは消える）。
+    /// 文書が無ければ作る。
+    pub async fn merge_fields(&self, col: &str, id: &str, fields: Value, remove: &[String]) -> Result<(), String> {
         let tok = self.token().await?;
         let keys: Vec<String> = fields
             .as_object()
             .map(|o| o.keys().cloned().collect())
             .unwrap_or_default();
         let query: Vec<(&str, &str)> =
-            keys.iter().map(|k| ("updateMask.fieldPaths", k.as_str())).collect();
+            keys.iter().chain(remove).map(|k| ("updateMask.fieldPaths", k.as_str())).collect();
         let r = self
             .http
             .patch(self.doc_url(col, id))
