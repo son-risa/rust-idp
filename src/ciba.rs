@@ -41,7 +41,7 @@ impl AuthReqId {
     }
     /// Firestore の文書 ID に使える形か。Firestore は `__.*__` の ID を断る（400）。乱数の 43 文字は
     /// 4096 本に 1 本が `__` で始まるので、作るときはそれを捨てて作り直し、外から来た値はこれで見てから引く。
-    /// 外から来た値の上限を 43 文字より緩くしているのは、作り方を変えた前の要求（UUID）を落とさないため。
+    /// 外から来た値の上限を 43 文字より緩くしているのは、作り方を変える前の要求（32 文字の 16 進）を落とさないため。
     pub fn well_formed(id: &str) -> bool {
         (1..=128).contains(&id.len())
             && !id.starts_with("__")
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn well_formed_refuses_what_firestore_refuses_as_a_document_id() {
         assert!(AuthReqId::well_formed(AuthReqId::generate().as_str()));
-        assert!(AuthReqId::well_formed("0b6f7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"));
+        assert!(AuthReqId::well_formed("0b6f7a3e1c2d4e5f8a9b0c1d2e3f4a5b"));
         assert!(AuthReqId::well_formed("a__"));
         for bad in ["", "__x__", "__x", "a/b", "a.b", &"a".repeat(129)] {
             assert!(!AuthReqId::well_formed(bad), "{bad}");
