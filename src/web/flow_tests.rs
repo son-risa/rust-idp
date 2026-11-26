@@ -2827,3 +2827,64 @@ async fn a_recovery_that_could_not_sign_out_the_other_devices_asks_to_sign_in_ag
     );
     assert_eq!(passkeys_of(&p, &email).await, 2);
 }
+
+/// /account の passkey の削除は、消した後にもう一度失効する（1 回目の失効から消すまでの間に、
+/// 消す passkey でログインした session を閉じる）。2 回目が足りなければ、監査ログを残して 500 を返す。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_passkey_removal_revokes_again_after_removing() {
+    let (p, fake) = test_provider_and_fake().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    add_passkey(&p, &email, &account_id, b"second").await;
+    let jar = session_jar(&p, &account_id, now()).await;
+
+    // 1 回目の失効の session の問い合わせは通し、2 回目を落とす。
+    fake.fail_after(1, "QUERY", "sessions", None);
+    let r = delete_via_account(&p, &jar, b"second").await;
+    assert_eq!(
+        r.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "消した後の失効が足りないのに成功と返した"
+    );
+    assert_eq!(passkeys_of(&p, &email).await, 1);
+    let fs = p.docs.as_deref().unwrap();
+    let entries = fs
+        .query_eq("auditLog", "action", "delete_passkey")
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    let detail = crate::firestore::field_str(&entries[0].1, "detail").unwrap();
+    assert!(
+        detail.contains("removed=true after_removal:")
+            && detail.contains("query_errors=[\"sessions\"]"),
+        "{detail}"
+    );
+}
+
+/// /account の passkey の削除で、失効は済んだが passkey を消せなければ、監査ログ（removed=false）を残して 500。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_passkey_removal_that_could_not_remove_is_audited() {
+    let (p, fake) = test_provider_and_fake().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    add_passkey(&p, &email, &account_id, b"second").await;
+    let jar = session_jar(&p, &account_id, now()).await;
+
+    fake.fail_once("DELETE", "credentials", None);
+    let r = delete_via_account(&p, &jar, b"second").await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(passkeys_of(&p, &email).await, 2);
+    let fs = p.docs.as_deref().unwrap();
+    let entries = fs
+        .query_eq("auditLog", "action", "delete_passkey")
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1, "消せなかった削除が監査ログに残らない");
+    let detail = crate::firestore::field_str(&entries[0].1, "detail").unwrap();
+    assert!(
+        detail.ends_with("delete_errors=0 removed=false"),
+        "{detail}"
+    );
+}

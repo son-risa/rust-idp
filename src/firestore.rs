@@ -1211,6 +1211,10 @@ pub(crate) mod fake_firestore {
             .as_str()
             .unwrap_or("")
             .to_string();
+        // 失敗を入れるときのメソッド名は "QUERY"（id は無いので None で合わせる）。
+        if let Some(status) = st.take_failure("QUERY", &col, "") {
+            return status.into_response();
+        }
         let docs = st.docs.lock().unwrap();
 
         let mut matching: Vec<(&(String, String), &Doc)> =

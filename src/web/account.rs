@@ -538,15 +538,39 @@ pub(super) async fn delete_passkey(
         return internal("delete_passkey: revocation incomplete", &detail);
     }
     match registration::remove_credential(fs, &a.email, &req.id).await {
-        Ok(RemoveOutcome::Removed) => {
-            crate::audit_log::record(fs, &a.account_id, "delete_passkey", &a.account_id, &detail)
-                .await;
-            Json(serde_json::json!({ "ok": true })).into_response()
+        Ok(RemoveOutcome::Removed) => {}
+        Ok(RemoveOutcome::NotFound) => {
+            return (StatusCode::NOT_FOUND, "passkey not found").into_response();
         }
-        Ok(RemoveOutcome::NotFound) => (StatusCode::NOT_FOUND, "passkey not found").into_response(),
-        Ok(RemoveOutcome::LastOne) => (StatusCode::CONFLICT, "last passkey").into_response(),
-        Err(e) => internal("delete_passkey", &e),
+        Ok(RemoveOutcome::LastOne) => {
+            return (StatusCode::CONFLICT, "last passkey").into_response();
+        }
+        Err(e) => {
+            crate::audit_log::record(
+                fs,
+                &a.account_id,
+                "delete_passkey",
+                &a.account_id,
+                &format!("{detail} removed=false"),
+            )
+            .await;
+            return internal("delete_passkey: remove_credential", &e);
+        }
     }
+    // 1 回目の失効から消すまでの間に、消す passkey でログインした session を閉じる。
+    let c = p.store.revoke_account(&a.account_id, &me.sid).await;
+    let detail = format!(
+        "{detail} removed=true after_removal: other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+        c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
+    );
+    crate::audit_log::record(fs, &a.account_id, "delete_passkey", &a.account_id, &detail).await;
+    if !c.complete() {
+        return internal(
+            "delete_passkey: revocation after removal incomplete",
+            &detail,
+        );
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
 }
 
 #[derive(serde::Deserialize)]

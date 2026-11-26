@@ -197,23 +197,29 @@ pub async fn delete_passkeys(
     // 先に失効させる（passkey を消す途中で失敗しても、なくした端末のセッションは残さない）。
     let counts = store.revoke_account(&a.account_id, "").await;
     let removed = registration::remove_all_credentials(fs, email).await;
+    // 1 回目の失効から消すまでの間に、消す passkey でログインした session を閉じる。
+    let after = store.revoke_account(&a.account_id, "").await;
     audit_log::record(
         fs,
         actor,
         "delete_passkeys",
         &a.account_id,
         &format!(
-            "email={email} passkeys={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+            "email={email} passkeys={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={} after_removal: sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
             match &removed {
                 Ok(n) => format!("{}", n.unwrap_or(0)),
                 Err(e) => format!("failed({e})"),
             },
-            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors, counts.delete_errors
+            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors, counts.delete_errors,
+            after.sessions, after.access_tokens, after.refresh_tokens, after.query_errors, after.delete_errors
         ),
     )
     .await;
     if !counts.complete() {
         return Err(incomplete(&counts));
+    }
+    if !after.complete() {
+        return Err(incomplete(&after));
     }
     removed
 }
@@ -574,6 +580,15 @@ mod tests {
                 .await
                 .is_err()
         );
+        // passkey の全削除は、消した後の 2 回目の失効で S-V を消している。削除の試験のために張り直す。
+        store
+            .save_session(Session {
+                sid: "S-V".into(),
+                account_id: "acc-v".into(),
+                auth_time: 0,
+            })
+            .await
+            .unwrap();
         fake.fail_once("DELETE", "sessions", Some("S-V"));
         assert!(
             delete_account(&fs, &store, "cli", "v@example.com")
@@ -604,6 +619,28 @@ mod tests {
             Ok(DeleteOutcome::Deleted(_))
         ));
         assert!(store.get_session("S-V").await.unwrap().is_none());
+    }
+
+    /// passkey の全削除は、消した後にもう一度失効する。2 回目が足りなければ誤りを返す。
+    #[tokio::test]
+    async fn delete_passkeys_revokes_again_after_removing() {
+        let (host, fake) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host.clone());
+        register(&fs, "w@example.com", "acc-w").await;
+        fake.fail_after(1, "QUERY", "sessions", None);
+        let e = delete_passkeys(&fs, &fstore(&host), "cli", "w@example.com")
+            .await
+            .unwrap_err();
+        assert!(e.contains("sessions"), "{e}");
+        let entries = fs
+            .query_eq("auditLog", "action", "delete_passkeys")
+            .await
+            .unwrap();
+        let detail = crate::firestore::field_str(&entries[0].1, "detail").unwrap();
+        assert!(
+            detail.ends_with("after_removal: sessions=0 access_tokens=0 refresh_tokens=0 query_errors=[\"sessions\"] delete_errors=0"),
+            "{detail}"
+        );
     }
 
     /// passkey の削除が途中で失敗しても、セッションとトークンは先に失効させ、監査ログも残す。
