@@ -126,6 +126,15 @@ impl SqliteDocumentStore {
     /// `path` の file を開く（無ければ 0600 で作る）。WAL と `synchronous=FULL` にし、表が無ければ作る。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
+        // SQLite は ":memory:" を一時の DB として、"file:" で始まる道を URI として開く（同梱の SQLite は
+        // flag によらず URI を読む）。どちらも先に 0600 で作る file と別の物を開くので、ここで断る。
+        let raw = path.as_os_str().as_encoded_bytes();
+        if raw == b":memory:" || raw.starts_with(b"file:") {
+            return Err(format!(
+                "sqlite: {} is not a plain file path",
+                path.display()
+            ));
+        }
         create_private(path)?;
         let conn = Connection::open(path).map_err(err("open"))?;
         let mode: String = conn
@@ -685,6 +694,11 @@ mod tests {
             ),
             ("accounts", "a", json!({ "email": s("a@example.com") })),
             ("accounts", "b", json!({ "expiresAt": s("not a time") })),
+            (
+                "accounts",
+                "c",
+                json!({ "expiresAt": { "timestampValue": "garbage" } }),
+            ),
         ];
         for (col, id, f) in &rows {
             docs.set_doc(col, id, f.clone()).await.unwrap();
@@ -701,6 +715,24 @@ mod tests {
     #[test]
     fn an_empty_path_is_refused() {
         assert!(SqliteDocumentStore::open("").is_err());
+    }
+
+    /// ":memory:" と "file:" で始まる道は、何も作らずに断る。
+    #[test]
+    fn memory_and_uri_paths_are_refused_without_leaving_a_file() {
+        let name = format!("uri-check-{}.sqlite", std::process::id());
+        let uri = format!("file:{name}");
+        for p in [":memory:", uri.as_str()] {
+            let refused = SqliteDocumentStore::open(p).is_err();
+            let left = [p, name.as_str()].iter().any(|f| Path::new(f).exists());
+            for f in [p, name.as_str()] {
+                for suffix in ["", "-wal", "-shm"] {
+                    let _ = std::fs::remove_file(format!("{f}{suffix}"));
+                }
+            }
+            assert!(refused, "{p} was opened");
+            assert!(!left, "{p} left a file");
+        }
     }
 
     /// 新しく作る file と -wal は、持ち主だけが読み書きできる。

@@ -529,8 +529,6 @@ impl Store for FirestoreStore {
         crate::registration::account_from_documents(&*self.fs, sub).await
     }
 
-    /// account_id → doc の逆引きを別に持たず、accountId の query_eq でその場で探して消す。
-    /// 1 種類の検索が失敗しても他の種類の失効は続け、失敗した種類は query_errors に残す（存否不明）。
     /// 下の DocumentStore に任せる。Firestore は何もしない（TTL ポリシーが消す）。SQLite は期限の過ぎた行を消す。
     async fn sweep_expired(&self) {
         if let Err(e) = self.fs.sweep_expired().await {
@@ -538,6 +536,8 @@ impl Store for FirestoreStore {
         }
     }
 
+    /// account_id → doc の逆引きを別に持たず、accountId の query_eq でその場で探して消す。
+    /// 1 種類の検索が失敗しても他の種類の失効は続け、失敗した種類は query_errors に残す（存否不明）。
     async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> RevocationCounts {
         let mut counts = RevocationCounts::default();
         for (col, n) in [
