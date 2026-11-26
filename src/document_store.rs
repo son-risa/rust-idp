@@ -336,6 +336,21 @@ impl DocumentStore for MemoryDocumentStore {
         self.lock().docs.remove(&key(col, id));
         Ok(())
     }
+
+    /// SQLite と同じく、`expiresAt` か `expireAt` の時刻が過ぎた文書を消す。
+    async fn sweep_expired(&self) -> Result<(), String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        let past = |f: &Value, name: &str| {
+            crate::firestore::field_ts_secs(f, name).is_some_and(|t| t < now)
+        };
+        self.lock()
+            .docs
+            .retain(|_, d| !past(&d.fields, "expiresAt") && !past(&d.fields, "expireAt"));
+        Ok(())
+    }
 }
 
 /// `only` の集まり（None なら全て）への操作に誤りを返し、ほかはメモリに置く保存先。

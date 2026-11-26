@@ -467,6 +467,12 @@ impl Store for MemoryStore {
     /// 全マップから期限切れを物理削除(retain_alive の実体)。ロックは各マップ毎に
     /// 短時間で取得・解放し、保持順序を固定してデッドロックを避ける。
     async fn sweep_expired(&self) {
+        // 登録の保存先も、FirestoreStore と同じくここから掃除する（回数の上限の数など）。
+        if let Some(docs) = &self.documents
+            && let Err(e) = docs.sweep_expired().await
+        {
+            tracing::warn!("sweep_expired: {e}");
+        }
         retain_alive(&mut self.interactions.lock().unwrap());
         retain_alive(&mut self.sessions.lock().unwrap());
         retain_alive(&mut self.codes.lock().unwrap());

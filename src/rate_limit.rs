@@ -2,7 +2,7 @@
 //!
 //! 文書は `rateLimits/{名前}-{hash}`。hash は (scope, key) の SHA-256 で、IP やアドレスを文書の id にも中身にも残さない。
 //! 中身は窓の中で通した時刻（ミリ秒）の並び `hits` と、最後に通した時刻に窓を足した `expireAt`。
-//! Firestore は `expireAt` の TTL ポリシーで消し、ほかの保存先は [`sweep`] で消す。
+//! Firestore は `expireAt` の TTL ポリシーで消し、Memory・SQLite は定期の掃除（`DocumentStore::sweep_expired`）で消す。
 
 use crate::document_store::DocumentStore;
 use crate::firestore;
@@ -100,27 +100,6 @@ impl RateLimiter {
             self.name
         );
         Ok(false)
-    }
-}
-
-/// 窓を過ぎた数の文書を消す。未認証の /signup は key（email・IP）を送り手が選べるので、消さないと集まりが伸び続ける。
-/// Firestore は TTL ポリシーで消すので呼ばない（集まりを全て読むことになる）。
-pub(crate) async fn sweep(docs: &dyn DocumentStore) {
-    let now = now_millis() / 1000;
-    let rows = match docs.list_collection(COLLECTION).await {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("rate limit sweep: {e}");
-            return;
-        }
-    };
-    for (id, f, update_time) in rows {
-        if firestore::field_ts_secs(&f, "expireAt").unwrap_or(0) < now {
-            // 読んだ後に誰かが数を足していたら消さない。
-            let _ = docs
-                .delete_doc_if_unchanged(COLLECTION, &id, &update_time)
-                .await;
-        }
     }
 }
 
@@ -232,16 +211,20 @@ mod tests {
         .await;
     }
 
+    /// 定期の掃除（MemoryStore の sweep_expired が登録の保存先にも掛ける）は、窓の過ぎた数の文書だけを消す。
+    /// SQLite の掃除は sqlite.rs の試験が、同じ expireAt で確かめている。
     #[tokio::test]
     async fn sweeping_drops_only_documents_whose_window_has_passed() {
-        let docs = MemoryDocumentStore::default();
+        use crate::store::Store;
+        let docs = std::sync::Arc::new(MemoryDocumentStore::default());
+        let store = crate::store::MemoryStore::with_documents(docs.clone());
         let short = RateLimiter::new("s", Duration::from_millis(1), 2);
         let long = RateLimiter::new("l", Duration::from_secs(3600), 2);
-        short.check_and_record(&docs, "ip", "old").await.unwrap();
-        long.check_and_record(&docs, "ip", "new").await.unwrap();
+        short.check_and_record(&*docs, "ip", "old").await.unwrap();
+        long.check_and_record(&*docs, "ip", "new").await.unwrap();
         // expireAt は秒で切り上げるので、秒が変わるのを待つ
         tokio::time::sleep(Duration::from_millis(2100)).await;
-        sweep(&docs).await;
+        store.sweep_expired().await;
         let ids: Vec<String> = docs
             .list_collection(COLLECTION)
             .await

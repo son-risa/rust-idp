@@ -184,21 +184,8 @@ impl Provider {
             loop {
                 tick.tick().await;
                 p.store.sweep_expired().await;
-                if let Some(docs) = p.docs.as_deref()
-                    && !p.docs_expire_themselves()
-                {
-                    crate::rate_limit::sweep(docs).await;
-                }
             }
         })
-    }
-
-    /// 文書の保存先が、古い文書を自分で消すか（Firestore の TTL ポリシー）。
-    fn docs_expire_themselves(&self) -> bool {
-        #[cfg(feature = "gcp")]
-        return self.fcm.is_some();
-        #[cfg(not(feature = "gcp"))]
-        false
     }
 
     /// client_id を解決する。静的登録(HashMap)を先に見て、無ければ Firestore の
