@@ -31,6 +31,9 @@ pub struct Provider {
     pub(crate) signer: Arc<dyn JwsSigner>,
     /// 追加の署名鍵（RS256 等）。jwks 公開と alg 選択に使う。
     pub(crate) extra_signers: Vec<Arc<dyn JwsSigner>>,
+    /// 署名には使わず、jwks と自分の ID Token の確かめにだけ載せる公開鍵（JWK）。
+    /// 鍵を入れ替えた後、前の鍵で署名した ID Token を確かめられるように残す。
+    pub(crate) verify_only_jwks: Vec<serde_json::Value>,
     /// パスキーの登録とログイン・復旧・管理画面・PAR・DCR・CIBA の承認などの保存先。
     /// None ならそれらの経路は 503 などで断る（既定）。本番（Cloud Run）は Firestore。
     pub(crate) docs: Option<Arc<dyn DocumentStore>>,
@@ -110,6 +113,7 @@ impl Provider {
             store_is_default: true,
             signer: Arc::new(Es256Signer::generate()),
             extra_signers: Vec::new(),
+            verify_only_jwks: Vec::new(),
             docs: None,
             #[cfg(feature = "gcp")]
             fcm: None,
@@ -288,6 +292,28 @@ impl Provider {
         std::iter::once(&self.signer).chain(self.extra_signers.iter())
     }
 
+    /// 署名には使わない公開鍵を jwks と確かめに足す（鍵の入れ替えの前後）。
+    pub fn add_verify_only_jwk(mut self, jwk: serde_json::Value) -> Self {
+        self.verify_only_jwks.push(jwk);
+        self
+    }
+
+    /// /jwks に載せ、自分の ID Token の確かめに使う公開鍵。署名鍵が先。
+    /// 同じ kid は 1 つにする（入れ替えの途中で、署名鍵と同じ版を検証用にも書いた場合）。
+    pub fn published_jwks(&self) -> Vec<serde_json::Value> {
+        let mut keys: Vec<serde_json::Value> = Vec::new();
+        let candidates = self
+            .all_signers()
+            .map(|s| s.public_jwk())
+            .chain(self.verify_only_jwks.iter().cloned());
+        for k in candidates {
+            if !keys.iter().any(|x| x["kid"] == k["kid"]) {
+                keys.push(k);
+            }
+        }
+        keys
+    }
+
     pub fn with_signer(mut self, signer: Arc<dyn JwsSigner>) -> Self {
         self.signer = signer;
         self
@@ -356,6 +382,19 @@ mod tests {
             p.signer_for(Some("PS256")),
             Err(crate::error::OAuthError::ServerError(_))
         ));
+    }
+
+    /// 検証用の鍵は署名の鍵の後ろに載り、署名の鍵と同じ kid は 1 つにまとめる。
+    #[test]
+    fn published_jwks_lists_signers_then_verify_only_keys_once() {
+        let p = Provider::new("https://op");
+        let current = p.signer.public_jwk();
+        let old = crate::jws::Es256Signer::generate().public_jwk();
+        assert_eq!(p.published_jwks(), vec![current.clone()]);
+        let p = p
+            .add_verify_only_jwk(old.clone())
+            .add_verify_only_jwk(current.clone());
+        assert_eq!(p.published_jwks(), vec![current, old]);
     }
 
     /// with_document_store だけでも、find_account は試し用の claim を返さない。with_store が先なら替えない。

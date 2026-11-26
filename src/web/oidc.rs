@@ -62,8 +62,7 @@ fn custom_endpoints(i: &str) -> serde_json::Value {
 }
 
 pub(super) async fn jwks(State(p): State<Arc<Provider>>) -> Json<serde_json::Value> {
-    let keys: Vec<_> = p.all_signers().map(|s| s.public_jwk()).collect();
-    Json(serde_json::json!({ "keys": keys }))
+    Json(serde_json::json!({ "keys": p.published_jwks() }))
 }
 /* ===== authorize ===== */
 
@@ -748,8 +747,8 @@ fn own_id_token(p: &Provider, jwt: &str) -> Option<IdTokenHint> {
     let alg = header.get("alg")?.as_str()?;
     let kid = header.get("kid")?.as_str()?;
     let jwk = p
-        .all_signers()
-        .map(|s| s.public_jwk())
+        .published_jwks()
+        .into_iter()
         .find(|k| k["alg"] == alg && k["kid"] == kid)?;
     let part = |name: &str| jwk.get(name).and_then(|v| v.as_str()).and_then(dec);
     let input = format!("{h}.{b}");
@@ -1804,6 +1803,71 @@ mod tests {
                 );
                 assert!(w.still_signed_in(&sid).await, "{name}");
             }
+        }
+
+        /// 署名鍵を入れ替えた後も、前の鍵を検証用に残している間は、前の鍵の ID Token が /jwks で
+        /// 確かめられ、hint としても通る。前の鍵は署名には使わない。外した後は、確かめに回す。
+        #[tokio::test]
+        async fn a_hint_signed_by_the_previous_key_passes_while_that_key_is_kept() {
+            let old = crate::jws::Es256Signer::generate();
+            let old_jwk = old.public_jwk();
+            let claims =
+                serde_json::json!({"iss": OP, "sub": "acc-1", "aud": "dcr-x", "iat": 1, "exp": 2});
+            let hint = old.sign(&claims).await;
+            let rotated = |keep: bool| {
+                let p = Provider::new(OP).with_client(client_with_post_logout(&[BYE]));
+                if keep {
+                    p.add_verify_only_jwk(old_jwk.clone())
+                } else {
+                    p
+                }
+            };
+            let world_of = |p: Provider| World {
+                store: p.store.clone(),
+                app: super::super::router(p),
+                hint: hint.clone(),
+                rs_hint: String::new(),
+                off: vec![],
+            };
+
+            let p = Arc::new(rotated(true));
+            assert_ne!(
+                p.signer_for(None).unwrap().public_jwk()["kid"],
+                old_jwk["kid"]
+            );
+            assert_eq!(p.all_signers().count(), 1, "前の鍵を署名の鍵に数えた");
+            let keys = jwks(State(p.clone())).await.0["keys"].clone();
+            let old_kid = old_jwk["kid"].clone();
+            let published = keys
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|k| k["kid"] == old_kid);
+            assert_eq!(published, Some(&old_jwk), "{keys}");
+            // RP の確かめ方: header の kid で /jwks の鍵を選び、署名を確かめる。
+            let (input, sig) = hint.rsplit_once('.').unwrap();
+            let jwk = published.unwrap();
+            let x = crate::es256::b64url_decode(jwk["x"].as_str().unwrap()).unwrap();
+            let y = crate::es256::b64url_decode(jwk["y"].as_str().unwrap()).unwrap();
+            let vk = crate::es256::verifying_key_from_xy(&x, &y).unwrap();
+            let sig = crate::es256::b64url_decode(sig).unwrap();
+            let sig = p256::ecdsa::Signature::from_slice(&sig).unwrap();
+            use p256::ecdsa::signature::Verifier;
+            assert!(vk.verify(input.as_bytes(), &sig).is_ok());
+
+            let params = [
+                ("id_token_hint", hint.as_str()),
+                ("post_logout_redirect_uri", BYE),
+                ("state", "s1"),
+            ];
+            let w = world_of(rotated(true));
+            w.signed_in("s-kept").await;
+            signed_out_to_rp(&w.send("GET", "s-kept", &params, None).await);
+
+            let w = world_of(rotated(false));
+            w.signed_in("s-removed").await;
+            asks_first(w.send("GET", "s-removed", &params, None).await).await;
+            assert!(w.still_signed_in("s-removed").await);
         }
 
         /// 戻り先が登録と食い違えば、正しい hint があっても戻り先を捨てて確かめに回す。誤りで終わらせてセッションを残さない。
