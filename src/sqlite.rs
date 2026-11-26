@@ -126,10 +126,6 @@ impl SqliteDocumentStore {
     /// `path` の file を開く（無ければ 0600 で作る）。WAL と `synchronous=FULL` にし、表が無ければ作る。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
-        // 空の道を渡すと、SQLite は閉じると消える一時の DB を開く。保存したつもりで消えるので断る。
-        if path.as_os_str().is_empty() {
-            return Err("sqlite open: the path is empty".into());
-        }
         create_private(path)?;
         let conn = Connection::open(path).map_err(err("open"))?;
         let mode: String = conn
@@ -700,7 +696,8 @@ mod tests {
         }
     }
 
-    /// 空の道は断る（SQLite は空の道で、閉じると消える一時の DB を開く）。
+    /// 空の道は断る。SQLite は空の道で、閉じると消える一時の DB を開くが、unix では先に file を作る段が、
+    /// それ以外では WAL にならないことの確かめが断る。
     #[test]
     fn an_empty_path_is_refused() {
         assert!(SqliteDocumentStore::open("").is_err());
