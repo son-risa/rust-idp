@@ -879,18 +879,19 @@ async fn sign_out(
         && session
             .as_ref()
             .is_some_and(|s| unregistered || hint.as_ref().is_none_or(|h| h.sub != s.account_id));
-    if needs_confirm {
-        let carried = match (&return_to, &client_id) {
-            (Some(uri), Some(id)) => {
-                let mut f = hidden("client_id", id) + &hidden("post_logout_redirect_uri", uri);
-                if let Some(st) = &q.state {
-                    f += &hidden("state", st);
-                }
-                f
+    // 確かめの画面と、消せなかったときのもう一度の form が、RP への戻り先を引き継ぐ。
+    let carried = match (&return_to, &client_id) {
+        (Some(uri), Some(id)) => {
+            let mut f = hidden("client_id", id) + &hidden("post_logout_redirect_uri", uri);
+            if let Some(st) = &q.state {
+                f += &hidden("state", st);
             }
-            _ => String::new(),
-        };
-        let action = admin::esc(&p.path("/end-session"));
+            f
+        }
+        _ => String::new(),
+    };
+    let action = admin::esc(&p.path("/end-session"));
+    if needs_confirm {
         let html = format!(
             r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
@@ -906,8 +907,28 @@ button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f
         return ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response();
     }
 
-    if let Some(sid) = &sid {
-        p.store.delete_session(sid).await;
+    // 消せなかったら、ログアウトしたとは返さない。cookie は残す: 消すと、保存先に残った session を
+    // この端末から消し直す手が無くなる。残せば、もう一度押せば同じ session を消しに行ける。
+    if let Some(sid) = &sid
+        && let Err(e) = p.store.delete_session(sid).await
+    {
+        tracing::error!("end_session: delete_session: {e}");
+        let html = format!(
+            r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
+<style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
+button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f51b5;color:#fff;cursor:pointer}}</style></head><body>
+<h1 style="font-size:1.3rem;font-weight:500">[[Could not sign out. Please try again.]]</h1>
+<form method="post" action="{action}"><input type="hidden" name="confirm" value="1">__CARRIED__
+<button type="submit">[[Sign out]]</button></form></body></html>"##
+        );
+        let html = localize(&html, lang).replacen("__CARRIED__", &carried, 1);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CACHE_CONTROL, "no-store")],
+            Html(html),
+        )
+            .into_response();
     }
     let jar = jar.remove(
         Cookie::build((SID_COOKIE, ""))

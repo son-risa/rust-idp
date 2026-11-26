@@ -929,8 +929,13 @@ pub(super) async fn register_passkey_verify(
     let active =
         matches!(crate::registration::get_account(fs, &email1).await, Ok(Some(a)) if !a.disabled);
     let (jar, redirect) = if active {
-        if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
-            p.store.delete_session(&old).await;
+        if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string())
+            && let Err(e) = p.store.delete_session(&old).await
+        {
+            return super::passkey_saved_sign_in_again(
+                "register: delete old session",
+                &e.to_string(),
+            );
         }
         let redirect = super::continue_after_email(&p, &jar, &from, &account_id, false).await;
         (start_session(&p, jar, account_id, now()).await, redirect)

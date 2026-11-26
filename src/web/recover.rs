@@ -416,9 +416,6 @@ pub(super) async fn recover_verify(
         Ok(Err(e)) => return internal("recover_verify", &e),
         Err(e) => return internal("recover_verify: task", &e.to_string()),
     };
-    if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
-        p.store.delete_session(&old).await;
-    }
     {
         let p = p.clone();
         let (email, lang) = (email.clone(), Lang::from_headers(&headers));
@@ -427,6 +424,14 @@ pub(super) async fn recover_verify(
                 tracing::error!("send_passkey_added failed: {e}");
             }
         });
+    }
+    if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string())
+        && let Err(e) = p.store.delete_session(&old).await
+    {
+        return super::passkey_saved_sign_in_again(
+            "recover_verify: delete old session",
+            &e.to_string(),
+        );
     }
     if !still_open {
         return (StatusCode::FORBIDDEN, "account disabled").into_response();
