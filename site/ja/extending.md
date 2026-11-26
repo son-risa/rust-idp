@@ -13,7 +13,7 @@
 | 軸 | 例 | 差し替え口 | 契約の試験 |
 |---|---|---|---|
 | 動かす場所 | Cloud Run・VPS・k8s | 組み立ての場所。binary は `src/main.rs` と `src/gcp.rs` で組む。ライブラリとして使うなら、自分の `main` で `Provider` を組む | なし |
-| 保存先 | メモリ・Firestore → PostgreSQL・SQLite | `DocumentStore`（`with_document_store`）・`Store`（`with_store`）・`CibaStore`（`with_ciba`）・`FidoStore`（`FidoState::from_env` の中で選ぶ。`with_*` は無い） | あり。`document_store_contract.rs`・`store_contract.rs`・`ciba_store_contract.rs`・`fido_store_contract.rs` |
+| 保存先 | メモリ・Firestore・SQLite → PostgreSQL | `DocumentStore`（`with_document_store`）・`Store`（`with_store`）・`CibaStore`（`with_ciba`）・`FidoStore`（`FidoState::from_env` の中で選ぶ。`with_*` は無い） | あり。`document_store_contract.rs`・`store_contract.rs`・`ciba_store_contract.rs`・`fido_store_contract.rs` |
 | 鍵と署名 | Cloud KMS → 鍵 file・Vault・他の KMS・HSM | `JwsSigner`（`with_signer`・`add_signer`） | あり。`jws_signer_contract.rs` |
 | 利用者の確かめ方 | パスキー → 既存のパスワード DB・LDAP/AD・上流の IdP | 口はまだ無い。パスキーの確かめは `src/webauthn.rs` と登録の流れに直に書いてある | なし |
 | 利用者の出どころ | 自前の登録 → 既存の利用者 DB・SCIM | 口はまだ無い。名簿は `DocumentStore` の `accounts` の集まりにある。登録・無効化・token の発行が、そこを直に読む。id_token などの claim は `Store::find_account` が返す | なし。`find_account` は `Store` の契約の試験に入っていない |
@@ -22,15 +22,15 @@
 | 認可の型 | grant の種類・確かめの規則 | `GrantHandler`（`with_grant`）・`AuthorizationCheck`（`with_check`）・`ResponseMode`（`with_response_mode`） | あり。`grant_handler_contract.rs`・`authorization_check_contract.rs`・`response_mode_contract.rs` |
 | client の認証の方式 | private_key_jwt・Basic → mTLS | `ClientAuthMethod`（`with_client_auth`）・`DpopVerifier`（`with_dpop`）。mTLS は、入力の `ClientAuthInput` に client の証明書の欄が無い。入力を広げるところから始める | あり。`client_auth_contract.rs`・`dpop_verifier_contract.rs` |
 | 見張り | OpenTelemetry など | 口はまだ無い。rust-idp は `tracing` で記録を出す。ライブラリとして使うなら、組む側が `tracing` の subscriber を選べる。binary は `src/main.rs` で subscriber を決めている | なし |
-| 多テナント | 1 つの process で複数の issuer | 口はまだ無い。1 つの `Provider` は issuer を 1 つだけ持つ | なし |
+| 多テナント | 1 つの process で複数の issuer | 持たない（決めた方針）。rust-idp は 1 つの組織だけを扱い、1 つの `Provider` は issuer を 1 つだけ持つ。複数の組織には、組織ごとに rust-idp を立てる | なし |
 
-契約の試験の module は `#[cfg(test)]` で、macro は crate の中にだけ公開している。このため、契約の試験を当てたい実装は、この crate の中に足す。たとえば `src/sqlite_store.rs` を作り、その試験の mod から macro を呼ぶ。
+契約の試験の module は `#[cfg(test)]` で、macro は crate の中にだけ公開している。このため、契約の試験を当てたい実装は、この crate の中に足す。たとえば SQLite の実装（`src/sqlite.rs`）は、その試験の mod から macro を呼んでいる。
 
 ## gcp の feature なしで、今どこまで動くか
 
 `gcp` の feature を付けずに build した binary は、次のように組む（`src/main.rs`）。
 
-- 保存先: `MemoryDocumentStore` と、それを読む `MemoryStore`。CIBA は `MemoryCibaStore`。どれも process を止めると消える。
+- 保存先: `MemoryDocumentStore` と、それを読む `MemoryStore`。CIBA は `MemoryCibaStore`。どれも process を止めると消える。`sqlite` の feature を付けて build し、`SQLITE_PATH` を渡すと、SQLite の file に置く（実例 1）。
 - 署名鍵: 起動のたびに新しい ES256 の鍵を作る。RS256 の鍵は無い。
 - メール: `LogMailer`。メールは送らず、リンクを記録に出す。
 - パスキーの登録とログイン: メモリの上で動く。
@@ -46,38 +46,36 @@
 
 SQLite の file 1 つを保存先にする。`gcp` の feature は付けない。
 
-SQLite の実装は、まだ無い。足す物は次のとおり。
+SQLite の実装はある。`sqlite` の feature を付けて build し、環境変数 `SQLITE_PATH` に file の道を渡す。
 
-1. **保存先の実装を 3 つか 4 つ書く。**
-    - `DocumentStore`: 利用者・パスキー・登録の token・PAR・DCR など。文書の中身は Firestore の REST の値の形の JSON で来る。表 1 つ（集まりの名・id・JSON・版）で持てる。
-    - `Store`: セッション・認可コード・token。`find_account` は、`MemoryStore` と同じく、同じ `DocumentStore` から利用者を引く。
-    - `CibaStore`: CIBA の要求。
-    - `FidoStore`: FIDO2 の適合試験の面（`/fido/*`）の保存先。この面は `FIDO_CONFORMANCE_ENABLED` のときだけ載る。本番のパスキーのログインは `DocumentStore` を使う。この面を出さないなら、`FidoStore` は要らない。
-2. **契約の試験を呼ぶ。** 実装ごとに macro を 1 行呼び、緑にする。
+```sh
+cargo build --release --features sqlite
+SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
+```
 
-    ```rust
-    #[cfg(test)]
-    mod tests {
-        async fn store() -> super::SqliteDocumentStore {
-            super::SqliteDocumentStore::open_in_memory().unwrap()
-        }
-        crate::document_store_contract::document_store_contract_tests!(store);
-    }
-    ```
+- `SQLITE_PATH` があると、利用者・パスキー・登録の token・PAR・DCR など（`DocumentStore`）、セッション・認可コード・token（`Store`）、CIBA の要求（`CibaStore`）を、その file 1 つに置く。file が無ければ、持ち主だけが読み書きできる形（0600）で作る。開けなければ起動しない。
+- `SQLITE_PATH` が無ければ、今までどおりメモリに置く。`sqlite` の feature なしで build した binary に `SQLITE_PATH` を渡すと、起動しない。メモリで動いて、止めたときに利用者が消えるのを避けるため。
+- 1 つの process だけが file を開く前提で、WAL と `synchronous=FULL` で開く。同じ file を複数の process で分け合わない。
+- file と、それを置く directory は、rust-idp を動かす利用者だけが読めるようにする（file は 600、directory は 700）。token や session の id が文書の id に入るため。
+- 写しは `sqlite3` の `.backup` か `VACUUM INTO` で取る。動いている最中に file だけを `cp` すると、`-wal` にある commit が写しから欠ける。
+- そのため台数は増やせない。1 台で足りる小さな組織向けで、その 1 台が止まればログインも止まる。台数を増やすなら、Firestore のような、複数の台から共有できる保存先を使う。
+- 実装は `src/sqlite.rs`。SQLite で書いたのは `DocumentStore` だけ。`Store` と `CibaStore` は、Firestore でも使っている「`DocumentStore` の上の実装」をそのまま載せる。`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!` を、一時 directory に作った file に当てている。
+- `FidoStore`（FIDO2 の適合試験の面 `/fido/*` の保存先）には、SQLite の実装が無い。この面は `FIDO_CONFORMANCE_ENABLED` のときだけ載り、メモリに置く。本番のパスキーのログインは `DocumentStore` を使う。
+- `rusqlite` の crate が SQLite 本体（C）を同梱して build する。build する機械に C の compiler が要る。
 
-    `Store` は `store_contract_tests!`、`CibaStore` は `ciba_store_contract_tests!`、`FidoStore` は `fido_store_contract_tests!` を呼ぶ。`SqliteDocumentStore` は、これから作る実装の名の例。
-3. **鍵を file から読む。** `Es256Signer::from_scalar_b64` と `Rs256Signer::from_pkcs8_pem` がある。file から読んで `with_signer`・`add_signer` で差し込む。どちらの型も `jws_signer_contract_tests!` が当たっている。file を読む部分は、まだ無い。
-4. **メールを SMTP で送る。** `Mailer` を SMTP で実装し、`mailer_contract_tests!` を呼ぶ。この macro には、届いた中身を受け手の側から読む `Outbox` を渡す。送り損ねうる実装は、届け先が断る `Outbox` も渡す。
-5. **起動を組む。** 今の `src/main.rs` は、`gcp` なしだとメモリの保存先を固定で組む。SQLite を使う組み立て（feature を 1 つ足すか、自分の `main` を書く）が要る。
+まだ無いもの:
 
-先に決めること:
+- **署名鍵を file から読む部分。** `gcp` なしの binary は、起動のたびに新しい ES256 の鍵を作る。再起動すると鍵が変わり、JWKS も変わる。`Es256Signer::from_scalar_b64` と `Rs256Signer::from_pkcs8_pem` はあり、どちらの型にも `jws_signer_contract_tests!` が当たっている。file から読んで `with_signer`・`add_signer` で差し込む部分を足す。
+- **SMTP でメールを送る `Mailer`。** `gcp` なしの binary は `LogMailer` で、メールは送らず、リンクを記録に出す。`Mailer` を SMTP で実装し、`mailer_contract_tests!` を呼ぶ。この macro には、届いた中身を受け手の側から読む `Outbox` を渡す。送り損ねうる実装は、届け先が断る `Outbox` も渡す。
 
-- SQLite の crate の多くは C の SQLite を含む。rust-idp は Rust だけで書く方針なので、どの crate を使うかを先に決める。
+知っておくこと:
+
+- rust-idp が禁じているのは、自分の crate の中の `unsafe` だけ（`#![forbid(unsafe_code)]`）。C を含む依存は禁じていない。`sqlite` の feature を付けると、SQLite 本体の C が binary に入る。
 - JAR・DPoP・`private_key_jwt` の jti を 1 度だけ通す記録（`NonceStore`）は、trait でない。メモリか Firestore の 2 つから選ぶ。1 台で動かすならメモリでよい。ただし再起動すると、jti の記録が消える。
 
 ## 実例 2: PostgreSQL と動かす
 
-実例 1 と同じ口を、PostgreSQL で実装する。通す試験も同じで、`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!`（`/fido/*` を出すなら `fido_store_contract_tests!` も）を呼んで緑にする。
+`src/sqlite.rs` のように `DocumentStore` だけを PostgreSQL で書けば、`Store` と `CibaStore` は `DocumentStore` の上の実装（`FirestoreStore`・`FirestoreCibaStore`）を流用できる。この 2 つは `#[cfg(any(feature = "gcp", feature = "sqlite"))]` の中にあるので、その cfg に PostgreSQL の feature を足す。通す試験は、`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!`（`/fido/*` を出すなら `fido_store_contract_tests!` も）を呼んで緑にする。
 
 PostgreSQL では、次の点を確かめる。
 

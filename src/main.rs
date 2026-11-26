@@ -73,6 +73,10 @@ async fn main() {
 
     #[cfg(feature = "gcp")]
     let provider = rust_idp::gcp::configure_from_env(provider).await;
+    #[cfg(feature = "gcp")]
+    if std::env::var_os("SQLITE_PATH").is_some() {
+        tracing::warn!("SQLITE_PATH is ignored: built with the gcp feature (storage is Firestore)");
+    }
     // gcp 無しの binary を Cloud Run に載せると、起動ごとの鍵とメモリ上の保存先で本番を名乗ってしまう。
     // gcp 付きの binary が正規の鍵を読めないときと同じく、起動しない。
     #[cfg(not(feature = "gcp"))]
@@ -84,15 +88,19 @@ async fn main() {
     if std::env::var("FIRESTORE_EMULATOR_HOST").is_ok() {
         tracing::warn!("FIRESTORE_EMULATOR_HOST is ignored: built without the gcp feature");
     }
-    // gcp 無しでは、利用者・passkey・登録の token などもメモリに置く（process を止めると消える）。
+    // gcp 無しでは、SQLITE_PATH があれば利用者・passkey・セッションとトークン・CIBA をその SQLite の file に置く。
+    // 無ければメモリに置く（process を止めると消える）。
     #[cfg(not(feature = "gcp"))]
-    let provider = {
-        let docs = std::sync::Arc::new(rust_idp::MemoryDocumentStore::default());
-        provider
-            .with_document_store(docs.clone())
-            .with_store(std::sync::Arc::new(rust_idp::MemoryStore::with_documents(
-                docs,
-            )))
+    let provider = match std::env::var_os("SQLITE_PATH") {
+        Some(path) => with_sqlite(provider, std::path::Path::new(&path)),
+        None => {
+            let docs = std::sync::Arc::new(rust_idp::MemoryDocumentStore::default());
+            provider
+                .with_document_store(docs.clone())
+                .with_store(std::sync::Arc::new(rust_idp::MemoryStore::with_documents(
+                    docs,
+                )))
+        }
     };
     let app = rust_idp::router(provider);
 
@@ -129,6 +137,27 @@ async fn main() {
             }
         }
     }
+}
+
+#[cfg(all(not(feature = "gcp"), feature = "sqlite"))]
+fn with_sqlite(provider: Provider, path: &std::path::Path) -> Provider {
+    match rust_idp::sqlite::configure(provider, path) {
+        Ok(p) => {
+            tracing::info!("storage: SQLite file {}", path.display());
+            p
+        }
+        Err(e) => {
+            tracing::error!("FATAL: cannot open SQLITE_PATH {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 保存先を指したのにメモリで動くと、止めたときに利用者が消える。起動しない。
+#[cfg(all(not(feature = "gcp"), not(feature = "sqlite")))]
+fn with_sqlite(_provider: Provider, _path: &std::path::Path) -> Provider {
+    tracing::error!("FATAL: SQLITE_PATH is set, but built without the sqlite feature");
+    std::process::exit(1);
 }
 
 /// カンマ区切りの client_id の一覧。未設定なら空。

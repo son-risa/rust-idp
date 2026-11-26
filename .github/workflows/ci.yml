@@ -27,17 +27,20 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: 書式（cargo fmt と違えば止める）
         run: cargo fmt --all -- --check
-      # gcp 無し（crates.io の既定）と gcp 付き（Cloud Run の本番）の両方を見る。
+      # gcp 無し（crates.io の既定）と gcp 付き（Cloud Run の本番）と sqlite 付き（VPS）を見る。
       - name: Clippy（警告が 1 つでもあれば止める）
         env:
           CARGO_BUILD_WARNINGS: deny
         run: |
           cargo clippy --locked --all-targets
           cargo clippy --locked --all-targets --features gcp
+          cargo clippy --locked --all-targets --features sqlite
       - name: Test（gcp 無し）
         run: cargo test --locked
       - name: Test（gcp 付き）
         run: cargo test --locked --features gcp
+      - name: Test（sqlite 付き）
+        run: cargo test --locked --features sqlite
       - name: 前提の台帳の試験が実在するか（cargo test の一覧と照合）
         run: formal/check-ledger-tests.sh
 

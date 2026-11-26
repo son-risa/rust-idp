@@ -27,6 +27,8 @@ default = []
 # Firestore・Cloud KMS・Secret Manager・FCM・Resend へ出る実装と、本番の配線・管理者用サブコマンド。
 # Cloud Run の本番の binary はこれを有効にして build する（Dockerfile）。
 gcp = []
+# 保存先を SQLite の file 1 つにする実装（DB サーバの要らない VPS 向け）。gcp 無しの binary は SQLITE_PATH があればこれを組む。
+sqlite = ["dep:rusqlite"]
 
 [[example]]
 name = "passkey_memory"
@@ -61,6 +63,8 @@ p384 = { version = "0.14", features = ["ecdsa"] }
 ed25519-dalek = "3"
 sha1 = { version = "0.11", features = ["oid"] }
 subtle = "2"
+# SQLite 本体（C）を同梱して build する。OS の libsqlite3 の版に左右されない。
+rusqlite = { version = "0.43", features = ["bundled"], optional = true }
 
 [dev-dependencies]
 proptest = "1"
@@ -68,6 +72,8 @@ proptest = "1"
 coset = "0.4"
 # router を通しで叩く試験（oneshot）。axum が既に引いている版。
 tower = { version = "0.5", features = ["util"] }
+# SQLite の試験の file を置く一時 directory。proptest が既に引いている版。
+tempfile = "3"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

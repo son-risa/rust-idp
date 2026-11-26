@@ -1,21 +1,23 @@
 //! CIBA (OIDC Client-Initiated Backchannel Authentication) のバックチャネル要求。
 //! Rust を生かす: auth_req_id は newtype、status は網羅 enum、Firestore 永続化。
 
-#[cfg(feature = "gcp")]
-use crate::firestore::{self, Firestore};
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
+use crate::document_store::DocumentStore;
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
+use crate::firestore;
 use async_trait::async_trait;
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TTL_SECS: u64 = 300;
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 const COL: &str = "cibaRequests";
 /// 解決済み要求の監査履歴（active な COL とは別。単回消費・dedup を壊さない追記専用ログ）。
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 const HIST_COL: &str = "cibaHistory";
 /// 履歴の保持期間。Firestore TTL ポリシー（expireAt）のバックストップと併用する。
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 const HISTORY_RETENTION_SECS: u64 = 90 * 86400;
 
 fn now() -> u64 {
@@ -65,7 +67,7 @@ pub enum CibaStatus {
     Denied,
 }
 
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 impl CibaStatus {
     fn as_str(self) -> &'static str {
         match self {
@@ -101,7 +103,7 @@ impl BackchannelAuthRequest {
     pub fn expired(&self) -> bool {
         self.expires_at < now()
     }
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     fn fields(&self) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         obj.insert("clientId".into(), firestore::s(&self.client_id));
@@ -118,7 +120,7 @@ impl BackchannelAuthRequest {
         }
         serde_json::Value::Object(obj)
     }
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     fn from_fields(auth_req_id: AuthReqId, f: &serde_json::Value) -> Self {
         let g = |k: &str| firestore::field_str(f, k).unwrap_or("").to_string();
         let expires_at = f
@@ -170,7 +172,7 @@ impl CibaHistoryEntry {
             resolved_at,
         }
     }
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     fn fields(&self) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         obj.insert("account".into(), firestore::s(&self.account));
@@ -194,7 +196,7 @@ impl CibaHistoryEntry {
         }
         serde_json::Value::Object(obj)
     }
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     fn from_fields(auth_req_id: String, f: &serde_json::Value) -> Self {
         let g = |k: &str| firestore::field_str(f, k).unwrap_or("").to_string();
         let resolved_at = f
@@ -337,20 +339,21 @@ impl Default for CibaRateLimiter {
     }
 }
 
-/// 本番実装。Firestore の updateTime プリコンディションで CAS を実現する。
-#[cfg(feature = "gcp")]
+/// [`DocumentStore`] の上の実装。CAS は文書の版（Firestore の updateTime・SQLite の version）の前提条件で行う。
+/// gcp では Firestore、sqlite では SQLite の file を下に置く。
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 pub struct FirestoreCibaStore {
-    fs: Arc<Firestore>,
+    fs: Arc<dyn DocumentStore>,
 }
 
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 impl FirestoreCibaStore {
-    pub fn new(fs: Arc<Firestore>) -> Self {
+    pub fn new(fs: Arc<dyn DocumentStore>) -> Self {
         Self { fs }
     }
 }
 
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 #[async_trait]
 impl CibaStore for FirestoreCibaStore {
     async fn create(
@@ -611,7 +614,7 @@ impl CibaStore for MemoryCibaStore {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     #[test]
     fn status_str_roundtrip_and_unknown_defaults_pending() {
         for s in [
@@ -640,7 +643,7 @@ mod tests {
         assert_ne!(a, AuthReqId::generate());
     }
 
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     #[test]
     fn fields_roundtrip_preserves_values() {
         let req = BackchannelAuthRequest {
@@ -727,6 +730,7 @@ mod tests {
     #[cfg(feature = "gcp")]
     mod firestore {
         use super::*;
+        use crate::firestore::Firestore;
 
         async fn store() -> FirestoreCibaStore {
             let (host, _state) = crate::firestore::fake_firestore::spawn().await;

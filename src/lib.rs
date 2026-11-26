@@ -49,7 +49,7 @@ mod fido;
 #[cfg(test)]
 mod fido_store_contract;
 mod firestore;
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
 mod firestore_store;
 #[cfg(test)]
 mod formal_ledger_tests;
@@ -83,6 +83,8 @@ mod response_mode;
 #[cfg(test)]
 mod response_mode_contract;
 mod sig;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 mod step_up;
 mod store;
 #[cfg(test)]

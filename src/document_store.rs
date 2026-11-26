@@ -5,7 +5,8 @@
 //! 文書の中身は Firestore の REST の値の形（`{"stringValue": "..."}`・`{"timestampValue": "RFC3339"}`・
 //! `{"booleanValue": true}`・`{"integerValue": "1"}`）で、上の段（アカウント・パスキー・招待など）が組み立てる。
 //!
-//! 実装は 2 つ。既定の [`MemoryDocumentStore`]（1 つの process の中だけ）と、`gcp` の feature の Firestore。
+//! 実装は 3 つ。既定の [`MemoryDocumentStore`]（1 つの process の中だけ）と、`gcp` の feature の Firestore と、
+//! `sqlite` の feature の SQLite の file（`crate::sqlite::SqliteDocumentStore`）。
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -83,6 +84,11 @@ pub trait DocumentStore: Send + Sync {
     async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String>;
     /// 文書を消す。無くても誤りにしない。
     async fn delete_doc(&self, col: &str, id: &str) -> Result<(), String>;
+    /// 期限の過ぎた文書を消す。既定は何もしない（Firestore は TTL ポリシーが消す）。
+    /// DocumentStore の上の Store の `sweep_expired` が、定期の掃除のたびに呼ぶ。
+    async fn sweep_expired(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct Doc {
@@ -117,30 +123,34 @@ impl Inner {
             .is_some_and(|d| version_str(d.version) == update_time)
     }
 
-    /// 在る文書の fields に `fields` の各 key を書き、`remove` を消したもの。無ければ空から。
     fn merged(&self, col: &str, id: &str, fields: &Value, remove: &[String]) -> Value {
-        let mut base = self
-            .docs
-            .get(&key(col, id))
-            .map(|d| d.fields.clone())
-            .unwrap_or_else(|| json!({}));
-        if let Some(obj) = base.as_object_mut() {
-            for (k, v) in fields.as_object().into_iter().flatten() {
-                obj.insert(k.clone(), v.clone());
-            }
-            for k in remove {
-                obj.remove(k);
-            }
-        }
-        base
+        merge(
+            self.docs.get(&key(col, id)).map(|d| d.fields.clone()),
+            fields,
+            remove,
+        )
     }
+}
+
+/// 在る文書の fields（`base`）に `fields` の各 key を書き、`remove` を消したもの。無ければ空から。
+pub(crate) fn merge(base: Option<Value>, fields: &Value, remove: &[String]) -> Value {
+    let mut base = base.unwrap_or_else(|| json!({}));
+    if let Some(obj) = base.as_object_mut() {
+        for (k, v) in fields.as_object().into_iter().flatten() {
+            obj.insert(k.clone(), v.clone());
+        }
+        for k in remove {
+            obj.remove(k);
+        }
+    }
+    base
 }
 
 fn key(col: &str, id: &str) -> (String, String) {
     (col.to_string(), id.to_string())
 }
 
-fn version_str(v: u64) -> String {
+pub(crate) fn version_str(v: u64) -> String {
     format!("v{v}")
 }
 
