@@ -124,6 +124,38 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
                 );
                 std::process::exit(1);
             }
+            // 鍵の入れ替えの前後に、署名には使わず jwks と ID Token の確かめにだけ載せる版
+            // （カンマ区切りの cryptoKeyVersion の道）。読めなかった版は記録して飛ばし、起動は続ける:
+            // 最小 0 台で起動のたびに KMS を読むので、止めると KMS の不調で全台が立たなくなる。
+            // 飛ばした版の ID Token は、ログアウトの hint が確かめの画面に回るだけで、安全側に倒れる。
+            for (env, rs256) in [
+                ("KMS_ES256_VERIFY_ONLY", false),
+                ("KMS_RS256_VERIFY_ONLY", true),
+            ] {
+                let paths = std::env::var(env).unwrap_or_default();
+                for path in paths.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                    let jwk = if rs256 {
+                        kms::verify_only_rs256(&fs, path).await
+                    } else {
+                        kms::verify_only_es256(&fs, path).await
+                    };
+                    match jwk {
+                        Ok(jwk) => {
+                            tracing::info!(
+                                "{env}: publishing kid {} for verification only",
+                                jwk["kid"]
+                            );
+                            provider = provider.add_verify_only_jwk(jwk);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                event = "kms_verify_only_key_skipped",
+                                "{env} {path}: {e}"
+                            );
+                        }
+                    }
+                }
+            }
         } // K_SERVICE 限定(KMS/Secret Manager 署名鍵)ここまで。
 
         // jti リプレイ防止を Firestore に分散化（インスタンス跨ぎで単回を保証）。

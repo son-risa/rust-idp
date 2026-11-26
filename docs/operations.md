@@ -10,7 +10,8 @@ rust-idp を配備して動かすときの覚え書き。README を短い入口�
 | `BASE_PATH` | パス接頭辞（例 `/oidc`）。issuer = ORIGIN + BASE_PATH |
 | `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT` | Firestore / KMS のプロジェクト。gcp 付きで Firestore を使うとき（`K_SERVICE` か `FIRESTORE_EMULATOR_HOST` があるとき）と管理者用サブコマンドでは必須で、どちらも無ければ起動も CLI も止まる |
 | `PORT` / `ADDR` | 待受ポート（Cloud Run は PORT、ローカルは ADDR） |
-| `KMS_ES256_KEY` / `KMS_RS256_KEY` | Cloud KMS 署名鍵（無ければ Secret Manager にフォールバック） |
+| `KMS_ES256_KEY` / `KMS_RS256_KEY` | Cloud KMS 署名鍵（無ければ Secret Manager にフォールバック）。鍵の道（`.../cryptoKeys/<名>`）なら版 1、版までの道（`.../cryptoKeyVersions/<N>`）ならその版で署名する |
+| `KMS_ES256_VERIFY_ONLY` / `KMS_RS256_VERIFY_ONLY` | 署名に使わず、`/jwks` と `id_token_hint` の確かめにだけ載せる版（カンマ区切りの版までの道）。鍵の入れ替えの前後に使う。読めなかった版は記録（`kms_verify_only_key_skipped`）して飛ばす。無ければ載せない |
 | `FIDO_RP_ID` / `FIDO_ORIGIN` / `FIDO_RP_NAME` | FIDO/WebAuthn の RP 設定 |
 | `FIDO_CONFORMANCE_ENABLED` | `/fido` conformance 面の有効化 |
 | `CIBA_RP_SECRET` | CIBA クライアントの secret |

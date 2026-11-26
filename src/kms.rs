@@ -46,62 +46,9 @@ impl KmsSigner {
         key_path: &str,
         base: String,
     ) -> Result<Self, String> {
-        let version = format!("{}/cryptoKeyVersions/1", key_path.trim_end_matches('/'));
+        let version = version_path(key_path);
         let http = crate::http::client();
-        // 公開鍵 PEM を取得し JWK / kid を作る（既存 jws.rs と同じ kid スキーム）。
-        let tok = fs.token().await?;
-        let url = format!("{base}/v1/{version}/publicKey");
-        let resp = http
-            .get(&url)
-            .bearer_auth(&tok)
-            .send()
-            .await
-            .map_err(|e| format!("kms publicKey: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!(
-                "kms publicKey {} {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
-        }
-        let j: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("kms publicKey json: {e}"))?;
-        let pem = j
-            .get("pem")
-            .and_then(|v| v.as_str())
-            .ok_or("kms publicKey: no pem")?;
-        let (jwk, kid) = match kind {
-            KmsKind::Es256 => {
-                use p256::elliptic_curve::sec1::ToSec1Point;
-                use p256::pkcs8::DecodePublicKey;
-                let pk = p256::PublicKey::from_public_key_pem(pem)
-                    .map_err(|e| format!("es256 spki: {e}"))?;
-                let pt = pk.to_sec1_point(false);
-                let x = b64url(pt.x().ok_or("no x")?);
-                let y = b64url(pt.y().ok_or("no y")?);
-                let kid = crate::es256::jwk_thumbprint_p256(&x, &y);
-                let jwk = serde_json::json!({
-                    "kty":"EC","crv":"P-256","x":x,"y":y,"alg":"ES256","use":"sig","kid":kid
-                });
-                (jwk, kid)
-            }
-            KmsKind::Rs256 => {
-                use rsa::pkcs8::DecodePublicKey;
-                use rsa::traits::PublicKeyParts;
-                let pk = rsa::PublicKey::from_public_key_pem(pem)
-                    .map_err(|e| format!("rs256 spki: {e}"))?;
-                let n = b64url(pk.n().to_be_bytes_trimmed_vartime().into_vec());
-                let e = b64url(pk.e().to_be_bytes_trimmed_vartime().into_vec());
-                let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
-                let kid = b64url(sha2::Sha256::digest(canonical.as_bytes()));
-                let jwk = serde_json::json!({
-                    "kty":"RSA","n":n,"e":e,"alg":"RS256","use":"sig","kid":kid
-                });
-                (jwk, kid)
-            }
-        };
+        let (jwk, kid) = public_jwk(kind, &fs, &http, &base, &version).await?;
         Ok(Self {
             kind,
             fs,
@@ -155,6 +102,106 @@ impl KmsSigner {
         };
         Ok(b64url(raw))
     }
+}
+
+/// env の値（鍵の道、または版までの道）を cryptoKeyVersion の道にする。
+/// 鍵の道だけなら版 1（版を書けるようにする前からの振る舞い）。
+fn version_path(path: &str) -> String {
+    let p = path.trim().trim_end_matches('/');
+    if p.contains("/cryptoKeyVersions/") {
+        p.to_string()
+    } else {
+        format!("{p}/cryptoKeyVersions/1")
+    }
+}
+
+/// 版の公開鍵 PEM を取得し、JWK と kid を作る（jws.rs と同じ kid の付け方）。
+async fn public_jwk(
+    kind: KmsKind,
+    fs: &Firestore,
+    http: &reqwest::Client,
+    base: &str,
+    version: &str,
+) -> Result<(serde_json::Value, String), String> {
+    let tok = fs.token().await?;
+    let url = format!("{base}/v1/{version}/publicKey");
+    let resp = http
+        .get(&url)
+        .bearer_auth(&tok)
+        .send()
+        .await
+        .map_err(|e| format!("kms publicKey: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "kms publicKey {} {}",
+            resp.status(),
+            resp.text().await.unwrap_or_default()
+        ));
+    }
+    let j: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("kms publicKey json: {e}"))?;
+    let pem = j
+        .get("pem")
+        .and_then(|v| v.as_str())
+        .ok_or("kms publicKey: no pem")?;
+    Ok(match kind {
+        KmsKind::Es256 => {
+            use p256::elliptic_curve::sec1::ToSec1Point;
+            use p256::pkcs8::DecodePublicKey;
+            let pk = p256::PublicKey::from_public_key_pem(pem)
+                .map_err(|e| format!("es256 spki: {e}"))?;
+            let pt = pk.to_sec1_point(false);
+            let x = b64url(pt.x().ok_or("no x")?);
+            let y = b64url(pt.y().ok_or("no y")?);
+            let kid = crate::es256::jwk_thumbprint_p256(&x, &y);
+            let jwk = serde_json::json!({
+                "kty":"EC","crv":"P-256","x":x,"y":y,"alg":"ES256","use":"sig","kid":kid
+            });
+            (jwk, kid)
+        }
+        KmsKind::Rs256 => {
+            use rsa::pkcs8::DecodePublicKey;
+            use rsa::traits::PublicKeyParts;
+            let pk =
+                rsa::PublicKey::from_public_key_pem(pem).map_err(|e| format!("rs256 spki: {e}"))?;
+            let n = b64url(pk.n().to_be_bytes_trimmed_vartime().into_vec());
+            let e = b64url(pk.e().to_be_bytes_trimmed_vartime().into_vec());
+            let canonical = format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#);
+            let kid = b64url(sha2::Sha256::digest(canonical.as_bytes()));
+            let jwk = serde_json::json!({
+                "kty":"RSA","n":n,"e":e,"alg":"RS256","use":"sig","kid":kid
+            });
+            (jwk, kid)
+        }
+    })
+}
+
+/// 署名には使わない版の公開 JWK（jwks と確かめにだけ載せる）。`path` は版までの道。
+pub async fn verify_only_es256(fs: &Firestore, path: &str) -> Result<serde_json::Value, String> {
+    verify_only_at(KmsKind::Es256, fs, path, KMS_BASE).await
+}
+pub async fn verify_only_rs256(fs: &Firestore, path: &str) -> Result<serde_json::Value, String> {
+    verify_only_at(KmsKind::Rs256, fs, path, KMS_BASE).await
+}
+
+async fn verify_only_at(
+    kind: KmsKind,
+    fs: &Firestore,
+    path: &str,
+    base: &str,
+) -> Result<serde_json::Value, String> {
+    // 版を書かずに鍵の道だけを渡すと版 1 になり、入れ替え後の新しい版と取り違えやすい。版を必ず書かせる。
+    // version_path が版 1 を足した（＝渡された道に版が無かった）なら断る。
+    let version = version_path(path);
+    if version != path.trim().trim_end_matches('/') {
+        return Err(format!(
+            "verify-only key needs a cryptoKeyVersions path: {path}"
+        ));
+    }
+    let (jwk, _) = public_jwk(kind, fs, &crate::http::client(), base, &version).await?;
+    Ok(jwk)
 }
 
 #[async_trait]
@@ -226,52 +273,129 @@ mod tests {
         }
     }
 
-    async fn public_key(State(key): State<Arc<FakeKey>>, Path(rest): Path<String>) -> Json<Value> {
-        assert!(rest.ends_with("/cryptoKeyVersions/1/publicKey"), "{rest}");
-        Json(json!({ "pem": key.pem() }))
+    /// 版の番号（1 から）で fake の鍵を選ぶ。
+    fn key_of<'a>(keys: &'a [FakeKey], rest: &str, suffix: &str) -> &'a FakeKey {
+        let n: usize = rest
+            .strip_suffix(suffix)
+            .and_then(|r| r.rsplit_once("/cryptoKeyVersions/"))
+            .and_then(|(_, n)| n.parse().ok())
+            .unwrap_or_else(|| panic!("{rest}"));
+        &keys[n - 1]
+    }
+
+    async fn public_key(
+        State(keys): State<Arc<Vec<FakeKey>>>,
+        Path(rest): Path<String>,
+    ) -> Json<Value> {
+        Json(json!({ "pem": key_of(&keys, &rest, "/publicKey").pem() }))
     }
 
     async fn asymmetric_sign(
-        State(key): State<Arc<FakeKey>>,
+        State(keys): State<Arc<Vec<FakeKey>>>,
         Path(rest): Path<String>,
         Json(body): Json<Value>,
     ) -> Json<Value> {
-        assert!(
-            rest.ends_with("/cryptoKeyVersions/1:asymmetricSign"),
-            "{rest}"
-        );
         let digest = B64
             .decode(body["digest"]["sha256"].as_str().unwrap())
             .unwrap();
-        Json(json!({ "signature": B64.encode(key.sign(&digest)) }))
+        let sig = key_of(&keys, &rest, ":asymmetricSign").sign(&digest);
+        Json(json!({ "signature": B64.encode(sig) }))
     }
 
-    async fn signer_on_fake(kind: KmsKind, key: FakeKey) -> KmsSigner {
+    const KEY: &str = "projects/p/locations/global/keyRings/r/cryptoKeys/k";
+
+    /// 版 1, 2, ... に keys を順に置いた fake の KMS。返すのは base の URL。
+    async fn fake_kms(keys: Vec<FakeKey>) -> String {
         let app = Router::new()
             .route("/v1/{*rest}", get(public_key).post(asymmetric_sign))
-            .with_state(Arc::new(key));
+            .with_state(Arc::new(keys));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        // new_for_test の Firestore は metadata server へ行かずに token を返す。宛先は使わない。
-        let fs = Arc::new(Firestore::new_for_test("proj", "127.0.0.1:9"));
-        KmsSigner::at(
-            kind,
-            fs,
-            "projects/p/locations/global/keyRings/r/cryptoKeys/k",
-            base,
+        base
+    }
+
+    /// new_for_test の Firestore は metadata server へ行かずに token を返す。宛先は使わない。
+    fn fs() -> Arc<Firestore> {
+        Arc::new(Firestore::new_for_test("proj", "127.0.0.1:9"))
+    }
+
+    async fn signer_on_fake(kind: KmsKind, key: FakeKey) -> KmsSigner {
+        let base = fake_kms(vec![key]).await;
+        KmsSigner::at(kind, fs(), KEY, base).await.unwrap()
+    }
+
+    fn es256_key() -> FakeKey {
+        use p256::elliptic_curve::Generate;
+        FakeKey::Es256(p256::ecdsa::SigningKey::generate())
+    }
+
+    #[test]
+    fn a_key_path_means_version_1_and_a_version_path_is_kept() {
+        assert_eq!(version_path(KEY), format!("{KEY}/cryptoKeyVersions/1"));
+        assert_eq!(
+            version_path(&format!("{KEY}/")),
+            format!("{KEY}/cryptoKeyVersions/1")
+        );
+        let v2 = format!("{KEY}/cryptoKeyVersions/2");
+        assert_eq!(version_path(&v2), v2);
+    }
+
+    /// 入れ替えの後: 版 2 で署名し、版 1 は検証用に載せる。版 1 の JWK は、入れ替え前に
+    /// 版 1 で署名していたときの JWK と同じ（前に出した ID Token の kid と合う）。
+    #[tokio::test]
+    async fn a_version_path_signs_with_that_version_and_the_old_one_stays_publishable() {
+        let base = fake_kms(vec![es256_key(), es256_key()]).await;
+        let before = KmsSigner::at(KmsKind::Es256, fs(), KEY, base.clone())
+            .await
+            .unwrap();
+        let v2 = format!("{KEY}/cryptoKeyVersions/2");
+        let after = KmsSigner::at(KmsKind::Es256, fs(), &v2, base.clone())
+            .await
+            .unwrap();
+        assert_ne!(before.kid, after.kid);
+
+        let v1 = format!("{KEY}/cryptoKeyVersions/1");
+        let old = verify_only_at(KmsKind::Es256, &fs(), &v1, &base)
+            .await
+            .unwrap();
+        assert_eq!(old, before.public_jwk());
+
+        let jwt = after.sign(&json!({"sub": "alice"})).await;
+        let header: Value = serde_json::from_slice(
+            &crate::es256::b64url_decode(jwt.split('.').next().unwrap()).unwrap(),
         )
-        .await
-        .unwrap()
+        .unwrap();
+        assert_eq!(header["kid"], after.kid);
+
+        // 署名は版 2 の鍵で行われ、版 2 の JWK で確かめられ、版 1 の JWK では通らない。
+        let verifies_with = |jwk: &Value| {
+            use p256::ecdsa::signature::Verifier;
+            let (input, sig) = jwt.rsplit_once('.').unwrap();
+            let part = |n: &str| crate::es256::b64url_decode(jwk[n].as_str().unwrap()).unwrap();
+            let vk = crate::es256::verifying_key_from_xy(&part("x"), &part("y")).unwrap();
+            let sig = crate::es256::b64url_decode(sig).unwrap();
+            let sig = p256::ecdsa::Signature::from_slice(&sig).unwrap();
+            vk.verify(input.as_bytes(), &sig).is_ok()
+        };
+        assert!(verifies_with(&after.public_jwk()));
+        assert!(!verifies_with(&old));
+    }
+
+    #[tokio::test]
+    async fn a_verify_only_key_must_name_its_version() {
+        let base = fake_kms(vec![es256_key()]).await;
+        let e = verify_only_at(KmsKind::Es256, &fs(), KEY, &base)
+            .await
+            .unwrap_err();
+        assert!(e.contains("cryptoKeyVersions"), "{e}");
     }
 
     mod es256 {
         use super::*;
-        use p256::elliptic_curve::Generate;
 
         async fn signer() -> KmsSigner {
-            let key = FakeKey::Es256(p256::ecdsa::SigningKey::generate());
-            signer_on_fake(KmsKind::Es256, key).await
+            signer_on_fake(KmsKind::Es256, es256_key()).await
         }
         crate::jws_signer_contract::jws_signer_contract_tests!(signer);
     }

@@ -5879,7 +5879,7 @@
     }
    ],
    "outside": [],
-   "note": "鍵の版は KMS_*_KEY の値に /cryptoKeyVersions/1 を足した固定の版（src/kms.rs:37）。/jwks（A-002）は起動時に取った公開鍵を返すだけで KMS を呼ばない（src/kms.rs:149-151）。配線は K_SERVICE の時だけ（src/gcp.rs:25-30, 76-77）。"
+   "note": "鍵の版は KMS_*_KEY の値で決まり、鍵の道だけなら /cryptoKeyVersions/1、版までの道ならその版（src/kms.rs:109-116）。KMS_ES256_VERIFY_ONLY・KMS_RS256_VERIFY_ONLY（カンマ区切りの版までの道）の版は署名に使わず、起動時に公開鍵を取って /jwks（A-002）と id_token_hint の確かめにだけ載せる。読めなかった版は記録して飛ばす（src/gcp.rs:127-158, src/kms.rs:189-205）。/jwks は起動時に取った公開鍵を返すだけで KMS を呼ばない（src/provider.rs:303-315）。配線は K_SERVICE の時だけ（src/gcp.rs:25-30, 76-77）。"
   },
   {
    "id": "X-02",
