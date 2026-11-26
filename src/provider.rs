@@ -42,8 +42,10 @@ pub struct Provider {
     /// CIBA の (client_id, login_hint) ごとの回数の上限。push スパム抑止のバックストップ。
     /// 数は `docs` に置くので、同じ保存先を使う台の全体で 1 つの上限になる。
     pub(crate) ciba_rate: RateLimiter,
-    /// 登録・復旧のメールと DCR の回数の上限（email / IP ごと）。無認証メール乱用のバックストップ。
+    /// 登録・復旧のメールのアドレスごとと、DCR の IP ごとの回数の上限。無認証メール乱用のバックストップ。
     pub(crate) register_rate: RateLimiter,
+    /// 登録・復旧のメールの IP ごとの回数の上限。同じ出口 IP の組織が一斉に登録しても足りるよう、アドレスごとより大きい。
+    pub(crate) register_ip_rate: RateLimiter,
     pub(crate) mailer: Arc<dyn Mailer>,
     pub(crate) dpop: Arc<dyn DpopVerifier>,
     /// JAR (request object) の jti 単回ストア。本番は Firestore（with_firestore で注入）。
@@ -115,8 +117,14 @@ impl Provider {
             ciba: Arc::new(MemoryCibaStore::default()),
             // 60 秒に 3 要求まで。ciba-rp の正常運用では超えない。
             ciba_rate: RateLimiter::new("ciba", std::time::Duration::from_secs(60), 3),
-            // 1 時間に 5 通まで（同一 email / 同一 IP）。正常な登録では超えない。
+            // 1 時間に 5 通まで（同一 email、DCR は同一 IP）。正常な登録では超えない。
             register_rate: RateLimiter::new("register", std::time::Duration::from_secs(3600), 5),
+            // 1 時間に 30 通まで（同一 IP）。30 人の組織が同じ出口 IP から一斉に登録しても通る。
+            register_ip_rate: RateLimiter::new(
+                "register-ip",
+                std::time::Duration::from_secs(3600),
+                30,
+            ),
             dpop: Arc::new(Es256Dpop::default()),
             jar_jti: crate::nonce::NonceStore::memory(),
             clients: HashMap::new(),

@@ -175,7 +175,7 @@ where
 
 /* ===== a. 回数の上限は台をまたいで 1 つ ===== */
 
-/// 台 A で上限まで送ったら、台 B でも断る。IP ごとも、アドレスごとも。
+/// 2 台に分けて上限まで送ったら、どちらの台でも断る。IP ごとも、アドレスごとも。
 #[tokio::test]
 async fn signup_email_limit_is_one_across_two_instances() {
     let c = Cluster::new().await;
@@ -188,14 +188,16 @@ async fn signup_email_limit_is_one_across_two_instances() {
         )
     };
 
-    for i in 0..5 {
-        let r = signup(&a, "192.0.2.10", &format!("a{i}@example.com")).await;
+    // IP ごとは 30 通。台 A と B に分けて使い切る。
+    for i in 0..30 {
+        let p = if i % 2 == 0 { &a } else { &b };
+        let r = signup(p, "192.0.2.10", &format!("a{i}@example.com")).await;
         assert_eq!(r.status(), StatusCode::NO_CONTENT, "{i} 回目");
     }
     assert_eq!(
-        signup(&b, "192.0.2.10", "a5@example.com").await.status(),
+        signup(&b, "192.0.2.10", "a30@example.com").await.status(),
         StatusCode::TOO_MANY_REQUESTS,
-        "台 A で使い切った IP の上限が、台 B では残っていた"
+        "2 台で使い切った IP の上限が、台 B では残っていた"
     );
 
     for i in 0..5 {

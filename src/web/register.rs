@@ -78,7 +78,7 @@ pub(super) async fn issue_register_email(
     // （メール爆撃 / 正規ドメイン発フィッシング / 送信枠浪費の対策）。
     // IP を先に見る: IP で断る要求が、そのアドレスの枠を使い切らないように。
     // 数えられなければ（保存先の障害）通さない。
-    if !p.register_rate.check_and_record(fs, "ip", ip).await?
+    if !p.register_ip_rate.check_and_record(fs, "ip", ip).await?
         || !p.register_rate.check_and_record(fs, "email", email).await?
     {
         return Err("rate_limited".into());
