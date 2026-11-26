@@ -32,6 +32,15 @@ rust-idp を配備して動かすときの覚え書き。README を短い入口�
 - **管理者・凍結中の人**: メールでは足せない。別の管理者が管理画面の「パスキーだけ削除」を押し、本人が `/signup` で登録し直す（sub は変わらない）。
 - **切り戻したとき**: 複数パスキーより前の版（#95 より前）へ戻すと、パスキーが 0 本のアカウントは登録し直す前に管理画面の「パスキーだけ削除」が要る。
 
+## 負荷の試し
+
+staging に負荷を当てるときは、Actions の「Load test (staging)」を手で回す（`.github/workflows/load-test.yml`）。当てる先は staging に固定で、本番には当てない。合否のしきい値は `scripts/load/login-start.js` にだけ置く。
+
+- 当てるのはログインの手前まで（discovery・jwks・PAR・authorize の 303・DPoP 付きの token の誤り応答）。パスキーのログインは機械で回せないので、ログインの後の token の発行・userinfo は当てない。
+- cold start の回は、`idle_minutes` の間なにも送らずに待ってから最初の 1 要求を測る。待つ間に staging へ別の要求があると台が止まらず、測れない。
+- 回数の上限のある口（登録・CIBA・DCR）には当てない。429 が返ったら、誤りとは分けて数える。
+- 1 回で数千要求になり、staging の Firestore の書き込みを使う（PAR・interaction・DPoP の jti）。続けて何度も回さない。
+
 ## 旧名
 
 旧名 rust-op。2026-09-26 に `david3080/rust-op` から `son-risa/rust-idp` へ移した。crate 名とバイナリ名は 2026-11-23 に `rust-idp` へ変えた。Cloud Run のサービス名は 2026-11 に `rust-idp`・`rust-idp-staging` へ変えた。デプロイ用のサービスアカウント（`rust-op-deployer`）と実行用のサービスアカウント（`rust-op-runtime`）は旧名のまま。
