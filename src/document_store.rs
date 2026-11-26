@@ -377,6 +377,7 @@ impl FailingDocs {
         }
     }
 
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     /// 動いている保存先。`go_down` で全ての集まりを落とす。
     pub(crate) fn up() -> Self {
         let s = Self::default();
@@ -384,6 +385,7 @@ impl FailingDocs {
         s
     }
 
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     pub(crate) fn go_down(&self) {
         self.up.store(false, std::sync::atomic::Ordering::SeqCst);
     }

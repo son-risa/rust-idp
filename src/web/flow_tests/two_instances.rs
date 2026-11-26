@@ -6,9 +6,11 @@
 //! 署名鍵は、本番（KMS・Secret Manager）と同じく全ての台で同じものを使う。
 
 use super::*;
+#[cfg(not(any(feature = "gcp", feature = "sqlite")))]
 use crate::ciba::CibaStore;
 use crate::grants::{AuthorizationCodeGrant, CibaGrant, GrantHandler, RefreshTokenGrant};
 use crate::jws::JwsSigner;
+#[cfg(not(any(feature = "gcp", feature = "sqlite")))]
 use crate::store::Store;
 
 const CLIENT: &str = "multi-rp";
