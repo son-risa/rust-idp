@@ -476,7 +476,7 @@ pub(super) async fn user_disable(
         }
     };
     if let Err(e) = crate::account_admin::disable_account(fs, &*p.store, &viewer, &email).await {
-        return server_error(Lang::from_headers(&headers), "user_disable", &e);
+        return server_error(Lang::from_headers(&headers), "user_disable", &e.to_string());
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
 }

@@ -28,7 +28,16 @@ async fn test_provider() -> Arc<Provider> {
 
 #[cfg(feature = "gcp")]
 async fn test_provider() -> Arc<Provider> {
-    let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+    test_provider_and_fake().await.0
+}
+
+/// test_provider と、その下の fake Firestore（失敗を入れるため）。
+#[cfg(feature = "gcp")]
+async fn test_provider_and_fake() -> (
+    Arc<Provider>,
+    Arc<crate::firestore::fake_firestore::FakeState>,
+) {
+    let (host, state) = crate::firestore::fake_firestore::spawn().await;
     let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
     // with_firestore は registration:: の直叩き用、with_store は Store トレイト
     // (interaction/session/find_account 等)用で別物。本番(Cloud Run)は両方 Firestore を指すので
@@ -37,7 +46,7 @@ async fn test_provider() -> Arc<Provider> {
     let p = Provider::new("http://localhost:8099".to_string())
         .with_firestore(fs.clone())
         .with_store(Arc::new(crate::firestore_store::FirestoreStore::new(fs)));
-    with_test_clients(p)
+    (with_test_clients(p), state)
 }
 
 fn with_test_clients(p: Provider) -> Arc<Provider> {
@@ -2730,4 +2739,93 @@ async fn sign_out_does_not_skip_the_confirmation_when_the_session_cannot_be_read
     assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert!(r.headers().get(header::SET_COOKIE).is_none());
     assert!(p.store.get_session(&sid).await.unwrap().is_some());
+}
+
+#[cfg(feature = "gcp")]
+async fn passkeys_of(p: &Provider, email: &str) -> usize {
+    let fs = p.docs.as_deref().unwrap();
+    let a = crate::registration::get_account(fs, email)
+        .await
+        .unwrap()
+        .unwrap();
+    crate::registration::list_credentials(fs, &a)
+        .await
+        .unwrap()
+        .len()
+}
+
+/// /account で passkey を足した後、失効されていないかを確かめる段で session を読めなければ、足した 1 本を消して
+/// 500 を返す（読めないのを「生きている」とは扱わない）。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_passkey_added_when_the_session_cannot_be_read_again_is_discarded() {
+    let (p, fake) = test_provider_and_fake().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+    let sid = jar.get(SID_COOKIE).unwrap().value().to_string();
+
+    // options と verify の本人の確かめ（2 回）は通し、足した後の確かめで読めなくする。
+    fake.fail_after(2, "GET", "sessions", Some(&sid));
+    let r = account_add(&p, &jar, b"added")
+        .await
+        .err()
+        .expect("読めないのに足せたと返した");
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(passkeys_of(&p, &email).await, 1, "足した passkey が残った");
+}
+
+/// /account の passkey の削除で、ほかの端末の session を消せなければ、passkey は消さずに 500 を返す。
+/// もう一度押せば、失効し直してから消す。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_passkey_removal_that_could_not_sign_out_the_other_devices_can_be_retried() {
+    let (p, fake) = test_provider_and_fake().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    add_passkey(&p, &email, &account_id, b"second").await;
+    let jar = session_jar(&p, &account_id, now()).await;
+    let other = session_jar(&p, &account_id, now()).await;
+    let other_sid = other.get(SID_COOKIE).unwrap().value().to_string();
+
+    fake.fail_once("DELETE", "sessions", Some(&other_sid));
+    let r = delete_via_account(&p, &jar, b"second").await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(passkeys_of(&p, &email).await, 2, "失効しきれないまま消した");
+    assert!(p.store.get_session(&other_sid).await.unwrap().is_some());
+
+    let r = delete_via_account(&p, &jar, b"second").await;
+    assert_eq!(r.status(), StatusCode::OK, "やり直しで収まらない");
+    assert_eq!(passkeys_of(&p, &email).await, 1);
+    assert!(p.store.get_session(&other_sid).await.unwrap().is_none());
+}
+
+/// 回復で、ほかの端末の session を消せなければ、passkey は足したまま「もう一度ログインして」の 500 を返す。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_recovery_that_could_not_sign_out_the_other_devices_asks_to_sign_in_again() {
+    let (p, fake) = test_provider_and_fake().await;
+    let fs = p.docs.as_deref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
+    let elsewhere = session_jar(&p, &account_id, now()).await;
+    let elsewhere_sid = elsewhere.get(SID_COOKIE).unwrap().value().to_string();
+    let token = crate::registration::create_recovery_challenge(fs, &email)
+        .await
+        .unwrap();
+
+    fake.fail_once("DELETE", "sessions", Some(&elsewhere_sid));
+    let r = recover_add(&p, &token, CookieJar::default(), b"recovered")
+        .await
+        .err()
+        .expect("失効しきれないのに成功と返した");
+    let (status, body) = error_body(r).await;
+    assert_eq!(
+        (status, body.as_str()),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "passkey saved, sign in again"
+        )
+    );
+    assert_eq!(passkeys_of(&p, &email).await, 2);
 }

@@ -18,6 +18,28 @@ use crate::{audit_log, registration};
 
 pub use crate::store::RevocationCounts;
 
+#[derive(Debug)]
+pub enum DisableError {
+    Store(String),
+    /// 凍結は済んだ（新しいログインは止まる）が、失効しきれなかった session・token がある。
+    RevocationIncomplete(RevocationCounts),
+}
+
+impl From<String> for DisableError {
+    fn from(e: String) -> Self {
+        DisableError::Store(e)
+    }
+}
+
+impl std::fmt::Display for DisableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DisableError::Store(e) => f.write_str(e),
+            DisableError::RevocationIncomplete(c) => f.write_str(&incomplete(c)),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum DisableOutcome {
     Disabled(RevocationCounts),
@@ -40,7 +62,7 @@ pub async fn disable_account(
     store: &dyn Store,
     actor: &str,
     email: &str,
-) -> Result<DisableOutcome, String> {
+) -> Result<DisableOutcome, DisableError> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DisableOutcome::NotFound),
@@ -64,7 +86,7 @@ pub async fn disable_account(
     // 凍結は済んでいる（新しいログインは止まる）が、残った session・token があるかもしれない。
     // 完了とは返さない。もう一度の実行（AlreadyDisabled）で失効し直す。
     if !counts.complete() {
-        return Err(incomplete(&counts));
+        return Err(DisableError::RevocationIncomplete(counts));
     }
     Ok(if already_disabled {
         DisableOutcome::AlreadyDisabled(counts)
@@ -127,9 +149,25 @@ pub async fn delete_account(
         return Ok(DeleteOutcome::NotDisabled);
     }
     let counts = store.revoke_account(&cred.account_id, "").await;
+    let detail = format!(
+        "email={email} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+        counts.sessions,
+        counts.access_tokens,
+        counts.refresh_tokens,
+        counts.query_errors,
+        counts.delete_errors
+    );
     // 失効しきれないまま消すと、残った session・token の持ち主を探す手掛かり（アカウント）が無くなる。
     // 凍結したまま残し、もう一度の削除で失効し直す。
     if !counts.complete() {
+        audit_log::record(
+            fs,
+            actor,
+            "delete_account",
+            &cred.account_id,
+            &format!("{detail} deleted=false"),
+        )
+        .await;
         return Err(incomplete(&counts));
     }
     registration::delete_all_credentials(fs, &cred).await?;
@@ -137,17 +175,7 @@ pub async fn delete_account(
     fs.delete_doc("profiles", &cred.account_id).await?;
     fs.delete_doc("accountsByUuid", &cred.account_id).await?;
     fs.delete_doc("accounts", email).await?;
-    audit_log::record(
-        fs,
-        actor,
-        "delete_account",
-        &cred.account_id,
-        &format!(
-            "email={email} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
-            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors, counts.delete_errors
-        ),
-    )
-    .await;
+    audit_log::record(fs, actor, "delete_account", &cred.account_id, &detail).await;
     Ok(DeleteOutcome::Deleted(counts))
 }
 
@@ -523,7 +551,10 @@ mod tests {
         let e = disable_account(&fs, &store, "cli", "v@example.com")
             .await
             .unwrap_err();
-        assert!(e.contains("delete_errors=1"), "{e}");
+        assert!(
+            matches!(&e, DisableError::RevocationIncomplete(c) if c.delete_errors == 1),
+            "{e}"
+        );
         let entries = fs
             .query_eq("auditLog", "action", "disable_account")
             .await
@@ -555,6 +586,16 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "失効しきれないままアカウントを消した"
+        );
+        let entries = fs
+            .query_eq("auditLog", "action", "delete_account")
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1, "止めた削除が監査ログに残らない");
+        assert!(
+            crate::firestore::field_str(&entries[0].1, "detail")
+                .unwrap()
+                .ends_with("delete_errors=1 deleted=false")
         );
         assert!(store.get_session("S-V").await.unwrap().is_some());
 

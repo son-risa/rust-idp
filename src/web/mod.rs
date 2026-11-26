@@ -120,7 +120,7 @@ fn requested_client_id(i: &crate::model::Interaction) -> String {
 /// このブラウザが別のアカウントでログイン中なら、そのメールアドレス。
 /// メールのリンクで passkey を作ると、このブラウザのセッションはリンクのアカウントに替わる。
 /// 攻撃者が自分のアカウントのリンクを踏ませると、被害者は気づかずに攻撃者として RP に入る（ログイン CSRF）。
-/// session を読めないときは誤り（ログイン中かどうか分からないまま、確認を出さずに進めない）。
+/// session やそのメールアドレスを読めないときは誤り（ログイン中かどうか分からないまま、確認を出さずに進めない）。
 async fn signed_in_as_other(
     p: &Provider,
     jar: &CookieJar,
@@ -132,13 +132,10 @@ async fn signed_in_as_other(
     let Some(session) = p.store.get_session(c.value()).await? else {
         return Ok(None);
     };
-    let email = match crate::registration::find_email_by_account_id(fs, &session.account_id).await {
-        Ok(Some(e)) => e,
-        Ok(None) => return Ok(None),
-        Err(e) => {
-            tracing::warn!("signed_in_as_other: {e}");
-            return Ok(None);
-        }
+    let Some(email) =
+        crate::registration::find_email_by_account_id(fs, &session.account_id).await?
+    else {
+        return Ok(None);
     };
     Ok((!email.eq_ignore_ascii_case(target_email)).then_some(email))
 }

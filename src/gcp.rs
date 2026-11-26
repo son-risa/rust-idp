@@ -517,6 +517,18 @@ async fn disable_account_cmd(args: &[String]) {
             eprintln!("disable-account: account not found: {email}");
             std::process::exit(1);
         }
+        Err(account_admin::DisableError::RevocationIncomplete(c)) => {
+            let unknown = if c.query_errors.is_empty() {
+                String::new()
+            } else {
+                format!("（ほかに、探せなかった種類がある: {:?}）", c.query_errors)
+            };
+            eprintln!(
+                "disable-account: 凍結は済み。失効しきれなかった session・token が {} 件ある{unknown}。もう一度実行して失効し直す",
+                c.delete_errors
+            );
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("disable-account: 失敗: {e}");
             std::process::exit(1);

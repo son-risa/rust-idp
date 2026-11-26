@@ -506,40 +506,41 @@ pub(super) async fn delete_passkey(
     };
     let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let a = &me.account;
-    match registration::list_credentials(fs, a).await {
-        Ok(creds)
-            if creds
-                .iter()
-                .any(|c| c.credential_id == req.id && held_by_recovery(a, c)) =>
-        {
-            return (StatusCode::CONFLICT, "recently recovered").into_response();
-        }
-        Ok(_) => {}
+    let creds = match registration::list_credentials(fs, a).await {
+        Ok(c) => c,
         Err(e) => return internal("delete_passkey: list_credentials", &e),
+    };
+    let Some(target) = creds.iter().find(|c| c.credential_id == req.id) else {
+        return (StatusCode::NOT_FOUND, "passkey not found").into_response();
+    };
+    if held_by_recovery(a, target) {
+        return (StatusCode::CONFLICT, "recently recovered").into_response();
+    }
+    if creds.len() == 1 {
+        return (StatusCode::CONFLICT, "last passkey").into_response();
+    }
+    // 失効してから消す。失効しきれなければ passkey は消さずに 500 を返し、もう一度押せば失効し直す
+    // （先に消すと、もう一度押しても「無い」になり、失効が二度と走らない）。
+    let c = p.store.revoke_account(&a.account_id, &me.sid).await;
+    let detail = format!(
+        "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+        req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
+    );
+    if !c.complete() {
+        crate::audit_log::record(
+            fs,
+            &a.account_id,
+            "delete_passkey",
+            &a.account_id,
+            &format!("{detail} removed=false"),
+        )
+        .await;
+        return internal("delete_passkey: revocation incomplete", &detail);
     }
     match registration::remove_credential(fs, &a.email, &req.id).await {
         Ok(RemoveOutcome::Removed) => {
-            let c = p.store.revoke_account(&a.account_id, &me.sid).await;
-            crate::audit_log::record(
-                fs,
-                &a.account_id,
-                "delete_passkey",
-                &a.account_id,
-                &format!(
-                    "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
-                    req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
-                ),
-            )
-            .await;
-            if !c.complete() {
-                return internal(
-                    "delete_passkey: revocation incomplete",
-                    &format!(
-                        "query_errors={:?} delete_errors={}",
-                        c.query_errors, c.delete_errors
-                    ),
-                );
-            }
+            crate::audit_log::record(fs, &a.account_id, "delete_passkey", &a.account_id, &detail)
+                .await;
             Json(serde_json::json!({ "ok": true })).into_response()
         }
         Ok(RemoveOutcome::NotFound) => (StatusCode::NOT_FOUND, "passkey not found").into_response(),

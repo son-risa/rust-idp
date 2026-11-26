@@ -414,8 +414,8 @@ pub(super) async fn recover_verify(
         let (email, account_id) = (email.clone(), account_id.clone());
         tokio::spawn(async move { add_and_revoke(&p, &email, &account_id, &outcome).await })
     };
-    let still_open = match task.await {
-        Ok(Ok(open)) => open,
+    let (still_open, revoked) = match task.await {
+        Ok(Ok(r)) => r,
         Ok(Err(e)) => return internal("recover_verify", &e),
         Err(e) => return internal("recover_verify: task", &e.to_string()),
     };
@@ -427,6 +427,17 @@ pub(super) async fn recover_verify(
                 tracing::error!("send_passkey_added failed: {e}");
             }
         });
+    }
+    // passkey の保存も token の消費も済んでいる。ほかの端末のログインが残っているかもしれないので
+    // 成功とは返さず、もう一度ログインしてもらう（ログインし直しても失効はし直さない。残りは期限で切れる）。
+    if !revoked.complete() {
+        return super::passkey_saved_sign_in_again(
+            "recover_verify: revocation incomplete",
+            &format!(
+                "query_errors={:?} delete_errors={}",
+                revoked.query_errors, revoked.delete_errors
+            ),
+        );
     }
     if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string())
         && let Err(e) = p.store.delete_session(&old).await
@@ -467,7 +478,7 @@ async fn add_and_revoke(
     email: &str,
     account_id: &str,
     outcome: &crate::webauthn::RegOutcome,
-) -> Result<bool, String> {
+) -> Result<(bool, crate::store::RevocationCounts), String> {
     let fs = p.docs.as_deref().ok_or("no firestore")?;
     registration::mark_recovered(fs, email, &outcome.credential_id).await?;
     registration::save_credential(fs, email, account_id, outcome).await?;
@@ -483,12 +494,6 @@ async fn add_and_revoke(
         ),
     )
     .await;
-    // 失効しきれなかったら、ほかの端末のログインが残っている。成功とは返さない（もう一度で失効し直す）。
-    if !c.complete() {
-        return Err(format!(
-            "revocation incomplete: query_errors={:?} delete_errors={}",
-            c.query_errors, c.delete_errors
-        ));
-    }
-    Ok(matches!(registration::get_account(fs, email).await?, Some(a) if !a.disabled))
+    let open = matches!(registration::get_account(fs, email).await?, Some(a) if !a.disabled);
+    Ok((open, c))
 }
