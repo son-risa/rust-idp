@@ -22,7 +22,7 @@
 | 認可の型 | grant の種類・確かめの規則 | `GrantHandler`（`with_grant`）・`AuthorizationCheck`（`with_check`）・`ResponseMode`（`with_response_mode`） | あり。`grant_handler_contract.rs`・`authorization_check_contract.rs`・`response_mode_contract.rs` |
 | client の認証の方式 | private_key_jwt・Basic → mTLS | `ClientAuthMethod`（`with_client_auth`）・`DpopVerifier`（`with_dpop`）。mTLS は、入力の `ClientAuthInput` に client の証明書の欄が無い。入力を広げるところから始める | あり。`client_auth_contract.rs`・`dpop_verifier_contract.rs` |
 | 見張り | OpenTelemetry など | 口はまだ無い。rust-idp は `tracing` で記録を出す。ライブラリとして使うなら、組む側が `tracing` の subscriber を選べる。binary は `src/main.rs` で subscriber を決めている | なし |
-| 多テナント | 1 つの process で複数の issuer | 口はまだ無い。1 つの `Provider` は issuer を 1 つだけ持つ | なし |
+| 多テナント | 1 つの process で複数の issuer | 持たない（決めた方針）。rust-idp は 1 つの組織だけを扱い、1 つの `Provider` は issuer を 1 つだけ持つ。複数の組織には、組織ごとに rust-idp を立てる | なし |
 
 契約の試験の module は `#[cfg(test)]` で、macro は crate の中にだけ公開している。このため、契約の試験を当てたい実装は、この crate の中に足す。たとえば SQLite の実装（`src/sqlite.rs`）は、その試験の mod から macro を呼んでいる。
 
@@ -56,6 +56,7 @@ SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
 - `SQLITE_PATH` があると、利用者・パスキー・登録の token・PAR・DCR など（`DocumentStore`）、セッション・認可コード・token（`Store`）、CIBA の要求（`CibaStore`）を、その file 1 つに置く。file が無ければ作る。開けなければ起動しない。
 - `SQLITE_PATH` が無ければ、今までどおりメモリに置く。`sqlite` の feature なしで build した binary に `SQLITE_PATH` を渡すと、起動しない。メモリで動いて、止めたときに利用者が消えるのを避けるため。
 - 1 つの process だけが file を開く前提で、WAL と `synchronous=FULL` で開く。同じ file を複数の process で分け合わない。
+- そのため台数は増やせない。1 台で足りる小さな組織向けで、その 1 台が止まればログインも止まる。台数を増やすなら、Firestore のような、複数の台から共有できる保存先を使う。
 - 実装は `src/sqlite.rs`。SQLite で書いたのは `DocumentStore` だけ。`Store` と `CibaStore` は、Firestore でも使っている「`DocumentStore` の上の実装」をそのまま載せる。`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!` を、一時 directory に作った file に当てている。
 - `FidoStore`（FIDO2 の適合試験の面 `/fido/*` の保存先）には、SQLite の実装が無い。この面は `FIDO_CONFORMANCE_ENABLED` のときだけ載り、メモリに置く。本番のパスキーのログインは `DocumentStore` を使う。
 - `rusqlite` の crate が SQLite 本体（C）を同梱して build する。build する機械に C の compiler が要る。

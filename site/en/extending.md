@@ -22,7 +22,7 @@ This page is for developers who want to adapt rust-idp to their own environment.
 | Authorization types | Grant types, request checks | `GrantHandler` (`with_grant`), `AuthorizationCheck` (`with_check`), `ResponseMode` (`with_response_mode`) | Yes: `grant_handler_contract.rs`, `authorization_check_contract.rs`, `response_mode_contract.rs` |
 | Client authentication | private_key_jwt, Basic → mTLS | `ClientAuthMethod` (`with_client_auth`), `DpopVerifier` (`with_dpop`). For mTLS, the input `ClientAuthInput` has no field for the client certificate. Start by extending the input | Yes: `client_auth_contract.rs`, `dpop_verifier_contract.rs` |
 | Observability | OpenTelemetry and others | No extension point yet. rust-idp writes its logs with `tracing`. As a library, your application chooses the `tracing` subscriber. The binary sets its subscriber in `src/main.rs` | None |
-| Multi-tenancy | Several issuers in one process | No extension point yet. One `Provider` has exactly one issuer | None |
+| Multi-tenancy | Several issuers in one process | Not supported, by design. rust-idp serves one organization, and one `Provider` has exactly one issuer. For several organizations, run one rust-idp per organization | None |
 
 The contract test modules are `#[cfg(test)]`, and their macros are visible only inside the crate. So an implementation that should run the contract tests goes inside this crate. For example, the SQLite implementation (`src/sqlite.rs`) calls the macros from its test module.
 
@@ -56,6 +56,7 @@ SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
 - With `SQLITE_PATH`, one file holds users, passkeys, sign-up tokens, PAR, DCR and more (`DocumentStore`), sessions, authorization codes and tokens (`Store`), and CIBA requests (`CibaStore`). If the file does not exist, it is created. If it cannot be opened, the binary does not start.
 - Without `SQLITE_PATH`, storage stays in memory as before. A binary built without the `sqlite` feature refuses to start when `SQLITE_PATH` is set. Otherwise it would run in memory and lose the users when it stops.
 - Only one process opens the file. It is opened with WAL and `synchronous=FULL`. Do not share one file between several processes.
+- So you cannot add more instances. This suits a small organization that one machine can serve, and if that machine stops, sign-in stops too. To run several instances, use storage that several instances can share, such as Firestore.
 - The implementation is `src/sqlite.rs`. Only `DocumentStore` is written for SQLite. `Store` and `CibaStore` reuse the implementations built on `DocumentStore` that Firestore also uses. `document_store_contract_tests!`, `store_contract_tests!` and `ciba_store_contract_tests!` run against a file in a temporary directory.
 - `FidoStore` (storage for the FIDO2 conformance endpoints, `/fido/*`) has no SQLite implementation. Those endpoints are mounted only when `FIDO_CONFORMANCE_ENABLED` is set, and they keep their data in memory. Production passkey sign-in uses `DocumentStore`.
 - The `rusqlite` crate bundles the SQLite library (C) and builds it. The build machine needs a C compiler.
