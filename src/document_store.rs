@@ -361,6 +361,8 @@ pub(crate) struct FailingDocs {
     only: Option<&'static str>,
     /// 立てた後に落とす試験のため。all・only は落ちた状態で作る。
     up: std::sync::atomic::AtomicBool,
+    /// 条件つきの書き込み（create_if_absent・set_doc_if_unchanged）が、ほかの台に毎回負けたことにする。
+    lose: bool,
     inner: MemoryDocumentStore,
 }
 
@@ -377,7 +379,6 @@ impl FailingDocs {
         }
     }
 
-    #[cfg(any(feature = "gcp", feature = "sqlite"))]
     /// 動いている保存先。`go_down` で全ての集まりを落とす。
     pub(crate) fn up() -> Self {
         let s = Self::default();
@@ -388,6 +389,14 @@ impl FailingDocs {
     #[cfg(any(feature = "gcp", feature = "sqlite"))]
     pub(crate) fn go_down(&self) {
         self.up.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 動いているが、条件つきの書き込みに毎回負ける保存先。
+    pub(crate) fn always_losing() -> Self {
+        Self {
+            lose: true,
+            ..Self::up()
+        }
     }
 
     fn check(&self, col: &str) -> Result<(), String> {
@@ -452,12 +461,18 @@ impl DocumentStore for FailingDocs {
         update_time: &str,
     ) -> Result<bool, String> {
         self.check(col)?;
+        if self.lose {
+            return Ok(false);
+        }
         self.inner
             .set_doc_if_unchanged(col, id, fields, update_time)
             .await
     }
     async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String> {
         self.check(col)?;
+        if self.lose {
+            return Ok(false);
+        }
         self.inner.create_if_absent(col, id, fields).await
     }
     async fn delete_doc_if_unchanged(

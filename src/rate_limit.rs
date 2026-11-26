@@ -1,6 +1,7 @@
 //! 回数の上限（滑る窓）。数は [`DocumentStore`] に置くので、同じ保存先を使う台が何台あっても上限は全体で 1 つ。
 //!
 //! 文書は `rateLimits/{名前}-{hash}`。hash は (scope, key) の SHA-256 で、IP やアドレスを文書の id にも中身にも残さない。
+//! ただし `LOG_PSEUDONYM_KEY` が無いと hash に秘密が混ざらないので、候補の IP・アドレスを総当たりすれば hash から戻せる。
 //! 中身は窓の中で通した時刻（ミリ秒）の並び `hits` と、最後に通した時刻に窓を足した `expireAt`。
 //! Firestore は `expireAt` の TTL ポリシーで消し、Memory・SQLite は定期の掃除（`DocumentStore::sweep_expired`）で消す。
 
@@ -49,8 +50,9 @@ impl RateLimiter {
     }
 
     fn fields(&self, hits: &[u64]) -> serde_json::Value {
-        let last = hits.last().copied().unwrap_or(0);
-        let expire_secs = (last + self.window.as_millis() as u64).div_ceil(1000);
+        // 台ごとの時計がずれると並びの最後が最新とは限らないので、最大から付ける。
+        let latest = hits.iter().copied().max().unwrap_or(0);
+        let expire_secs = (latest + self.window.as_millis() as u64).div_ceil(1000);
         let hits = hits
             .iter()
             .map(u64::to_string)
@@ -122,6 +124,22 @@ mod tests {
         // 名前の違う limiter とも数を混ぜない
         let other = RateLimiter::new("o", Duration::from_secs(60), 3);
         assert!(other.check_and_record(&docs, "rp", "u").await.unwrap());
+    }
+
+    /// ほかの台との書き込みの競り合いに続けて負けたら、通さない。
+    #[tokio::test]
+    async fn losing_every_write_refuses() {
+        let docs = crate::document_store::FailingDocs::always_losing();
+        let rl = RateLimiter::new("t", Duration::from_secs(60), 3);
+        assert!(!rl.check_and_record(&docs, "rp", "u").await.unwrap());
+    }
+
+    /// 時計のずれで並びの最後が最新でなくても、expireAt は最新の時刻から窓の分だけ先。
+    #[test]
+    fn expire_at_follows_the_latest_hit() {
+        let rl = RateLimiter::new("t", Duration::from_secs(60), 3);
+        let f = rl.fields(&[90_000, 10_000]);
+        assert_eq!(firestore::field_ts_secs(&f, "expireAt"), Some(150));
     }
 
     #[tokio::test]

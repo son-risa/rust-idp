@@ -623,7 +623,7 @@ async fn rate_limited_paths_refuse_when_the_counts_cannot_be_read() {
     let docs = Arc::new(crate::document_store::FailingDocs::only(
         crate::rate_limit::COLLECTION,
     ));
-    let p = instance_on(docs);
+    let p = instance_on(docs.clone());
     let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
     register_test_account(&p, &email).await;
     let r = register::register_email_challenge(
@@ -651,6 +651,27 @@ async fn rate_limited_paths_refuse_when_the_counts_cannot_be_read() {
         r.status(),
         StatusCode::INTERNAL_SERVER_ERROR,
         "数えずに要求を作った"
+    );
+    let constraints = crate::dcr::IatConstraints {
+        allowed_redirect_hosts: vec!["rp.example.com".into()],
+        allowed_grant_types: vec!["authorization_code".into()],
+        profile: crate::dcr::ClientProfile::Public,
+    };
+    let (raw_iat, iat_hash) = crate::dcr::gen_random_token();
+    crate::dcr_store::put_iat(&*docs, &iat_hash, &constraints, now() + 3600, false)
+        .await
+        .unwrap();
+    let mut headers = from_ip("192.0.2.1");
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {raw_iat}").parse().unwrap(),
+    );
+    let body = json!({ "redirect_uris": [CB] }).to_string();
+    let r = oidc::register(State(p.clone()), headers, body).await;
+    assert_eq!(
+        r.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "数えずに client を登録した"
     );
 }
 
