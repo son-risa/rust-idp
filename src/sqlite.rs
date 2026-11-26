@@ -392,6 +392,61 @@ mod tests {
         crate::ciba_store_contract::ciba_store_contract_tests!(store);
     }
 
+    /// query_eq と list_recent_ordered は、MemoryDocumentStore と同じ文書を同じ順で返す。契約の試験は
+    /// 並びを問わない（Firestore は順を決めない）ので、ここで Memory と突き合わせる。
+    /// 並べの key が崩れた文書（時刻が数・null、stringValue だけ、field が無い）も混ぜる。
+    #[tokio::test]
+    async fn queries_return_the_same_rows_in_the_same_order_as_memory() {
+        use crate::firestore::{s, ts};
+        let sqlite = open();
+        let memory = crate::MemoryDocumentStore::default();
+        let docs = [
+            (
+                "3",
+                json!({ "who": s("a"), "at": ts("2026-01-02T00:00:00Z") }),
+            ),
+            (
+                "1",
+                json!({ "who": s("a"), "at": s("2026-01-03T00:00:00Z") }),
+            ),
+            (
+                "5",
+                json!({ "who": s("b"), "at": ts("2026-01-02T00:00:00Z") }),
+            ),
+            ("2", json!({ "who": s("a"), "at": { "timestampValue": 5 } })),
+            ("7", json!({ "who": { "stringValue": 1 }, "at": null })),
+            (
+                "4",
+                json!({ "who": s("a"), "at": { "timestampValue": null, "stringValue": "z" } }),
+            ),
+            ("6", json!({ "who": s("a") })),
+        ];
+        for (id, f) in docs {
+            sqlite.set_doc("log", id, f.clone()).await.unwrap();
+            memory.set_doc("log", id, f).await.unwrap();
+        }
+        for who in ["a", "b", "1"] {
+            assert_eq!(
+                sqlite.query_eq("log", "who", who).await.unwrap(),
+                memory.query_eq("log", "who", who).await.unwrap(),
+                "query_eq who={who}"
+            );
+        }
+        for limit in [2, 10] {
+            assert_eq!(
+                sqlite
+                    .list_recent_ordered("log", "at", limit)
+                    .await
+                    .unwrap(),
+                memory
+                    .list_recent_ordered("log", "at", limit)
+                    .await
+                    .unwrap(),
+                "list_recent_ordered limit={limit}"
+            );
+        }
+    }
+
     /// Connection を作り直しても中身と版が残る。開き直す前の版で前提条件つきの書き込みができ、
     /// 開き直した後の書き込みは、前の版の番号を使い回さない。
     #[tokio::test]
