@@ -142,7 +142,7 @@ fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
-/// 台ごとに 1 つずつ同時に `run` を投げ、成功した数を返す。
+/// 2 台に 4 つずつ、同じ要求を同時に投げ（worker の thread は 4 本）、成功した数を返す。
 async fn successes<F, Fut, T, E>(instances: &[Arc<Provider>], run: F) -> usize
 where
     F: Fn(Arc<Provider>) -> Fut,
@@ -150,9 +150,19 @@ where
     T: Send + 'static,
     E: Send + 'static,
 {
+    const EACH: usize = 4;
+    let start = Arc::new(tokio::sync::Barrier::new(instances.len() * EACH));
     let tasks: Vec<_> = instances
         .iter()
-        .map(|p| tokio::spawn(run(p.clone())))
+        .cycle()
+        .take(instances.len() * EACH)
+        .map(|p| {
+            let (start, req) = (start.clone(), run(p.clone()));
+            tokio::spawn(async move {
+                start.wait().await;
+                req.await
+            })
+        })
         .collect();
     let mut n = 0;
     for t in tasks {
@@ -246,7 +256,7 @@ async fn ciba_limit_is_one_across_two_instances() {
 
 /* ===== b. 一度きりは 2 台から同時に来ても 1 回 ===== */
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_code_is_redeemed_once_across_two_instances() {
     let c = Cluster::new().await;
     let ps = [c.instance(), c.instance()];
@@ -281,7 +291,7 @@ async fn a_code_is_redeemed_once_across_two_instances() {
     assert_eq!(n, 1, "同じコードで {n} 回 token が出た");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refresh_token_is_rotated_once_across_two_instances() {
     let c = Cluster::new().await;
     let ps = [c.instance(), c.instance()];
@@ -314,7 +324,7 @@ async fn a_refresh_token_is_rotated_once_across_two_instances() {
     assert_eq!(n, 1, "同じ refresh token で {n} 回回った");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_ciba_approval_is_redeemed_once_across_two_instances() {
     let c = Cluster::new().await;
     let ps = [c.instance(), c.instance()];
@@ -346,7 +356,7 @@ async fn a_ciba_approval_is_redeemed_once_across_two_instances() {
 /// DPoP の jti は Firestore で台をまたいで 1 度きり（gcp の配線）。Memory・SQLite の配線では jti は process の
 /// メモリにあり、台を増やせない前提なので、ここでは当てない。
 #[cfg(feature = "gcp")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dpop_proof_is_accepted_once_across_two_instances() {
     let c = Cluster::new().await;
     let ps = [c.instance(), c.instance()];
