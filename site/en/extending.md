@@ -13,7 +13,7 @@ This page is for developers who want to adapt rust-idp to their own environment.
 | Axis | Examples | Extension point | Contract tests |
 |---|---|---|---|
 | Where it runs | Cloud Run, VPS, k8s | Where the parts are assembled. The binary is assembled in `src/main.rs` and `src/gcp.rs`. As a library, you build the `Provider` in your own `main` | None |
-| Storage | In memory, Firestore → PostgreSQL, SQLite | `DocumentStore` (`with_document_store`), `Store` (`with_store`), `CibaStore` (`with_ciba`), `FidoStore` (chosen inside `FidoState::from_env`; there is no `with_*`) | Yes: `document_store_contract.rs`, `store_contract.rs`, `ciba_store_contract.rs`, `fido_store_contract.rs` |
+| Storage | In memory, Firestore, SQLite → PostgreSQL | `DocumentStore` (`with_document_store`), `Store` (`with_store`), `CibaStore` (`with_ciba`), `FidoStore` (chosen inside `FidoState::from_env`; there is no `with_*`) | Yes: `document_store_contract.rs`, `store_contract.rs`, `ciba_store_contract.rs`, `fido_store_contract.rs` |
 | Keys and signing | Cloud KMS → key file, Vault, other KMS, HSM | `JwsSigner` (`with_signer`, `add_signer`) | Yes: `jws_signer_contract.rs` |
 | How users are verified | Passkeys → an existing password DB, LDAP/AD, an upstream IdP | No extension point yet. Passkey verification is written directly in `src/webauthn.rs` and the registration flow | None |
 | Where users come from | Own sign-up → an existing user DB, SCIM | No extension point yet. The user list is the `accounts` collection in `DocumentStore`. Sign-up, deactivation and token issuance read it directly. Claims for the id_token and similar come from `Store::find_account` | None. `find_account` is not in the `Store` contract tests |
@@ -24,13 +24,13 @@ This page is for developers who want to adapt rust-idp to their own environment.
 | Observability | OpenTelemetry and others | No extension point yet. rust-idp writes its logs with `tracing`. As a library, your application chooses the `tracing` subscriber. The binary sets its subscriber in `src/main.rs` | None |
 | Multi-tenancy | Several issuers in one process | No extension point yet. One `Provider` has exactly one issuer | None |
 
-The contract test modules are `#[cfg(test)]`, and their macros are visible only inside the crate. So an implementation that should run the contract tests goes inside this crate. For example, create `src/sqlite_store.rs` and call the macro from its test module.
+The contract test modules are `#[cfg(test)]`, and their macros are visible only inside the crate. So an implementation that should run the contract tests goes inside this crate. For example, the SQLite implementation (`src/sqlite.rs`) calls the macros from its test module.
 
 ## What works today without the gcp feature
 
 A binary built without the `gcp` feature is assembled like this (`src/main.rs`):
 
-- Storage: `MemoryDocumentStore`, and a `MemoryStore` that reads it. CIBA uses `MemoryCibaStore`. All of them are lost when the process stops.
+- Storage: `MemoryDocumentStore`, and a `MemoryStore` that reads it. CIBA uses `MemoryCibaStore`. All of them are lost when the process stops. If you build with the `sqlite` feature and set `SQLITE_PATH`, storage goes into an SQLite file instead (Example 1).
 - Signing key: a new ES256 key on every start. There is no RS256 key.
 - Mail: `LogMailer`. It sends nothing and writes the link to the log.
 - Passkey sign-up and sign-in: they work, in memory.
@@ -46,33 +46,28 @@ The in-memory setup is only for trying rust-idp out. A restart deletes the regis
 
 Use one SQLite file as storage. Build without the `gcp` feature.
 
-There is no SQLite implementation yet. Add the following.
+The SQLite implementation exists. Build with the `sqlite` feature and set the environment variable `SQLITE_PATH` to the path of the file.
 
-1. **Write three or four storage implementations.**
-    - `DocumentStore`: users, passkeys, sign-up tokens, PAR, DCR and more. Document contents arrive as JSON in the value format of the Firestore REST API. One table can hold them: collection name, id, JSON and version.
-    - `Store`: sessions, authorization codes and tokens. Like `MemoryStore`, its `find_account` reads the user from the same `DocumentStore`.
-    - `CibaStore`: CIBA requests.
-    - `FidoStore`: storage for the FIDO2 conformance endpoints (`/fido/*`). They are mounted only when `FIDO_CONFORMANCE_ENABLED` is set. Production passkey sign-in uses `DocumentStore`. If you do not expose those endpoints, you do not need `FidoStore`.
-2. **Call the contract tests.** Call one macro per implementation and make the tests pass.
+```sh
+cargo build --release --features sqlite
+SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
+```
 
-    ```rust
-    #[cfg(test)]
-    mod tests {
-        async fn store() -> super::SqliteDocumentStore {
-            super::SqliteDocumentStore::open_in_memory().unwrap()
-        }
-        crate::document_store_contract::document_store_contract_tests!(store);
-    }
-    ```
+- With `SQLITE_PATH`, one file holds users, passkeys, sign-up tokens, PAR, DCR and more (`DocumentStore`), sessions, authorization codes and tokens (`Store`), and CIBA requests (`CibaStore`). If the file does not exist, it is created. If it cannot be opened, the binary does not start.
+- Without `SQLITE_PATH`, storage stays in memory as before. A binary built without the `sqlite` feature refuses to start when `SQLITE_PATH` is set. Otherwise it would run in memory and lose the users when it stops.
+- Only one process opens the file. It is opened with WAL and `synchronous=FULL`. Do not share one file between several processes.
+- The implementation is `src/sqlite.rs`. Only `DocumentStore` is written for SQLite. `Store` and `CibaStore` reuse the implementations built on `DocumentStore` that Firestore also uses. `document_store_contract_tests!`, `store_contract_tests!` and `ciba_store_contract_tests!` run against a file in a temporary directory.
+- `FidoStore` (storage for the FIDO2 conformance endpoints, `/fido/*`) has no SQLite implementation. Those endpoints are mounted only when `FIDO_CONFORMANCE_ENABLED` is set, and they keep their data in memory. Production passkey sign-in uses `DocumentStore`.
+- The `rusqlite` crate bundles the SQLite library (C) and builds it. The build machine needs a C compiler.
 
-    For `Store`, call `store_contract_tests!`. For `CibaStore`, call `ciba_store_contract_tests!`. For `FidoStore`, call `fido_store_contract_tests!`. `SqliteDocumentStore` is an example name for the implementation you will write.
-3. **Read the keys from files.** `Es256Signer::from_scalar_b64` and `Rs256Signer::from_pkcs8_pem` exist. Read the file and plug the signer in with `with_signer` and `add_signer`. Both types already run `jws_signer_contract_tests!`. The code that reads the file does not exist yet.
-4. **Send mail over SMTP.** Implement `Mailer` with SMTP and call `mailer_contract_tests!`. Pass it an `Outbox` that reads what arrived from the recipient's side. If delivery can fail, also pass an `Outbox` whose recipient refuses.
-5. **Assemble the start-up.** Without `gcp`, the current `src/main.rs` always assembles the in-memory storage. You need an assembly that uses SQLite: add a feature, or write your own `main`.
+Not there yet:
 
-Decide first:
+- **Reading the signing keys from files.** A binary built without `gcp` creates a new ES256 key on every start. A restart changes the key, and the JWKS changes with it. `Es256Signer::from_scalar_b64` and `Rs256Signer::from_pkcs8_pem` exist, and both types already run `jws_signer_contract_tests!`. Add the code that reads the file and plugs the signer in with `with_signer` and `add_signer`.
+- **A `Mailer` that sends over SMTP.** A binary built without `gcp` uses `LogMailer`. It sends nothing and writes the link to the log. Implement `Mailer` with SMTP and call `mailer_contract_tests!`. Pass it an `Outbox` that reads what arrived from the recipient's side. If delivery can fail, also pass an `Outbox` whose recipient refuses.
 
-- Most SQLite crates include the C SQLite library. rust-idp is written only in Rust, so choose the crate first.
+Good to know:
+
+- rust-idp forbids only `unsafe` inside its own crate (`#![forbid(unsafe_code)]`). It does not forbid dependencies that contain C. With the `sqlite` feature, the C code of SQLite goes into the binary.
 - The record that lets each JAR, DPoP and `private_key_jwt` jti through only once (`NonceStore`) is not a trait. It is either in memory or in Firestore. On one machine, memory is enough. A restart clears it, though.
 
 ## Example 2: Run with PostgreSQL
