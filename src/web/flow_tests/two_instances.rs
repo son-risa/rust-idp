@@ -677,6 +677,87 @@ async fn rate_limited_paths_refuse_when_the_counts_cannot_be_read() {
     );
 }
 
+/// 保存先が落ちて session を消せなければ、どのログアウトの道もログアウトしたとは返さず、sid cookie も消さない
+/// （残せば、もう一度押して同じ session を消しに行ける）。
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
+#[tokio::test]
+async fn sign_out_refuses_when_the_session_cannot_be_deleted() {
+    const BYE: &str = "https://rp.example.com/bye";
+    let docs = Arc::new(crate::document_store::FailingDocs::up());
+    let bye = Client {
+        client_id: "rp-bye".into(),
+        post_logout_redirect_uris: vec![BYE.into()],
+        ..instance_on(docs.clone()).clients["rp-entry"].clone()
+    };
+    let p = Arc::new(
+        Provider::new("http://localhost:8099")
+            .with_document_store(docs.clone())
+            .with_store(Arc::new(crate::firestore_store::FirestoreStore::new(
+                docs.clone(),
+            )))
+            .with_client(bye),
+    );
+    let jar = session_jar(&p, "acct", now()).await;
+    let mut own = HeaderMap::new();
+    own.insert(header::ORIGIN, p.origin().parse().unwrap());
+    docs.go_down();
+
+    let to_rp = json!({ "client_id": "rp-bye", "post_logout_redirect_uri": BYE, "state": "s" });
+    let cases = [
+        (
+            "RP からの GET",
+            oidc::end_session(
+                State(p.clone()),
+                HeaderMap::new(),
+                jar.clone(),
+                Query(serde_json::from_value(json!({})).unwrap()),
+            )
+            .await,
+        ),
+        (
+            "RP へ戻す GET",
+            oidc::end_session(
+                State(p.clone()),
+                HeaderMap::new(),
+                jar.clone(),
+                Query(serde_json::from_value(to_rp.clone()).unwrap()),
+            )
+            .await,
+        ),
+        (
+            "RP からの POST",
+            oidc::end_session_post(
+                State(p.clone()),
+                HeaderMap::new(),
+                jar.clone(),
+                Form(serde_json::from_value(to_rp).unwrap()),
+            )
+            .await,
+        ),
+        (
+            "確かめの画面・アカウントの画面からの POST",
+            oidc::end_session_post(
+                State(p.clone()),
+                own,
+                jar.clone(),
+                Form(serde_json::from_value(json!({ "confirm": "1" })).unwrap()),
+            )
+            .await,
+        ),
+    ];
+    for (path, r) in cases {
+        assert_eq!(
+            r.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{path}: 消せないのにログアウトしたと返した"
+        );
+        assert!(
+            r.headers().get(header::SET_COOKIE).is_none(),
+            "{path}: 消せない session の cookie を消した"
+        );
+    }
+}
+
 /// 保存先が落ちたら、在るコード・refresh token・承認済みの CIBA も引き換えず、session・interaction・
 /// access token は無いものとして扱う。
 #[cfg(any(feature = "gcp", feature = "sqlite"))]

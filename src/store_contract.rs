@@ -127,9 +127,9 @@ pub(crate) async fn a_session_is_saved_read_and_deleted(s: &dyn Store) {
     };
     s.save_session(session.clone()).await;
     assert!(same(&s.get_session("S1").await.unwrap(), &session));
-    s.delete_session("S1").await;
+    s.delete_session("S1").await.unwrap();
     assert!(s.get_session("S1").await.is_none());
-    s.delete_session("S1").await;
+    s.delete_session("S1").await.unwrap();
     assert!(s.get_session("NOPE").await.is_none());
 }
 

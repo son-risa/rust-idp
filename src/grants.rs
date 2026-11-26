@@ -1400,7 +1400,7 @@ mod tests {
         ) -> crate::store::RevocationCounts {
             self.inner.revoke_account(account_id, keep_sid).await
         }
-        async fn delete_session(&self, sid: &str) {
+        async fn delete_session(&self, sid: &str) -> StoreResult<()> {
             self.inner.delete_session(sid).await
         }
         async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> {

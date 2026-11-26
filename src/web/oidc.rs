@@ -906,8 +906,22 @@ button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f
         return ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response();
     }
 
-    if let Some(sid) = &sid {
-        p.store.delete_session(sid).await;
+    // 消せなかったら、ログアウトしたとは返さない。cookie は残す: 消すと、保存先に残った session を
+    // この端末から消し直す手が無くなる。残せば、もう一度押せば同じ session を消しに行ける。
+    if let Some(sid) = &sid
+        && let Err(e) = p.store.delete_session(sid).await
+    {
+        tracing::error!("end_session: delete_session: {e}");
+        let html = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
+<style>body{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}</style></head><body>
+<h1 style="font-size:1.3rem;font-weight:500">[[Could not sign out. Please try again.]]</h1></body></html>"##;
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CACHE_CONTROL, "no-store")],
+            Html(localize(html, lang)),
+        )
+            .into_response();
     }
     let jar = jar.remove(
         Cookie::build((SID_COOKIE, ""))

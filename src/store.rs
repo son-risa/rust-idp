@@ -92,7 +92,8 @@ pub trait Store: Send + Sync {
 
     async fn save_session(&self, s: Session);
     async fn get_session(&self, sid: &str) -> Option<Session>;
-    async fn delete_session(&self, sid: &str);
+    /// 無い session を消すのは成功（もう消えている）。保存先が答えない・書けないときだけ誤り。
+    async fn delete_session(&self, sid: &str) -> StoreResult<()>;
 
     async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()>;
     /// 認可コードを消費する。初回は使用済みマークして Fresh で返す。期限内の使用済みは Reused で返す。
@@ -277,8 +278,9 @@ impl Store for MemoryStore {
             None => None,
         }
     }
-    async fn delete_session(&self, sid: &str) {
+    async fn delete_session(&self, sid: &str) -> StoreResult<()> {
         self.sessions.lock().unwrap().remove(sid);
+        Ok(())
     }
     async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> {
         // code 自身の expires_at をストア TTL にも流用する(二重管理を避ける)。

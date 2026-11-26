@@ -200,8 +200,8 @@ impl Store for FirestoreStore {
         })
     }
 
-    async fn delete_session(&self, sid: &str) {
-        let _ = self.fs.delete_doc("sessions", sid).await;
+    async fn delete_session(&self, sid: &str) -> StoreResult<()> {
+        Ok(self.fs.delete_doc("sessions", sid).await?)
     }
 
     async fn save_code(&self, c: AuthorizationCode) -> StoreResult<()> {

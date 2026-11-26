@@ -357,8 +357,10 @@ pub(super) async fn signin_verify(
         Ok(a) => a,
         Err(r) => return r,
     };
-    if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
-        p.store.delete_session(&old).await;
+    if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string())
+        && let Err(e) = p.store.delete_session(&old).await
+    {
+        return internal("signin_verify: delete old session", &e.to_string());
     }
     tracing::info!(event = "account_signin", sub = %pseudonymize_sub(&account.account_id));
     let jar = start_session(&p, jar, account.account_id, now()).await;
