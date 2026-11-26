@@ -235,7 +235,8 @@ impl World {
     }
 
     /// RP の /authorize → ログイン画面 → パスキー → /authorize/resume。認可コードを返す。
-    /// 画面の JS は、開いたときと、パスキーの操作の直後とに options を先取りするので、options は 2 回送る。
+    /// 画面の JS は開いたときに options を先取りし、確かめに成功すれば画面を去るので、options は 1 回送る
+    /// （次の options は確かめに失敗したときだけもらう。以前は操作の直後にももらい、challenge の書きが 1 回多かった）。
     async fn sign_in(
         &mut self,
         client_id: &str,
@@ -272,11 +273,6 @@ impl World {
             .unwrap()
             .to_string();
         let (ad, sig, cdj) = make_auth_ceremony(key, 0, &challenge, ORIGIN, &self.rp_id, false);
-        // 操作の直後の先取り（次の試みのため。この画面ではもう使わない）。
-        let r = self
-            .post_json(&format!("/login/{uid}/passkey/options"), json!({}))
-            .await;
-        assert_eq!(r.status(), StatusCode::OK);
         let r = self
             .post_json(
                 &format!("/login/{uid}/passkey/verify"),
@@ -381,19 +377,14 @@ async fn login_with_a_passkey_for_a_public_client() {
         n,
         Counts {
             reads: 19,
-            writes: 10,
+            writes: 9,
             deletes: 2
         },
         "{detail}"
     );
     assert_eq!(
         w.left_since(&before),
-        left([
-            ("accessTokens", 1),
-            ("authCodes", 1),
-            ("sessions", 1),
-            ("webauthnChallenges", 1)
-        ])
+        left([("accessTokens", 1), ("authCodes", 1), ("sessions", 1),])
     );
 }
 
@@ -420,7 +411,7 @@ async fn login_with_a_passkey_for_a_confidential_client() {
         n,
         Counts {
             reads: 19,
-            writes: 11,
+            writes: 10,
             deletes: 2
         },
         "{detail}"
@@ -432,7 +423,6 @@ async fn login_with_a_passkey_for_a_confidential_client() {
             ("authCodes", 1),
             ("refreshTokens", 1),
             ("sessions", 1),
-            ("webauthnChallenges", 1),
         ])
     );
 }

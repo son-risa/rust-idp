@@ -60,6 +60,7 @@ pub(super) async fn login_form(
         };
     }
     // パソコンでは、スマホのパスキーを QR コード（hybrid）で使えることを添える（qrhint）。
+    // challenge は 1 度しか使えない。確かめに成功すれば画面を去るので、次の options は失敗したときだけもらう（retry）。
     let body = r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign in]]</title>
 <style>
@@ -102,6 +103,7 @@ async function prefetch(){
   catch{cachedOpts=null;}
 }
 function fresh(){return cachedOpts&&Date.now()-cachedAt<OPT_FRESH_MS;}
+function retry(){cachedOpts=null;prefetch();}
 prefetch();
 setInterval(()=>{if(!fresh())prefetch();},30000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!fresh())prefetch();});
@@ -112,12 +114,12 @@ async function pkLogin(){
   let o=fresh()?cachedOpts:null;
   if(!o){const r=await fetch(OPT,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});if(!r.ok){msgEl.textContent=await errorText(r);return;}o=await r.json();}
   const cred=await navigator.credentials.get({publicKey:{challenge:b64ToBuf(o.challenge),rpId:o.rpId,timeout:o.timeout,userVerification:o.userVerification,allowCredentials:[]}});
-  cachedOpts=null;prefetch();
   const body={id:cred.id,response:{clientDataJSON:bufToB64(cred.response.clientDataJSON),authenticatorData:bufToB64(cred.response.authenticatorData),signature:bufToB64(cred.response.signature),userHandle:cred.response.userHandle?bufToB64(cred.response.userHandle):null}};
   const v=await fetch(VER,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-  if(!v.ok){if(await v.clone().text()==='interaction not found'){location.reload();return;}msgEl.textContent=await errorText(v);return;}
+  if(!v.ok){if(await v.clone().text()==='interaction not found'){location.reload();return;}retry();msgEl.textContent=await errorText(v);return;}
   location.href=(await v.json()).redirect;
  }catch(e){
+  retry();
   if(e.name==='NotAllowedError'){
    msgEl.textContent='[[Could not start the passkey. Open this page in the standard Safari or Chrome app (in-app browsers are not supported).]]';
   }else{msgEl.textContent=passkeyErrorText(e);}

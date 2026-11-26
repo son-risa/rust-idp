@@ -193,6 +193,21 @@ async fn login_page_drops_prefetched_challenge_before_the_server_expires_it() {
     assert!(!html.contains("__CEREMONY_TTL_SECS__"));
 }
 
+/// 次の options（challenge の書き 1 回）は、確かめに失敗したときだけもらう。成功すれば画面を去るので、
+/// パスキーの操作の直後にもらうと使われない challenge を書くだけになる。
+#[tokio::test]
+async fn login_page_fetches_next_challenge_only_after_a_failure() {
+    let html = login_page(accept(Some("en"))).await;
+    let start = html.find("navigator.credentials.get(").unwrap();
+    let ok = html[start..].find("if(!v.ok)").unwrap() + start;
+    assert!(!html[start..ok].contains("prefetch()"), "{html}");
+    assert!(html.contains("function retry(){cachedOpts=null;prefetch();}"));
+    assert!(html[ok..].contains(
+        "location.reload();return;}retry();msgEl.textContent=await errorText(v);return;}"
+    ));
+    assert!(html[ok..].contains("}catch(e){\n  retry();"));
+}
+
 #[cfg(feature = "gcp")]
 async fn with_firestore() -> (Arc<Provider>, Arc<Firestore>) {
     let (host, _state) = fake_firestore::spawn().await;
