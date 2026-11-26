@@ -2769,8 +2769,7 @@ async fn a_passkey_added_when_the_session_cannot_be_read_again_is_discarded() {
     fake.fail_after(2, "GET", "sessions", Some(&sid));
     let r = account_add(&p, &jar, b"added")
         .await
-        .err()
-        .expect("読めないのに足せたと返した");
+        .expect_err("読めないのに足せたと返した");
     assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(passkeys_of(&p, &email).await, 1, "足した passkey が残った");
 }
@@ -2817,8 +2816,7 @@ async fn a_recovery_that_could_not_sign_out_the_other_devices_asks_to_sign_in_ag
     fake.fail_once("DELETE", "sessions", Some(&elsewhere_sid));
     let r = recover_add(&p, &token, CookieJar::default(), b"recovered")
         .await
-        .err()
-        .expect("失効しきれないのに成功と返した");
+        .expect_err("失効しきれないのに成功と返した");
     let (status, body) = error_body(r).await;
     assert_eq!(
         (status, body.as_str()),
