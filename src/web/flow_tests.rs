@@ -2888,3 +2888,107 @@ async fn a_passkey_removal_that_could_not_remove_is_audited() {
         "{detail}"
     );
 }
+
+/// /account のサインインで、このブラウザの前の session を消せなければ、新しい session を張らずに 500 を返す
+/// （前の session を残したまま張ると、消したつもりの session が生き続ける）。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn an_account_sign_in_that_could_not_delete_the_previous_session_does_not_sign_in() {
+    let (p, fake) = test_provider_and_fake().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key, cred_id, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+    let old = jar.get(SID_COOKIE).unwrap().value().to_string();
+
+    fake.fail_once("DELETE", "sessions", Some(&old));
+    let r = account_signin(&p, &jar, &cred_id, &key, 1, &account_id).await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        r.headers().get(header::SET_COOKIE).is_none(),
+        "前の session を消せないまま新しい session を張った"
+    );
+    assert!(p.store.get_session(&old).await.unwrap().is_some());
+}
+
+/// 登録の完了で、このブラウザの前の session を消せなければ、passkey は保存したまま、新しい session を張らずに
+/// 「もう一度ログインして」の 500 を返す。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_registration_that_could_not_delete_the_previous_session_does_not_sign_in() {
+    let (p, fake) = test_provider_and_fake().await;
+    let fs = p.docs.as_deref().unwrap();
+    let jar = session_jar(&p, "someone-else", now()).await;
+    let old = jar.get(SID_COOKIE).unwrap().value().to_string();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let token = crate::registration::create_email_challenge(fs, &email)
+        .await
+        .unwrap();
+    let opts_req: register::RegPkOptionsReq =
+        serde_json::from_value(json!({ "token": token })).unwrap();
+    let opts =
+        body_json(register::register_passkey_options(State(p.clone()), Json(opts_req)).await).await;
+    let key = SigningKey::generate();
+    let (att, cdj) = make_reg_ceremony(
+        &key,
+        b"first",
+        opts["challenge"].as_str().unwrap(),
+        &p.origin(),
+        &p.rp_id(),
+    );
+    let req: register::RegVerifyReq = serde_json::from_value(json!({
+        "token": token, "response": { "clientDataJSON": cdj, "attestationObject": att },
+    }))
+    .unwrap();
+
+    fake.fail_once("DELETE", "sessions", Some(&old));
+    let r = register::register_passkey_verify(State(p.clone()), jar, Json(req)).await;
+    assert!(
+        r.headers().get(header::SET_COOKIE).is_none(),
+        "前の session を消せないまま新しい session を張った"
+    );
+    let (status, body) = error_body(r).await;
+    assert_eq!(
+        (status, body.as_str()),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "passkey saved, sign in again"
+        )
+    );
+    assert_eq!(passkeys_of(&p, &email).await, 1);
+    assert!(p.store.get_session(&old).await.unwrap().is_some());
+}
+
+/// 回復で、このブラウザの前の session（別のアカウント）を消せなければ、passkey は足したまま、新しい session を
+/// 張らずに「もう一度ログインして」の 500 を返す。
+#[cfg(feature = "gcp")]
+#[tokio::test]
+async fn a_recovery_that_could_not_delete_the_previous_session_does_not_sign_in() {
+    let (p, fake) = test_provider_and_fake().await;
+    let fs = p.docs.as_deref().unwrap();
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let jar = session_jar(&p, "someone-else", now()).await;
+    let old = jar.get(SID_COOKIE).unwrap().value().to_string();
+    let token = crate::registration::create_recovery_challenge(fs, &email)
+        .await
+        .unwrap();
+
+    fake.fail_once("DELETE", "sessions", Some(&old));
+    let r = recover_add(&p, &token, jar, b"recovered")
+        .await
+        .expect_err("前の session を消せないのに成功と返した");
+    assert!(
+        r.headers().get(header::SET_COOKIE).is_none(),
+        "前の session を消せないまま新しい session を張った"
+    );
+    let (status, body) = error_body(r).await;
+    assert_eq!(
+        (status, body.as_str()),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "passkey saved, sign in again"
+        )
+    );
+    assert_eq!(passkeys_of(&p, &email).await, 2);
+    assert!(p.store.get_session(&old).await.unwrap().is_some());
+}

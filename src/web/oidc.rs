@@ -2007,6 +2007,153 @@ mod tests {
             assert!(html.contains(r#"name="client_id" value="dcr-x""#), "{html}");
             assert!(w.store.get_session("s-2").await.unwrap().is_some());
         }
+
+        /// session を読めて消せないときは、消す所に届くどの道も、500 ともう一度押す form を返す。
+        /// RP へ戻さず、cookie も消さない（残せば、もう一度押して同じ session を消しに行ける）。
+        #[cfg(feature = "gcp")]
+        #[tokio::test]
+        async fn every_path_that_reaches_the_delete_refuses_when_the_session_cannot_be_deleted() {
+            let (host, fake) = crate::firestore::fake_firestore::spawn().await;
+            let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+            let p = Provider::new(OP)
+                .with_store(Arc::new(crate::firestore_store::FirestoreStore::new(fs)))
+                .with_client(client_with_post_logout(&[BYE]));
+            let hint = id_token(&p, serde_json::json!({})).await;
+            let w = World {
+                store: p.store.clone(),
+                app: super::super::router(p),
+                hint,
+                rs_hint: String::new(),
+                off: vec![],
+            };
+            let to_rp = [
+                ("client_id", "dcr-x"),
+                ("post_logout_redirect_uri", BYE),
+                ("state", "s1"),
+            ];
+            let with_hint = |rest: &[(&'static str, &'static str)]| {
+                let mut v = vec![("id_token_hint", w.hint.as_str())];
+                v.extend_from_slice(rest);
+                v
+            };
+            let confirm = |rest: &[(&'static str, &'static str)]| {
+                let mut v = vec![("confirm", "1")];
+                v.extend_from_slice(rest);
+                v
+            };
+            let unregistered = [
+                ("client_id", "dcr-x"),
+                (
+                    "post_logout_redirect_uri",
+                    "https://rp.example.com/elsewhere",
+                ),
+            ];
+            // (道, method, params, Origin, 戻り先を引き継ぐか, session があるか)
+            let cases = vec![
+                (
+                    "hint の GET・戻り先あり",
+                    "GET",
+                    with_hint(&to_rp),
+                    None,
+                    true,
+                    true,
+                ),
+                (
+                    "hint の GET・戻り先なし",
+                    "GET",
+                    with_hint(&[]),
+                    None,
+                    false,
+                    true,
+                ),
+                (
+                    "hint の RP の POST・戻り先あり",
+                    "POST",
+                    with_hint(&to_rp),
+                    Some("https://rp.example.com"),
+                    true,
+                    true,
+                ),
+                (
+                    "hint の RP の POST・戻り先なし",
+                    "POST",
+                    with_hint(&[]),
+                    Some("https://rp.example.com"),
+                    false,
+                    true,
+                ),
+                (
+                    "確かめの POST・戻り先あり",
+                    "POST",
+                    confirm(&to_rp),
+                    Some(OP),
+                    true,
+                    true,
+                ),
+                (
+                    "確かめの POST・戻り先なし",
+                    "POST",
+                    confirm(&[]),
+                    Some(OP),
+                    false,
+                    true,
+                ),
+                (
+                    "確かめの POST・登録に無い戻り先",
+                    "POST",
+                    confirm(&unregistered),
+                    Some(OP),
+                    false,
+                    true,
+                ),
+                (
+                    "session の無い cookie の GET",
+                    "GET",
+                    to_rp.to_vec(),
+                    None,
+                    true,
+                    false,
+                ),
+            ];
+            for (i, (path, method, params, origin, carried, has_session)) in
+                cases.into_iter().enumerate()
+            {
+                let sid = format!("s-del-{i}");
+                if has_session {
+                    w.signed_in(&sid).await;
+                }
+                fake.fail_once("DELETE", "sessions", Some(&sid));
+                let r = w.send(method, &sid, &params, origin).await;
+                assert_eq!(
+                    r.status(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "{path}: 消せないのにログアウトしたと返した"
+                );
+                assert!(
+                    r.headers().get(header::LOCATION).is_none(),
+                    "{path}: RP へ戻した"
+                );
+                assert!(
+                    r.headers().get(header::SET_COOKIE).is_none(),
+                    "{path}: 消せない session の cookie を消した"
+                );
+                let html = body(r).await;
+                assert!(html.contains("Could not sign out"), "{path}: {html}");
+                assert!(
+                    html.contains(r#"<form method="post" action="/end-session"><input type="hidden" name="confirm" value="1">"#),
+                    "{path}: もう一度押す form が無い: {html}"
+                );
+                let fields = [
+                    r#"name="client_id" value="dcr-x""#,
+                    r#"name="post_logout_redirect_uri" value="https://rp.example.com/bye""#,
+                    r#"name="state" value="s1""#,
+                ];
+                for f in fields {
+                    assert_eq!(html.contains(f), carried, "{path}: {f}: {html}");
+                }
+                assert_eq!(w.still_signed_in(&sid).await, has_session, "{path}");
+            }
+        }
     }
 
     /// 登録要求の配線。ここで読み落とすと、検証側に試験が在っても黙って空で登録される
