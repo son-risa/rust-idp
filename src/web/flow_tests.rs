@@ -2677,3 +2677,5 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
         "{page}"
     );
 }
+
+mod two_instances;
