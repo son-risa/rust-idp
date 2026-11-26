@@ -215,6 +215,17 @@ fn now() -> u64 {
 }
 
 /// SSO セッションを作り、sid cookie を張る。
+/// passkey は保存できたが、前の session を消せずに新しい session を張らなかったときの 500。
+/// 画面は SERVER_ERRORS で「もう一度ログインして」と訳す。
+fn passkey_saved_sign_in_again(context: &str, e: &str) -> Response {
+    tracing::error!("{context}: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "passkey saved, sign in again",
+    )
+        .into_response()
+}
+
 async fn start_session(
     p: &Provider,
     jar: CookieJar,
@@ -785,6 +796,7 @@ const SERVER_ERRORS={
  'challenge context mismatch':'[[Something went wrong. Please try again.]]',
  'no firestore':'[[Something went wrong. Please try again.]]',
  'error':'[[Something went wrong. Please try again.]]',
+ 'passkey saved, sign in again':'[[The passkey was registered. Please sign in again.]]',
  'access token required':'[[Your session has expired. Please sign in again.]]',
  'invalid token':'[[Your session has expired. Please sign in again.]]',
  'DPoP scheme required':'[[Your session has expired. Please sign in again.]]',

@@ -428,7 +428,10 @@ pub(super) async fn recover_verify(
     if let Some(old) = jar.get(SID_COOKIE).map(|c| c.value().to_string())
         && let Err(e) = p.store.delete_session(&old).await
     {
-        return internal("recover_verify: delete old session", &e.to_string());
+        return super::passkey_saved_sign_in_again(
+            "recover_verify: delete old session",
+            &e.to_string(),
+        );
     }
     if !still_open {
         return (StatusCode::FORBIDDEN, "account disabled").into_response();

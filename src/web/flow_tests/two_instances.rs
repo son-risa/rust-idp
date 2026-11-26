@@ -755,6 +755,20 @@ async fn sign_out_refuses_when_the_session_cannot_be_deleted() {
             r.headers().get(header::SET_COOKIE).is_none(),
             "{path}: 消せない session の cookie を消した"
         );
+        let html = body_text(r).await;
+        assert!(
+            html.contains(r#"<form method="post" action="/end-session"><input type="hidden" name="confirm" value="1">"#),
+            "{path}: もう一度押す form が無い: {html}"
+        );
+        if path.contains("RP へ戻す") || path.contains("RP からの POST") {
+            for field in [
+                r#"name="client_id" value="rp-bye""#,
+                r#"name="post_logout_redirect_uri" value="https://rp.example.com/bye""#,
+                r#"name="state" value="s""#,
+            ] {
+                assert!(html.contains(field), "{path}: {field} を引き継がない");
+            }
+        }
     }
 }
 

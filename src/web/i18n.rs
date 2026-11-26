@@ -296,6 +296,10 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Go to sign in", "ログインへ"),
     ("Do you want to sign out?", "ログアウトしますか？"),
     (
+        "The passkey was registered. Please sign in again.",
+        "パスキーは登録できました。もう一度ログインしてください。",
+    ),
+    (
         "Could not sign out. Please try again.",
         "ログアウトできませんでした。もう一度お試しください。",
     ),
