@@ -53,9 +53,11 @@ cargo build --release --features sqlite
 SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
 ```
 
-- `SQLITE_PATH` があると、利用者・パスキー・登録の token・PAR・DCR など（`DocumentStore`）、セッション・認可コード・token（`Store`）、CIBA の要求（`CibaStore`）を、その file 1 つに置く。file が無ければ作る。開けなければ起動しない。
+- `SQLITE_PATH` があると、利用者・パスキー・登録の token・PAR・DCR など（`DocumentStore`）、セッション・認可コード・token（`Store`）、CIBA の要求（`CibaStore`）を、その file 1 つに置く。file が無ければ、持ち主だけが読み書きできる形（0600）で作る。開けなければ起動しない。
 - `SQLITE_PATH` が無ければ、今までどおりメモリに置く。`sqlite` の feature なしで build した binary に `SQLITE_PATH` を渡すと、起動しない。メモリで動いて、止めたときに利用者が消えるのを避けるため。
 - 1 つの process だけが file を開く前提で、WAL と `synchronous=FULL` で開く。同じ file を複数の process で分け合わない。
+- file と、それを置く directory は、rust-idp を動かす利用者だけが読めるようにする（file は 600、directory は 700）。token や session の id が文書の id に入るため。
+- 写しは `sqlite3` の `.backup` か `VACUUM INTO` で取る。動いている最中に file だけを `cp` すると、`-wal` にある commit が写しから欠ける。
 - そのため台数は増やせない。1 台で足りる小さな組織向けで、その 1 台が止まればログインも止まる。台数を増やすなら、Firestore のような、複数の台から共有できる保存先を使う。
 - 実装は `src/sqlite.rs`。SQLite で書いたのは `DocumentStore` だけ。`Store` と `CibaStore` は、Firestore でも使っている「`DocumentStore` の上の実装」をそのまま載せる。`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!` を、一時 directory に作った file に当てている。
 - `FidoStore`（FIDO2 の適合試験の面 `/fido/*` の保存先）には、SQLite の実装が無い。この面は `FIDO_CONFORMANCE_ENABLED` のときだけ載り、メモリに置く。本番のパスキーのログインは `DocumentStore` を使う。
@@ -73,7 +75,7 @@ SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
 
 ## 実例 2: PostgreSQL と動かす
 
-実例 1 と同じ口を、PostgreSQL で実装する。通す試験も同じで、`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!`（`/fido/*` を出すなら `fido_store_contract_tests!` も）を呼んで緑にする。
+`src/sqlite.rs` のように `DocumentStore` だけを PostgreSQL で書けば、`Store` と `CibaStore` は `DocumentStore` の上の実装（`FirestoreStore`・`FirestoreCibaStore`）を流用できる。この 2 つは `#[cfg(any(feature = "gcp", feature = "sqlite"))]` の中にあるので、その cfg に PostgreSQL の feature を足す。通す試験は、`document_store_contract_tests!`・`store_contract_tests!`・`ciba_store_contract_tests!`（`/fido/*` を出すなら `fido_store_contract_tests!` も）を呼んで緑にする。
 
 PostgreSQL では、次の点を確かめる。
 

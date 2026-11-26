@@ -84,6 +84,11 @@ pub trait DocumentStore: Send + Sync {
     async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String>;
     /// 文書を消す。無くても誤りにしない。
     async fn delete_doc(&self, col: &str, id: &str) -> Result<(), String>;
+    /// 期限の過ぎた文書を消す。既定は何もしない（Firestore は TTL ポリシーが消す）。
+    /// DocumentStore の上の Store の `sweep_expired` が、定期の掃除のたびに呼ぶ。
+    async fn sweep_expired(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct Doc {

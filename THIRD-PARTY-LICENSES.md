@@ -273,14 +273,13 @@ rust-idp をバイナリ（Cloud Run コンテナ等）としてビルドする�
 
 ## feature `sqlite` で加わる crate
 
-`--features sqlite` で build すると、上の表に加えて次の crate が組み込まれる（`cargo tree -e normal` の差分）。
+`--features sqlite` で build すると、上の表に加えて次の crate が組み込まれる（`cargo tree -e normal` の差分のうち、上の表に無いもの）。
 
 | Crate | Version | License (SPDX) |
 |---|---|---|
 | fallible-iterator | 0.3.0 | MIT/Apache-2.0 |
 | fallible-streaming-iterator | 0.1.9 | MIT/Apache-2.0 |
 | foldhash | 0.2.0 | Zlib |
-| hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | hashlink | 0.12.2 | MIT OR Apache-2.0 |
 | libsqlite3-sys | 0.40.0 | MIT |
 | rusqlite | 0.43.0 | MIT |

@@ -53,9 +53,11 @@ cargo build --release --features sqlite
 SQLITE_PATH=/var/lib/rust-idp/idp.sqlite ./target/release/rust-idp
 ```
 
-- With `SQLITE_PATH`, one file holds users, passkeys, sign-up tokens, PAR, DCR and more (`DocumentStore`), sessions, authorization codes and tokens (`Store`), and CIBA requests (`CibaStore`). If the file does not exist, it is created. If it cannot be opened, the binary does not start.
+- With `SQLITE_PATH`, one file holds users, passkeys, sign-up tokens, PAR, DCR and more (`DocumentStore`), sessions, authorization codes and tokens (`Store`), and CIBA requests (`CibaStore`). If the file does not exist, it is created so that only its owner can read and write it (0600). If it cannot be opened, the binary does not start.
 - Without `SQLITE_PATH`, storage stays in memory as before. A binary built without the `sqlite` feature refuses to start when `SQLITE_PATH` is set. Otherwise it would run in memory and lose the users when it stops.
 - Only one process opens the file. It is opened with WAL and `synchronous=FULL`. Do not share one file between several processes.
+- Make the file and its directory readable only by the user that runs rust-idp (600 for the file, 700 for the directory). Token and session ids are used as document ids.
+- Take copies with `sqlite3` `.backup` or `VACUUM INTO`. If you `cp` only the file while rust-idp runs, the copy misses the commits that are still in `-wal`.
 - So you cannot add more instances. This suits a small organization that one machine can serve, and if that machine stops, sign-in stops too. To run several instances, use storage that several instances can share, such as Firestore.
 - The implementation is `src/sqlite.rs`. Only `DocumentStore` is written for SQLite. `Store` and `CibaStore` reuse the implementations built on `DocumentStore` that Firestore also uses. `document_store_contract_tests!`, `store_contract_tests!` and `ciba_store_contract_tests!` run against a file in a temporary directory.
 - `FidoStore` (storage for the FIDO2 conformance endpoints, `/fido/*`) has no SQLite implementation. Those endpoints are mounted only when `FIDO_CONFORMANCE_ENABLED` is set, and they keep their data in memory. Production passkey sign-in uses `DocumentStore`.
@@ -73,7 +75,7 @@ Good to know:
 
 ## Example 2: Run with PostgreSQL
 
-Implement the same extension points as in Example 1 with PostgreSQL. The tests are the same too: call `document_store_contract_tests!`, `store_contract_tests!` and `ciba_store_contract_tests!` (and `fido_store_contract_tests!` if you expose `/fido/*`), and make them pass.
+Like `src/sqlite.rs`, write only `DocumentStore` for PostgreSQL. `Store` and `CibaStore` can then reuse the implementations built on `DocumentStore` (`FirestoreStore` and `FirestoreCibaStore`). Those two are inside `#[cfg(any(feature = "gcp", feature = "sqlite"))]`, so add your PostgreSQL feature to that cfg. For the tests, call `document_store_contract_tests!`, `store_contract_tests!` and `ciba_store_contract_tests!` (and `fido_store_contract_tests!` if you expose `/fido/*`), and make them pass.
 
 With PostgreSQL, check these points.
 
