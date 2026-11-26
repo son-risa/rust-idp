@@ -1152,8 +1152,10 @@ pub(super) async fn register(
         Ok(Some(x)) => x,
         Ok(None) => {
             // 不明トークンも IP レート制限に数えて無効 Bearer 連発を bounding する。
-            p.register_rate
-                .check_and_record("dcr-register", &client_ip(&headers));
+            let _ = p
+                .register_rate
+                .check_and_record(fs, "dcr-register", &client_ip(&headers))
+                .await;
             return dcr_error(
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
@@ -1179,17 +1181,30 @@ pub(super) async fn register(
 
     // 素朴な単一 IP からの連発 backstop。本番の単回 IAT のみ throttle する。
     // reusable(conformance 専用・短 TTL)はスイートがモジュール毎に多数登録するため免除。
-    // in-memory/インスタンス単位・先頭 X-F-F は詐称可能なので増幅防御ではない——IAT 必須が本来の門。
-    if !iat.reusable
-        && !p
+    // 数は保存先に置くので台をまたいで 1 つ。X-F-F は詐称できるので増幅防御ではない——IAT 必須が本来の門。
+    if !iat.reusable {
+        match p
             .register_rate
-            .check_and_record("dcr-register", &client_ip(&headers))
-    {
-        return dcr_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too_many_requests",
-            "registration rate limit exceeded; retry later",
-        );
+            .check_and_record(fs, "dcr-register", &client_ip(&headers))
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return dcr_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "too_many_requests",
+                    "registration rate limit exceeded; retry later",
+                );
+            }
+            Err(e) => {
+                tracing::error!("dcr rate limit [{tag}]: {e}");
+                return dcr_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "registration failed",
+                );
+            }
+        }
     }
 
     let v: serde_json::Value = match serde_json::from_str(&body) {

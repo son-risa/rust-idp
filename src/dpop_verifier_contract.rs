@@ -35,7 +35,7 @@ fn header(key: &SigningKey) -> Value {
     json!({"typ": "dpop+jwt", "alg": "ES256", "jwk": jwk(key)})
 }
 
-fn claims(htm: &str, htu: &str, iat: i64) -> Value {
+pub(crate) fn claims(htm: &str, htu: &str, iat: i64) -> Value {
     json!({"htm": htm, "htu": htu, "iat": iat, "jti": uuid::Uuid::new_v4().to_string()})
 }
 
@@ -50,7 +50,7 @@ fn signed(signer: &SigningKey, header: &Value, payload: &Value) -> String {
     format!("{input}.{}", b64url_encode(sig.to_bytes()))
 }
 
-fn proof(key: &SigningKey, payload: &Value) -> String {
+pub(crate) fn proof(key: &SigningKey, payload: &Value) -> String {
     signed(key, &header(key), payload)
 }
 

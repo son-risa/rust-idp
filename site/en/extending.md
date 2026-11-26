@@ -81,7 +81,7 @@ With PostgreSQL, check these points.
 
 - Single-use operations (`take_doc`, `take_code`, `mark_refresh_used` and others) let only one caller through, even under concurrent calls. The contract tests include concurrent tests (`racing_*`). Use row locks, or a conditional `UPDATE ... RETURNING`.
 - `*_if_unchanged` writes only when the version matches the one that was read. Keep a version column.
-- With several processes, anything in memory is separate per process. This applies to the jti record (`NonceStore`) and to the rate limits. To keep the jti record in PostgreSQL, start by turning `NonceStore` into a trait.
+- With several processes, anything in memory is separate per process. The rate limit counts live in `DocumentStore` (the `rateLimits` collection), so all processes that share the store share one limit. The jti record (`NonceStore`) is in memory except in the Firestore wiring. To keep the jti record in PostgreSQL, start by turning `NonceStore` into a trait. The cache of private_key_jwt public keys (5 minutes) is also per process, so a client key change can take up to 5 minutes to reach every process.
 
 ## Example 3: Connect a site that has its own user DB and uses Basic auth
 

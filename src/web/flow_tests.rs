@@ -607,21 +607,24 @@ async fn signup_emails_are_rate_limited_per_ip_and_per_address() {
         )
     };
 
-    for i in 0..5 {
+    // IP ごとは 1 時間に 30 通。30 通目までは通る。
+    for i in 0..30 {
         assert_eq!(
             signup("192.0.2.10".into(), format!("a{i}@example.com"))
                 .await
                 .status(),
-            StatusCode::NO_CONTENT
+            StatusCode::NO_CONTENT,
+            "{i} 通目"
         );
     }
-    let over = signup("192.0.2.10".into(), "a5@example.com".into()).await;
+    let over = signup("192.0.2.10".into(), "a30@example.com".into()).await;
     assert_eq!(
         over.status(),
         StatusCode::TOO_MANY_REQUESTS,
         "同じ IP から上限を超えて送れた"
     );
 
+    // アドレスごとは 1 時間に 5 通。
     for i in 0..5 {
         assert_eq!(
             signup(format!("198.51.100.{i}"), "same@example.com".into())
@@ -654,21 +657,24 @@ async fn recovery_emails_are_rate_limited_per_ip_and_per_address() {
         )
     };
 
-    for i in 0..5 {
+    // IP ごとは 1 時間に 30 通。30 通目までは通る。
+    for i in 0..30 {
         assert_eq!(
             recover("192.0.2.20".into(), format!("b{i}@example.com"))
                 .await
                 .status(),
-            StatusCode::OK
+            StatusCode::OK,
+            "{i} 通目"
         );
     }
-    let over = recover("192.0.2.20".into(), "b5@example.com".into()).await;
+    let over = recover("192.0.2.20".into(), "b30@example.com".into()).await;
     assert_eq!(
         over.status(),
         StatusCode::TOO_MANY_REQUESTS,
         "同じ IP から上限を超えて送れた"
     );
 
+    // アドレスごとは 1 時間に 5 通。
     for i in 0..5 {
         assert_eq!(
             recover(format!("198.51.100.{i}"), email.clone())
@@ -2677,3 +2683,5 @@ async fn an_email_link_asks_before_switching_a_signed_in_browser_to_another_acco
         "{page}"
     );
 }
+
+mod two_instances;

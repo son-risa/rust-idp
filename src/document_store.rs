@@ -336,6 +336,188 @@ impl DocumentStore for MemoryDocumentStore {
         self.lock().docs.remove(&key(col, id));
         Ok(())
     }
+
+    /// SQLite と同じく、`expiresAt` か `expireAt` の時刻が過ぎた文書を消す。
+    async fn sweep_expired(&self) -> Result<(), String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        let past = |f: &Value, name: &str| {
+            crate::firestore::field_ts_secs(f, name).is_some_and(|t| t < now)
+        };
+        self.lock()
+            .docs
+            .retain(|_, d| !past(&d.fields, "expiresAt") && !past(&d.fields, "expireAt"));
+        Ok(())
+    }
+}
+
+/// `only` の集まり（None なら全て）への操作に誤りを返し、ほかはメモリに置く保存先。
+/// 保存先が落ちたときに通さないことの試験に使う。
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct FailingDocs {
+    only: Option<&'static str>,
+    /// 立てた後に落とす試験のため。all・only は落ちた状態で作る。
+    up: std::sync::atomic::AtomicBool,
+    /// 条件つきの書き込み（create_if_absent・set_doc_if_unchanged）が、ほかの台に毎回負けたことにする。
+    lose: bool,
+    inner: MemoryDocumentStore,
+}
+
+#[cfg(test)]
+impl FailingDocs {
+    pub(crate) fn all() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn only(col: &'static str) -> Self {
+        Self {
+            only: Some(col),
+            ..Self::default()
+        }
+    }
+
+    /// 動いている保存先。`go_down` で全ての集まりを落とす。
+    pub(crate) fn up() -> Self {
+        let s = Self::default();
+        s.up.store(true, std::sync::atomic::Ordering::SeqCst);
+        s
+    }
+
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
+    pub(crate) fn go_down(&self) {
+        self.up.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 動いているが、条件つきの書き込みに毎回負ける保存先。
+    pub(crate) fn always_losing() -> Self {
+        Self {
+            lose: true,
+            ..Self::up()
+        }
+    }
+
+    fn check(&self, col: &str) -> Result<(), String> {
+        if self.up.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        match self.only {
+            Some(c) if c != col => Ok(()),
+            _ => Err(format!("{col}: down")),
+        }
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl DocumentStore for FailingDocs {
+    async fn set_doc(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.set_doc(col, id, fields).await
+    }
+    async fn update_field(
+        &self,
+        col: &str,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.update_field(col, id, field, value).await
+    }
+    async fn update_fields(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.update_fields(col, id, fields).await
+    }
+    async fn merge_fields(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        remove: &[String],
+    ) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.merge_fields(col, id, fields, remove).await
+    }
+    async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        self.check(col)?;
+        self.inner.get_doc(col, id).await
+    }
+    async fn get_doc_with_update_time(
+        &self,
+        col: &str,
+        id: &str,
+    ) -> Result<Option<(Value, String)>, String> {
+        self.check(col)?;
+        self.inner.get_doc_with_update_time(col, id).await
+    }
+    async fn set_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        update_time: &str,
+    ) -> Result<bool, String> {
+        self.check(col)?;
+        if self.lose {
+            return Ok(false);
+        }
+        self.inner
+            .set_doc_if_unchanged(col, id, fields, update_time)
+            .await
+    }
+    async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String> {
+        self.check(col)?;
+        if self.lose {
+            return Ok(false);
+        }
+        self.inner.create_if_absent(col, id, fields).await
+    }
+    async fn delete_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        update_time: &str,
+    ) -> Result<bool, String> {
+        self.check(col)?;
+        self.inner
+            .delete_doc_if_unchanged(col, id, update_time)
+            .await
+    }
+    async fn take_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        self.check(col)?;
+        self.inner.take_doc(col, id).await
+    }
+    async fn query_eq(
+        &self,
+        col: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<(String, Value)>, String> {
+        self.check(col)?;
+        self.inner.query_eq(col, field, value).await
+    }
+    async fn list_recent_ordered(
+        &self,
+        col: &str,
+        order_field: &str,
+        limit: u32,
+    ) -> Result<Vec<(String, Value)>, String> {
+        self.check(col)?;
+        self.inner
+            .list_recent_ordered(col, order_field, limit)
+            .await
+    }
+    async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String> {
+        self.check(col)?;
+        self.inner.list_collection(col).await
+    }
+    async fn delete_doc(&self, col: &str, id: &str) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.delete_doc(col, id).await
+    }
 }
 
 #[cfg(test)]

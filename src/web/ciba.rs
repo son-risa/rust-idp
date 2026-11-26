@@ -259,19 +259,30 @@ pub(super) async fn backchannel_auth(
         }
     }
     // レート制限: dedup を抜けた要求の連発（例: 拒否直後の再試行）を抑止。
-    if !p.ciba_rate.check_and_record(&client.client_id, &login_hint) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [
-                (header::CACHE_CONTROL, "no-store"),
-                (header::RETRY_AFTER, "60"),
-            ],
-            Json(serde_json::json!({
-                "error": "slow_down",
-                "error_description": "rate limit exceeded for this client/user",
-            })),
-        )
-            .into_response();
+    match p
+        .ciba_rate
+        .check_and_record(fs, &client.client_id, &login_hint)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (header::CACHE_CONTROL, "no-store"),
+                    (header::RETRY_AFTER, "60"),
+                ],
+                Json(serde_json::json!({
+                    "error": "slow_down",
+                    "error_description": "rate limit exceeded for this client/user",
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("ciba rate limit: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
     }
     match p
         .ciba
