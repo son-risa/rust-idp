@@ -394,7 +394,7 @@ mod tests {
 
     /// query_eq と list_recent_ordered は、MemoryDocumentStore と同じ文書を同じ順で返す。契約の試験は
     /// 並びを問わない（Firestore は順を決めない）ので、ここで Memory と突き合わせる。
-    /// 並べの key が崩れた文書（時刻が数・null、stringValue だけ、field が無い）も混ぜる。
+    /// 形の崩れた文書（時刻が数・null、stringValue だけや数や配列、field が無い）も混ぜる。
     #[tokio::test]
     async fn queries_return_the_same_rows_in_the_same_order_as_memory() {
         use crate::firestore::{s, ts};
@@ -420,12 +420,13 @@ mod tests {
                 json!({ "who": s("a"), "at": { "timestampValue": null, "stringValue": "z" } }),
             ),
             ("6", json!({ "who": s("a") })),
+            ("8", json!({ "who": { "stringValue": ["a"] } })),
         ];
         for (id, f) in docs {
             sqlite.set_doc("log", id, f.clone()).await.unwrap();
             memory.set_doc("log", id, f).await.unwrap();
         }
-        for who in ["a", "b", "1"] {
+        for who in ["a", "b", "1", r#"["a"]"#] {
             assert_eq!(
                 sqlite.query_eq("log", "who", who).await.unwrap(),
                 memory.query_eq("log", "who", who).await.unwrap(),
