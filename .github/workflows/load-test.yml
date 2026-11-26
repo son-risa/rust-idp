@@ -1,0 +1,105 @@
+name: Load test (staging)
+
+# 手で回すときだけ起動する。push・pull_request では回さない。
+# 当てる先は staging に固定（本番には当てない）。scripts/load/login-start.js を k6 で回す。
+on:
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: 同時に回す人数
+        default: '30'
+        required: true
+      duration:
+        description: 温まった後の回の長さ（k6 の書き方。例 3m）
+        default: '3m'
+        required: true
+      idle_minutes:
+        description: cold start を測る前に何も送らずに待つ分（0 なら cold start の回を飛ばす）。Cloud Run は最小 0 台なので、15 分ほど要求が無いと台が止まる
+        default: '20'
+        required: true
+
+concurrency:
+  group: rust-idp-load-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://rust-idp-staging-xtqxadsdjq-an.a.run.app/oidc
+  K6_VERSION: v1.8.2
+  # https://github.com/grafana/k6/releases/download/v1.8.2/k6-v1.8.2-checksums.txt の値。
+  K6_SHA256: 37620781d35406ebf402397a6c5cf4adb62d175cb052ff45325ae0b860527063
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: 入力を確かめる
+        env:
+          VUS: ${{ inputs.vus }}
+          DURATION: ${{ inputs.duration }}
+          IDLE: ${{ inputs.idle_minutes }}
+        run: |
+          set -euo pipefail
+          [[ "$VUS" =~ ^[0-9]+$ ]] && (( VUS >= 1 && VUS <= 100 )) || { echo "vus は 1〜100"; exit 1; }
+          [[ "$DURATION" =~ ^[0-9]+[sm]$ ]] || { echo "duration は 90s・3m の形"; exit 1; }
+          [[ "$IDLE" =~ ^[0-9]+$ ]] && (( IDLE <= 60 )) || { echo "idle_minutes は 0〜60"; exit 1; }
+
+      - name: k6 を入れる
+        run: |
+          set -euo pipefail
+          name="k6-${K6_VERSION}-linux-amd64"
+          curl -fsSL -o /tmp/k6.tar.gz "https://github.com/grafana/k6/releases/download/${K6_VERSION}/${name}.tar.gz"
+          echo "${K6_SHA256}  /tmp/k6.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/k6.tar.gz -C /tmp
+          install "/tmp/${name}/k6" /usr/local/bin/k6
+          k6 version
+
+      - name: 台が止まるのを待つ
+        if: inputs.idle_minutes != '0'
+        env:
+          IDLE: ${{ inputs.idle_minutes }}
+        run: sleep $(( IDLE * 60 ))
+
+      # 待つ間に別の人が staging に触れていれば台は止まっておらず、cold start は測れていない。
+      - name: cold start を測る
+        id: cold
+        if: inputs.idle_minutes != '0'
+        continue-on-error: true
+        env:
+          PHASE: cold
+        run: k6 run -q scripts/load/login-start.js
+
+      - name: 温まった後の回
+        id: warm
+        continue-on-error: true
+        env:
+          PHASE: warm
+          VUS: ${{ inputs.vus }}
+          DURATION: ${{ inputs.duration }}
+        run: k6 run -q scripts/load/login-start.js
+
+      - name: 結果を残す
+        if: always()
+        run: cat summary-*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: load-test-summary
+          path: summary-*
+          if-no-files-found: ignore
+
+      - name: 合否
+        env:
+          COLD: ${{ steps.cold.outcome }}
+          WARM: ${{ steps.warm.outcome }}
+        run: |
+          echo "cold: ${COLD}, warm: ${WARM}"
+          [[ "$COLD" != failure && "$WARM" == success ]]
