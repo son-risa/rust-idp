@@ -51,7 +51,8 @@ sha2 = { version = "0.11", features = ["oid"] }
 p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem", "getrandom"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "query"] }
-# reqwest 0.13 の既定の rustls は aws-lc-rs（C）を引く。純 Rust の ring を使い、main で既定の provider にする。
+# reqwest 0.13 の既定の rustls は aws-lc-rs を引く。依存の軽い ring を使い、main で既定の provider にする。
+# ring も C と asm を含む（Rust だけでは書かれていない）。
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ciborium = "0.2"
 x509-cert = "0.3"

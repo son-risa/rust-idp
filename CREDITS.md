@@ -58,7 +58,8 @@ rust-idp は WebAuthn 検証を RustCrypto でピュア Rust 自作する方針�
 
 ## 暗号・依存ライブラリ
 
-rust-idp は暗号プリミティブを **RustCrypto 系のクレート**に委譲する（OpenSSL/ring 非依存, `openssl = 0`）。
+rust-idp は署名・検証などの暗号プリミティブを **RustCrypto 系のクレート**に委譲する（OpenSSL 非依存, `openssl = 0`）。
+外へ出る TLS（rustls）の暗号には ring を使う。ring は C と asm を含む。
 主要な暗号ライブラリと SPDX ライセンス:
 
 | ライブラリ | 用途 | License |
