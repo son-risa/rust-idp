@@ -1,9 +1,11 @@
-//! Store トレイトの Firestore 実装。ゼロスケールでもインスタンス跨ぎで
+//! Store トレイトの、[`DocumentStore`] の上の実装。ゼロスケールでもインスタンス跨ぎで
 //! セッション/コード/トークンを永続化する（TS の FirestoreAdapter 相当）。
+//! gcp では Firestore、sqlite では SQLite の file を下に置く。
 //! interactions / sessions / authCodes / accessTokens / refreshTokens を保存。
 //! find_account は static（accounts/{email} は別 collection で registration.rs が管理）。
 
-use crate::firestore::{self as fs_h, Firestore};
+use crate::document_store::DocumentStore;
+use crate::firestore as fs_h;
 use crate::model::*;
 use crate::store::{CodeTake, RevocationCounts, Store, StoreResult};
 use async_trait::async_trait;
@@ -71,11 +73,11 @@ fn rt_from_fields(token: &str, f: &Value) -> RefreshToken {
 }
 
 pub struct FirestoreStore {
-    fs: Arc<Firestore>,
+    fs: Arc<dyn DocumentStore>,
 }
 
 impl FirestoreStore {
-    pub fn new(fs: Arc<Firestore>) -> Self {
+    pub fn new(fs: Arc<dyn DocumentStore>) -> Self {
         Self { fs }
     }
 
@@ -299,7 +301,7 @@ impl Store for FirestoreStore {
         if let Some(rt) = refresh_token {
             f["issuedRefreshToken"] = fs_h::s(rt);
         }
-        Ok(self.fs.merge_doc("authCodes", code, f).await?)
+        Ok(self.fs.merge_fields("authCodes", code, f, &[]).await?)
     }
 
     async fn save_access_token(&self, t: AccessToken) -> StoreResult<()> {
@@ -562,10 +564,10 @@ impl Store for FirestoreStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod revoke_family_tests {
     use super::*;
-    use crate::firestore::fake_firestore;
+    use crate::firestore::{Firestore, fake_firestore};
 
     fn rt(token: &str, replaced_by: Option<&str>) -> RefreshToken {
         RefreshToken {
@@ -725,10 +727,10 @@ mod revoke_family_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gcp"))]
 mod tests {
     use super::*;
-    use crate::firestore::fake_firestore;
+    use crate::firestore::{Firestore, fake_firestore};
 
     async fn store() -> FirestoreStore {
         store_and_fake().await.0
