@@ -133,12 +133,16 @@ switch_traffic() {  # $1=service $2=revision名: 明示したリビジョン名�
 # 検証と切替を確実に分離するため、常に --no-traffic でリビジョンを作成し、検証が
 # 通った場合にのみ switch_traffic を呼ぶ。
 
+# 台数: 常駐させない（最小 0）。同時ログイン 30 人は 1 台でさばける想定で、
+# 無料枠を超えないよう最大 3 台で止める。staging と本番で同じにする。
+SCALE_FLAGS=(--min-instances=0 --max-instances=3)
+
 deploy_image_verified() {  # $1=service $2=デプロイしたいimage参照(digest付き)
   local service="$1" expected_image="$2" suffix revision actual_image
   suffix="$(new_revision_suffix)"
   revision="${service}-${suffix}"
   gcloud run deploy "$service" --image "$expected_image" --revision-suffix "$suffix" \
-    --no-traffic --region="$REGION" --project="$PROJECT" --quiet
+    --no-traffic --region="$REGION" --project="$PROJECT" "${SCALE_FLAGS[@]}" --quiet
   actual_image="$(gcloud run revisions describe "$revision" --region="$REGION" --project="$PROJECT" \
     --format="value(spec.containers[0].image)")"
   if [[ "$actual_image" != "$expected_image" ]]; then
@@ -162,7 +166,7 @@ deploy_source_verified() {  # $1=service: ソースからビルドし、トラ�
   revision="${service}-${suffix}"
   commit_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   gcloud run deploy "$service" --source . --revision-suffix "$suffix" \
-    --no-traffic --region="$REGION" --project="$PROJECT" \
+    --no-traffic --region="$REGION" --project="$PROJECT" "${SCALE_FLAGS[@]}" \
     --update-labels="commit-sha=${commit_sha}" --quiet
   echo "$revision"
 }
