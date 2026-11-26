@@ -43,7 +43,7 @@ async fn me(
     let Some(sid) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) else {
         return Ok(None);
     };
-    let Some(s) = p.store.get_session(&sid).await else {
+    let Some(s) = p.store.get_session(&sid).await.map_err(|e| e.to_string())? else {
         return Ok(None);
     };
     let Some(email) = registration::find_email_by_account_id(fs, &s.account_id).await? else {
@@ -363,7 +363,10 @@ pub(super) async fn signin_verify(
         return internal("signin_verify: delete old session", &e.to_string());
     }
     tracing::info!(event = "account_signin", sub = %pseudonymize_sub(&account.account_id));
-    let jar = start_session(&p, jar, account.account_id, now()).await;
+    let jar = match start_session(&p, jar, account.account_id, now()).await {
+        Ok(jar) => jar,
+        Err(e) => return internal("signin_verify: start_session", &e.to_string()),
+    };
     (jar, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
@@ -462,11 +465,16 @@ pub(super) async fn add_verify(
     }
     // 確かめた後に、管理者が passkey を全部消してセッションを失効させていたら、足した 1 本も消す
     // （失効させてから消すので、消す前に足したものは消され、消した後に足したものはここで見つかる）。
-    if p.store.get_session(&me.sid).await.is_none() {
+    // session を読めなければ、失効されたかどうか分からない。足した 1 本は消し、成功とは返さない。
+    let alive = p.store.get_session(&me.sid).await;
+    if !matches!(alive, Ok(Some(_))) {
         if let Err(e) = registration::discard_credential(fs, &email, &outcome.credential_id).await {
             tracing::error!("add_verify: passkey added after revocation was not removed: {e}");
         }
-        return (StatusCode::UNAUTHORIZED, "sign-in required").into_response();
+        return match alive {
+            Err(e) => internal("add_verify: get_session", &e.to_string()),
+            _ => (StatusCode::UNAUTHORIZED, "sign-in required").into_response(),
+        };
     }
     crate::audit_log::record(
         fs,
@@ -498,37 +506,71 @@ pub(super) async fn delete_passkey(
     };
     let fs = p.docs.as_deref().expect("me_confirmed checked firestore");
     let a = &me.account;
-    match registration::list_credentials(fs, a).await {
-        Ok(creds)
-            if creds
-                .iter()
-                .any(|c| c.credential_id == req.id && held_by_recovery(a, c)) =>
-        {
-            return (StatusCode::CONFLICT, "recently recovered").into_response();
-        }
-        Ok(_) => {}
+    let creds = match registration::list_credentials(fs, a).await {
+        Ok(c) => c,
         Err(e) => return internal("delete_passkey: list_credentials", &e),
+    };
+    let Some(target) = creds.iter().find(|c| c.credential_id == req.id) else {
+        return (StatusCode::NOT_FOUND, "passkey not found").into_response();
+    };
+    if held_by_recovery(a, target) {
+        return (StatusCode::CONFLICT, "recently recovered").into_response();
+    }
+    if creds.len() == 1 {
+        return (StatusCode::CONFLICT, "last passkey").into_response();
+    }
+    // 失効してから消す。失効しきれなければ passkey は消さずに 500 を返し、もう一度押せば失効し直す
+    // （先に消すと、もう一度押しても「無い」になり、失効が二度と走らない）。
+    let c = p.store.revoke_account(&a.account_id, &me.sid).await;
+    let detail = format!(
+        "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+        req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
+    );
+    if !c.complete() {
+        crate::audit_log::record(
+            fs,
+            &a.account_id,
+            "delete_passkey",
+            &a.account_id,
+            &format!("{detail} removed=false"),
+        )
+        .await;
+        return internal("delete_passkey: revocation incomplete", &detail);
     }
     match registration::remove_credential(fs, &a.email, &req.id).await {
-        Ok(RemoveOutcome::Removed) => {
-            let c = p.store.revoke_account(&a.account_id, &me.sid).await;
+        Ok(RemoveOutcome::Removed) => {}
+        Ok(RemoveOutcome::NotFound) => {
+            return (StatusCode::NOT_FOUND, "passkey not found").into_response();
+        }
+        Ok(RemoveOutcome::LastOne) => {
+            return (StatusCode::CONFLICT, "last passkey").into_response();
+        }
+        Err(e) => {
             crate::audit_log::record(
                 fs,
                 &a.account_id,
                 "delete_passkey",
                 &a.account_id,
-                &format!(
-                    "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
-                    req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors
-                ),
+                &format!("{detail} removed=false"),
             )
             .await;
-            Json(serde_json::json!({ "ok": true })).into_response()
+            return internal("delete_passkey: remove_credential", &e);
         }
-        Ok(RemoveOutcome::NotFound) => (StatusCode::NOT_FOUND, "passkey not found").into_response(),
-        Ok(RemoveOutcome::LastOne) => (StatusCode::CONFLICT, "last passkey").into_response(),
-        Err(e) => internal("delete_passkey", &e),
     }
+    // 1 回目の失効から消すまでの間に、消す passkey でログインした session を閉じる。
+    let c = p.store.revoke_account(&a.account_id, &me.sid).await;
+    let detail = format!(
+        "{detail} removed=true after_removal: other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+        c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
+    );
+    crate::audit_log::record(fs, &a.account_id, "delete_passkey", &a.account_id, &detail).await;
+    if !c.complete() {
+        return internal(
+            "delete_passkey: revocation after removal incomplete",
+            &detail,
+        );
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -611,7 +653,8 @@ mod tests {
                     account_id: "acc-u".into(),
                     auth_time,
                 })
-                .await;
+                .await
+                .unwrap();
             sid
         }
 

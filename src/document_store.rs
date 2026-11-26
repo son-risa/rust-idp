@@ -386,6 +386,14 @@ impl FailingDocs {
         s
     }
 
+    /// 動いている保存先。`go_down` で col の集まりだけを落とす。
+    #[cfg(any(feature = "gcp", feature = "sqlite"))]
+    pub(crate) fn up_until_only(col: &'static str) -> Self {
+        let s = Self::only(col);
+        s.up.store(true, std::sync::atomic::Ordering::SeqCst);
+        s
+    }
+
     #[cfg(any(feature = "gcp", feature = "sqlite"))]
     pub(crate) fn go_down(&self) {
         self.up.store(false, std::sync::atomic::Ordering::SeqCst);

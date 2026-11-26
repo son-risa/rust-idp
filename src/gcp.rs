@@ -539,16 +539,6 @@ async fn disable_account_cmd(args: &[String]) {
             "{label}: {email} (sessions={} access_tokens={} refresh_tokens={})",
             counts.sessions, counts.access_tokens, counts.refresh_tokens
         );
-        if !counts.query_errors.is_empty() {
-            // disabled フラグ自体は既に立っているので新規ログインは止まるが、失効できたか
-            // 不明なセッション/トークンが残っている可能性がある旨を明示し、exit(1) で
-            // 「完全ではない」ことを気付けるようにする(disable自体は成立している)。
-            eprintln!(
-                "WARNING: 以下は検索自体に失敗し、失効できたか不明です（存在しない=0件、ではありません）: {:?}",
-                counts.query_errors
-            );
-            std::process::exit(1);
-        }
     };
     match account_admin::disable_account(&*fs, &store, "cli", &email).await {
         Ok(account_admin::DisableOutcome::Disabled(counts)) => report("disabled", &counts),
@@ -557,6 +547,18 @@ async fn disable_account_cmd(args: &[String]) {
         }
         Ok(account_admin::DisableOutcome::NotFound) => {
             eprintln!("disable-account: account not found: {email}");
+            std::process::exit(1);
+        }
+        Err(account_admin::DisableError::RevocationIncomplete(c)) => {
+            let unknown = if c.query_errors.is_empty() {
+                String::new()
+            } else {
+                format!("（ほかに、探せなかった種類がある: {:?}）", c.query_errors)
+            };
+            eprintln!(
+                "disable-account: 凍結は済み。失効しきれなかった session・token が {} 件ある{unknown}。もう一度実行して失効し直す",
+                c.delete_errors
+            );
             std::process::exit(1);
         }
         Err(e) => {

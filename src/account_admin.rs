@@ -18,6 +18,28 @@ use crate::{audit_log, registration};
 
 pub use crate::store::RevocationCounts;
 
+#[derive(Debug)]
+pub enum DisableError {
+    Store(String),
+    /// 凍結は済んだ（新しいログインは止まる）が、失効しきれなかった session・token がある。
+    RevocationIncomplete(RevocationCounts),
+}
+
+impl From<String> for DisableError {
+    fn from(e: String) -> Self {
+        DisableError::Store(e)
+    }
+}
+
+impl std::fmt::Display for DisableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DisableError::Store(e) => f.write_str(e),
+            DisableError::RevocationIncomplete(c) => f.write_str(&incomplete(c)),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum DisableOutcome {
     Disabled(RevocationCounts),
@@ -40,7 +62,7 @@ pub async fn disable_account(
     store: &dyn Store,
     actor: &str,
     email: &str,
-) -> Result<DisableOutcome, String> {
+) -> Result<DisableOutcome, DisableError> {
     let cred = match registration::get_account(fs, email).await? {
         Some(a) => a,
         None => return Ok(DisableOutcome::NotFound),
@@ -56,11 +78,16 @@ pub async fn disable_account(
         "disable_account",
         &cred.account_id,
         &format!(
-            "email={email} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
-            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors
+            "email={email} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors, counts.delete_errors
         ),
     )
     .await;
+    // 凍結は済んでいる（新しいログインは止まる）が、残った session・token があるかもしれない。
+    // 完了とは返さない。もう一度の実行（AlreadyDisabled）で失効し直す。
+    if !counts.complete() {
+        return Err(DisableError::RevocationIncomplete(counts));
+    }
     Ok(if already_disabled {
         DisableOutcome::AlreadyDisabled(counts)
     } else {
@@ -122,22 +149,33 @@ pub async fn delete_account(
         return Ok(DeleteOutcome::NotDisabled);
     }
     let counts = store.revoke_account(&cred.account_id, "").await;
+    let detail = format!(
+        "email={email} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+        counts.sessions,
+        counts.access_tokens,
+        counts.refresh_tokens,
+        counts.query_errors,
+        counts.delete_errors
+    );
+    // 失効しきれないまま消すと、残った session・token の持ち主を探す手掛かり（アカウント）が無くなる。
+    // 凍結したまま残し、もう一度の削除で失効し直す。
+    if !counts.complete() {
+        audit_log::record(
+            fs,
+            actor,
+            "delete_account",
+            &cred.account_id,
+            &format!("{detail} deleted=false"),
+        )
+        .await;
+        return Err(incomplete(&counts));
+    }
     registration::delete_all_credentials(fs, &cred).await?;
     fs.delete_doc("fcmTokens", &cred.account_id).await?;
     fs.delete_doc("profiles", &cred.account_id).await?;
     fs.delete_doc("accountsByUuid", &cred.account_id).await?;
     fs.delete_doc("accounts", email).await?;
-    audit_log::record(
-        fs,
-        actor,
-        "delete_account",
-        &cred.account_id,
-        &format!(
-            "email={email} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
-            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors
-        ),
-    )
-    .await;
+    audit_log::record(fs, actor, "delete_account", &cred.account_id, &detail).await;
     Ok(DeleteOutcome::Deleted(counts))
 }
 
@@ -159,22 +197,38 @@ pub async fn delete_passkeys(
     // 先に失効させる（passkey を消す途中で失敗しても、なくした端末のセッションは残さない）。
     let counts = store.revoke_account(&a.account_id, "").await;
     let removed = registration::remove_all_credentials(fs, email).await;
+    // 1 回目の失効から消すまでの間に、消す passkey でログインした session を閉じる。
+    let after = store.revoke_account(&a.account_id, "").await;
     audit_log::record(
         fs,
         actor,
         "delete_passkeys",
         &a.account_id,
         &format!(
-            "email={email} passkeys={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
+            "email={email} passkeys={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={} after_removal: sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
             match &removed {
                 Ok(n) => format!("{}", n.unwrap_or(0)),
                 Err(e) => format!("failed({e})"),
             },
-            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors
+            counts.sessions, counts.access_tokens, counts.refresh_tokens, counts.query_errors, counts.delete_errors,
+            after.sessions, after.access_tokens, after.refresh_tokens, after.query_errors, after.delete_errors
         ),
     )
     .await;
+    if !counts.complete() {
+        return Err(incomplete(&counts));
+    }
+    if !after.complete() {
+        return Err(incomplete(&after));
+    }
     removed
+}
+
+fn incomplete(c: &RevocationCounts) -> String {
+    format!(
+        "revocation incomplete: query_errors={:?} delete_errors={}",
+        c.query_errors, c.delete_errors
+    )
 }
 
 #[cfg(all(test, feature = "gcp"))]
@@ -234,14 +288,16 @@ mod tests {
                 account_id: "acc-victim".into(),
                 auth_time: 0,
             })
-            .await;
+            .await
+            .unwrap();
         store
             .save_session(Session {
                 sid: "sid-other".into(),
                 account_id: "acc-other".into(),
                 auth_time: 0,
             })
-            .await;
+            .await
+            .unwrap();
         store
             .save_access_token(AccessToken {
                 token: "at-victim".into(),
@@ -284,6 +340,7 @@ mod tests {
                 access_tokens: 1,
                 refresh_tokens: 1,
                 query_errors: vec![],
+                delete_errors: 0,
             })
         );
 
@@ -292,7 +349,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(cred.disabled);
-        assert!(store.get_session("sid-1").await.is_none());
+        assert!(store.get_session("sid-1").await.unwrap().is_none());
         assert!(store.get_access_token("at-victim").await.unwrap().is_none());
         assert!(
             store
@@ -302,7 +359,7 @@ mod tests {
                 .is_none()
         );
         // 無関係のアカウントのセッションは残る。
-        assert!(store.get_session("sid-other").await.is_some());
+        assert!(store.get_session("sid-other").await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -479,6 +536,113 @@ mod tests {
         assert_eq!(entries.len(), 1);
     }
 
+    /// 見つけた session を消せなかったら、凍結・削除・passkey の削除のどれも完了と返さず、監査ログに
+    /// 消せなかった件数を残す。削除はアカウントを消さずに止まる。やり直せば消える。
+    #[tokio::test]
+    async fn a_session_that_could_not_be_revoked_fails_the_operation() {
+        let (host, fake) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host.clone());
+        register(&fs, "v@example.com", "acc-v").await;
+        let store = fstore(&host);
+        store
+            .save_session(Session {
+                sid: "S-V".into(),
+                account_id: "acc-v".into(),
+                auth_time: 0,
+            })
+            .await
+            .unwrap();
+
+        fake.fail_once("DELETE", "sessions", Some("S-V"));
+        let e = disable_account(&fs, &store, "cli", "v@example.com")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&e, DisableError::RevocationIncomplete(c) if c.delete_errors == 1),
+            "{e}"
+        );
+        let entries = fs
+            .query_eq("auditLog", "action", "disable_account")
+            .await
+            .unwrap();
+        assert!(
+            crate::firestore::field_str(&entries[0].1, "detail")
+                .unwrap()
+                .contains(
+                    "sessions=0 access_tokens=0 refresh_tokens=0 query_errors=[] delete_errors=1"
+                ),
+            "監査ログが消せなかった件数を残さない"
+        );
+
+        fake.fail_once("DELETE", "sessions", Some("S-V"));
+        assert!(
+            delete_passkeys(&fs, &store, "cli", "v@example.com")
+                .await
+                .is_err()
+        );
+        // passkey の全削除は、消した後の 2 回目の失効で S-V を消している。削除の試験のために張り直す。
+        store
+            .save_session(Session {
+                sid: "S-V".into(),
+                account_id: "acc-v".into(),
+                auth_time: 0,
+            })
+            .await
+            .unwrap();
+        fake.fail_once("DELETE", "sessions", Some("S-V"));
+        assert!(
+            delete_account(&fs, &store, "cli", "v@example.com")
+                .await
+                .is_err()
+        );
+        assert!(
+            registration::get_account(&fs, "v@example.com")
+                .await
+                .unwrap()
+                .is_some(),
+            "失効しきれないままアカウントを消した"
+        );
+        let entries = fs
+            .query_eq("auditLog", "action", "delete_account")
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1, "止めた削除が監査ログに残らない");
+        assert!(
+            crate::firestore::field_str(&entries[0].1, "detail")
+                .unwrap()
+                .ends_with("delete_errors=1 deleted=false")
+        );
+        assert!(store.get_session("S-V").await.unwrap().is_some());
+
+        assert!(matches!(
+            delete_account(&fs, &store, "cli", "v@example.com").await,
+            Ok(DeleteOutcome::Deleted(_))
+        ));
+        assert!(store.get_session("S-V").await.unwrap().is_none());
+    }
+
+    /// passkey の全削除は、消した後にもう一度失効する。2 回目が足りなければ誤りを返す。
+    #[tokio::test]
+    async fn delete_passkeys_revokes_again_after_removing() {
+        let (host, fake) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host.clone());
+        register(&fs, "w@example.com", "acc-w").await;
+        fake.fail_after(1, "QUERY", "sessions", None);
+        let e = delete_passkeys(&fs, &fstore(&host), "cli", "w@example.com")
+            .await
+            .unwrap_err();
+        assert!(e.contains("sessions"), "{e}");
+        let entries = fs
+            .query_eq("auditLog", "action", "delete_passkeys")
+            .await
+            .unwrap();
+        let detail = crate::firestore::field_str(&entries[0].1, "detail").unwrap();
+        assert!(
+            detail.ends_with("after_removal: sessions=0 access_tokens=0 refresh_tokens=0 query_errors=[\"sessions\"] delete_errors=0"),
+            "{detail}"
+        );
+    }
+
     /// passkey の削除が途中で失敗しても、セッションとトークンは先に失効させ、監査ログも残す。
     #[tokio::test]
     async fn delete_passkeys_revokes_first_even_if_removal_fails() {
@@ -494,7 +658,8 @@ mod tests {
                 account_id: "acc-lost".into(),
                 auth_time: 0,
             })
-            .await;
+            .await
+            .unwrap();
 
         fake.fail_once("PATCH", "accounts", Some("lost@example.com"));
         assert!(
@@ -503,7 +668,7 @@ mod tests {
                 .is_err()
         );
         assert!(
-            store.get_session("S-LOST").await.is_none(),
+            store.get_session("S-LOST").await.unwrap().is_none(),
             "セッションが残った"
         );
         let entries = fs

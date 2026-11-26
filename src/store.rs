@@ -90,8 +90,9 @@ pub trait Store: Send + Sync {
     /// 既に無い（消費済み/未存在）なら false。authorize_resume で「1認証=1コード」を保証する。
     async fn consume_interaction(&self, uid: &str) -> bool;
 
-    async fn save_session(&self, s: Session);
-    async fn get_session(&self, sid: &str) -> Option<Session>;
+    async fn save_session(&self, s: Session) -> StoreResult<()>;
+    /// 無い・期限切れの session は Ok(None)。保存先が答えないときは誤り（無いとは扱わない）。
+    async fn get_session(&self, sid: &str) -> StoreResult<Option<Session>>;
     /// 無い session を消すのは成功（もう消えている）。保存先が答えない・書けないときだけ誤り。
     async fn delete_session(&self, sid: &str) -> StoreResult<()>;
 
@@ -196,6 +197,15 @@ pub struct RevocationCounts {
     pub access_tokens: usize,
     pub refresh_tokens: usize,
     pub query_errors: Vec<&'static str>,
+    /// 見つけたが消せなかった件数（種類をまたいだ合計）。
+    pub delete_errors: usize,
+}
+
+impl RevocationCounts {
+    /// 探せなかった種類も、消せなかったものも無い。
+    pub fn complete(&self) -> bool {
+        self.query_errors.is_empty() && self.delete_errors == 0
+    }
 }
 
 #[derive(Default)]
@@ -260,23 +270,24 @@ impl Store for MemoryStore {
             None => false,
         }
     }
-    async fn save_session(&self, s: Session) {
+    async fn save_session(&self, s: Session) -> StoreResult<()> {
         let exp = now_secs() + SESSION_TTL_SECS;
         self.sessions
             .lock()
             .unwrap()
             .insert(s.sid.clone(), Expiring::new(s, exp));
+        Ok(())
     }
-    async fn get_session(&self, sid: &str) -> Option<Session> {
+    async fn get_session(&self, sid: &str) -> StoreResult<Option<Session>> {
         let mut map = self.sessions.lock().unwrap();
-        match map.get(sid) {
+        Ok(match map.get(sid) {
             Some(e) if e.alive() => Some(e.value.clone()),
             Some(_) => {
                 map.remove(sid);
                 None
             }
             None => None,
-        }
+        })
     }
     async fn delete_session(&self, sid: &str) -> StoreResult<()> {
         self.sessions.lock().unwrap().remove(sid);
@@ -456,6 +467,7 @@ impl Store for MemoryStore {
                 t.account_id == account_id
             }),
             query_errors: Vec::new(),
+            delete_errors: 0,
         }
     }
 
@@ -612,7 +624,8 @@ mod tests {
             account_id: "a".into(),
             auth_time: 0,
         })
-        .await;
+        .await
+        .unwrap();
         let session_exp = s.sessions.lock().unwrap().get("S1").unwrap().expires_at;
         assert!(
             session_exp >= base + SESSION_TTL_SECS,

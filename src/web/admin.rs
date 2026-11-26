@@ -30,7 +30,16 @@ async fn check_admin(
             "[[The admin console is not available.]]",
         ))
     })?;
-    let account_id = session_account(p, jar).await.ok_or(None)?;
+    let account_id = match session_account(p, jar).await {
+        Ok(a) => a.ok_or(None)?,
+        Err(e) => {
+            return Err(Some(server_error(
+                lang,
+                "require_admin: get_session",
+                &e.to_string(),
+            )));
+        }
+    };
     match crate::admin_store::is_admin(fs, &account_id).await {
         Ok(true) => Ok(account_id),
         Ok(false) => Err(Some(text(
@@ -467,7 +476,7 @@ pub(super) async fn user_disable(
         }
     };
     if let Err(e) = crate::account_admin::disable_account(fs, &*p.store, &viewer, &email).await {
-        return server_error(Lang::from_headers(&headers), "user_disable", &e);
+        return server_error(Lang::from_headers(&headers), "user_disable", &e.to_string());
     }
     redirect(&p, &format!("/admin/users/{account_id}"))
 }
@@ -1409,7 +1418,8 @@ mod tests {
                 account_id: account_id.to_string(),
                 auth_time: 0,
             })
-            .await;
+            .await
+            .unwrap();
         CookieJar::default().add(Cookie::new(SID_COOKIE, sid))
     }
 

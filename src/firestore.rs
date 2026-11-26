@@ -908,7 +908,8 @@ pub(crate) mod fake_firestore {
         Write,
         Delete,
     }
-    type Failure = (&'static str, String, Option<String>, StatusCode);
+    /// (メソッド, col, id, 返す状態の番号, 合っても見送る残りの回数)
+    type Failure = (&'static str, String, Option<String>, StatusCode, usize);
 
     #[derive(Default)]
     pub struct FakeState {
@@ -983,14 +984,30 @@ pub(crate) mod fake_firestore {
                 col.to_string(),
                 id.map(str::to_string),
                 status,
+                0,
+            ));
+        }
+
+        /// fail_once と同じだが、合う要求を skip 回は通し、その次の 1 回だけ 503 を返す。
+        pub fn fail_after(&self, skip: usize, method: &'static str, col: &str, id: Option<&str>) {
+            self.failures.lock().unwrap().push((
+                method,
+                col.to_string(),
+                id.map(str::to_string),
+                StatusCode::SERVICE_UNAVAILABLE,
+                skip,
             ));
         }
 
         fn take_failure(&self, method: &str, col: &str, id: &str) -> Option<StatusCode> {
             let mut f = self.failures.lock().unwrap();
-            let k = f.iter().position(|(m, c, i, _)| {
+            let k = f.iter().position(|(m, c, i, _, _)| {
                 *m == method && c == col && i.as_deref().is_none_or(|i| i == id)
             })?;
+            if f[k].4 > 0 {
+                f[k].4 -= 1;
+                return None;
+            }
             Some(f.remove(k).3)
         }
     }
@@ -1194,6 +1211,10 @@ pub(crate) mod fake_firestore {
             .as_str()
             .unwrap_or("")
             .to_string();
+        // 失敗を入れるときのメソッド名は "QUERY"（id は無いので None で合わせる）。
+        if let Some(status) = st.take_failure("QUERY", &col, "") {
+            return status.into_response();
+        }
         let docs = st.docs.lock().unwrap();
 
         let mut matching: Vec<(&(String, String), &Doc)> =

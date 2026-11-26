@@ -125,12 +125,12 @@ pub(crate) async fn a_session_is_saved_read_and_deleted(s: &dyn Store) {
         account_id: "a".into(),
         auth_time: 42,
     };
-    s.save_session(session.clone()).await;
-    assert!(same(&s.get_session("S1").await.unwrap(), &session));
+    s.save_session(session.clone()).await.unwrap();
+    assert!(same(&s.get_session("S1").await.unwrap().unwrap(), &session));
     s.delete_session("S1").await.unwrap();
-    assert!(s.get_session("S1").await.is_none());
+    assert!(s.get_session("S1").await.unwrap().is_none());
     s.delete_session("S1").await.unwrap();
-    assert!(s.get_session("NOPE").await.is_none());
+    assert!(s.get_session("NOPE").await.unwrap().is_none());
 }
 
 /// 認可コードは 1 度だけ Fresh で取れ、2 度目からは Reused。再利用で失効させると、そのコードから出た AT と RT が
@@ -292,7 +292,8 @@ pub(crate) async fn revoke_account_removes_only_that_accounts_records(s: &dyn St
             account_id: account.into(),
             auth_time: 0,
         })
-        .await;
+        .await
+        .unwrap();
     }
     for (t, account) in [("AT1", "a"), ("AT2", "b")] {
         s.save_access_token(at(t, account)).await.unwrap();
@@ -311,14 +312,14 @@ pub(crate) async fn revoke_account_removes_only_that_accounts_records(s: &dyn St
         (1, 1, 1)
     );
     assert!(counts.query_errors.is_empty());
-    assert!(s.get_session("S1").await.is_none());
+    assert!(s.get_session("S1").await.unwrap().is_none());
     assert!(
-        s.get_session("S2").await.is_some(),
+        s.get_session("S2").await.unwrap().is_some(),
         "keep_sid の session が消えた"
     );
     assert!(s.get_access_token("AT1").await.unwrap().is_none());
     assert!(s.get_refresh_token("RT1").await.unwrap().is_none());
-    assert!(s.get_session("S3").await.is_some());
+    assert!(s.get_session("S3").await.unwrap().is_some());
     assert!(s.get_access_token("AT2").await.unwrap().is_some());
     assert!(s.get_refresh_token("RT2").await.unwrap().is_some());
 }

@@ -202,7 +202,17 @@ pub(super) async fn authorize(
 
     // prompt / max_age を解釈して「セッションで進む / 再ログイン / エラー」を判定。
     let session = match jar.get(SID_COOKIE).map(|c| c.value().to_string()) {
-        Some(sid) => p.store.get_session(&sid).await,
+        Some(sid) => match p.store.get_session(&sid).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("authorize: get_session: {e}");
+                return authorize_error(
+                    &p,
+                    &req,
+                    OAuthError::ServerError("session store unavailable".into()),
+                );
+            }
+        },
         None => None,
     };
     match crate::interaction_policy::decide(&req.params, session.as_ref(), now()) {
@@ -869,15 +879,6 @@ async fn sign_out(
 
     // 仕様第 2 節: hint が無い・確かめに失敗した・今のセッションの利用者の ID Token でない、のどれかなら、
     // ログアウトしてよいか利用者に確かめる。他のサイトから遷移させるだけでログアウトさせられないように。
-    let sid = jar.get(SID_COOKIE).map(|c| c.value().to_string());
-    let session = match &sid {
-        Some(s) => p.store.get_session(s).await,
-        None => None,
-    };
-    let needs_confirm = !confirmed
-        && session
-            .as_ref()
-            .is_some_and(|s| unregistered || hint.as_ref().is_none_or(|h| h.sub != s.account_id));
     // 確かめの画面と、消せなかったときのもう一度の form が、RP への戻り先を引き継ぐ。
     let carried = match (&return_to, &client_id) {
         (Some(uri), Some(id)) => {
@@ -890,6 +891,19 @@ async fn sign_out(
         _ => String::new(),
     };
     let action = admin::esc(&p.path("/end-session"));
+    let sid = jar.get(SID_COOKIE).map(|c| c.value().to_string());
+    // 読めないときを「session が無い」と扱うと、確かめずに RP へ戻してしまう。
+    let session = match &sid {
+        Some(s) => match p.store.get_session(s).await {
+            Ok(s) => s,
+            Err(e) => return could_not_sign_out(lang, &action, &carried, "get_session", &e),
+        },
+        None => None,
+    };
+    let needs_confirm = !confirmed
+        && session
+            .as_ref()
+            .is_some_and(|s| unregistered || hint.as_ref().is_none_or(|h| h.sub != s.account_id));
     if needs_confirm {
         let html = format!(
             r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
@@ -911,23 +925,7 @@ button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f
     if let Some(sid) = &sid
         && let Err(e) = p.store.delete_session(sid).await
     {
-        tracing::error!("end_session: delete_session: {e}");
-        let html = format!(
-            r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
-<style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
-button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f51b5;color:#fff;cursor:pointer}}</style></head><body>
-<h1 style="font-size:1.3rem;font-weight:500">[[Could not sign out. Please try again.]]</h1>
-<form method="post" action="{action}"><input type="hidden" name="confirm" value="1">__CARRIED__
-<button type="submit">[[Sign out]]</button></form></body></html>"##
-        );
-        let html = localize(&html, lang).replacen("__CARRIED__", &carried, 1);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CACHE_CONTROL, "no-store")],
-            Html(html),
-        )
-            .into_response();
+        return could_not_sign_out(lang, &action, &carried, "delete_session", &e);
     }
     let jar = jar.remove(
         Cookie::build((SID_COOKIE, ""))
@@ -956,6 +954,33 @@ a{{color:#3f51b5}}</style></head><body>
 {notice}<p><a href="{home}">[[Go to sign in]]</a></p></body></html>"##
     );
     (jar, Html(localize(&html, lang))).into_response()
+}
+
+/// session を読めない・消せないときの 500。cookie は残し、確かめの画面と同じ form でもう一度押せるようにする。
+fn could_not_sign_out(
+    lang: Lang,
+    action: &str,
+    carried: &str,
+    context: &str,
+    e: &crate::store::StoreError,
+) -> Response {
+    tracing::error!("end_session: {context}: {e}");
+    let html = format!(
+        r##"<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>[[Sign out]]</title>
+<style>body{{font-family:Roboto,-apple-system,sans-serif;max-width:360px;margin:0 auto;padding:80px 24px;text-align:center;color:#1a1a1a}}
+button{{font:inherit;padding:10px 24px;border:0;border-radius:4px;background:#3f51b5;color:#fff;cursor:pointer}}</style></head><body>
+<h1 style="font-size:1.3rem;font-weight:500">[[Could not sign out. Please try again.]]</h1>
+<form method="post" action="{action}"><input type="hidden" name="confirm" value="1">__CARRIED__
+<button type="submit">[[Sign out]]</button></form></body></html>"##
+    );
+    let html = localize(&html, lang).replacen("__CARRIED__", carried, 1);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        [(header::CACHE_CONTROL, "no-store")],
+        Html(html),
+    )
+        .into_response()
 }
 
 fn hidden(name: &str, value: &str) -> String {
@@ -1578,10 +1603,11 @@ mod tests {
                         account_id: "acc-1".into(),
                         auth_time: 0,
                     })
-                    .await;
+                    .await
+                    .unwrap();
             }
             async fn still_signed_in(&self, sid: &str) -> bool {
-                self.store.get_session(sid).await.is_some()
+                self.store.get_session(sid).await.unwrap().is_some()
             }
             async fn send(
                 &self,
@@ -1962,7 +1988,8 @@ mod tests {
                     account_id: "acc-2".into(),
                     auth_time: 0,
                 })
-                .await;
+                .await
+                .unwrap();
             let html = asks_first(
                 w.send(
                     "GET",
@@ -1978,7 +2005,7 @@ mod tests {
             )
             .await;
             assert!(html.contains(r#"name="client_id" value="dcr-x""#), "{html}");
-            assert!(w.store.get_session("s-2").await.is_some());
+            assert!(w.store.get_session("s-2").await.unwrap().is_some());
         }
     }
 

@@ -152,15 +152,16 @@ async fn finalize_login(
     jar: CookieJar,
     uid: &str,
     account_sub: String,
-) -> Result<(CookieJar, String), &'static str> {
+) -> Result<(CookieJar, String), (StatusCode, &'static str)> {
+    const BAD: StatusCode = StatusCode::BAD_REQUEST;
     let interaction = p
         .store
         .get_interaction(uid)
         .await
-        .ok_or("interaction not found")?;
+        .ok_or((BAD, "interaction not found"))?;
     if !started_in_this_browser(&jar, &interaction) {
         tracing::warn!(event = "login_from_another_browser");
-        return Err("started in another browser");
+        return Err((BAD, "started in another browser"));
     }
     let auth_time = now();
     if !p
@@ -168,10 +169,15 @@ async fn finalize_login(
         .complete_interaction(uid, &account_sub, auth_time)
         .await
     {
-        return Err("interaction not found");
+        return Err((BAD, "interaction not found"));
     }
     tracing::info!(event = "login_success", sub = %super::pseudonymize_sub(&account_sub));
-    let jar = start_session(p, jar, account_sub, auth_time).await;
+    let jar = start_session(p, jar, account_sub, auth_time)
+        .await
+        .map_err(|e| {
+            tracing::error!("finalize_login: start_session: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "error")
+        })?;
     Ok((jar, p.path(&format!("/authorize/resume?uid={uid}"))))
 }
 
@@ -231,7 +237,7 @@ pub(super) async fn login_passkey_verify(
     match finalize_login(&p, jar, &uid, account.sub).await {
         Ok((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
         // "interaction not found" のとき、画面は期限切れと見て読み直す（login_form の JS）。
-        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -465,7 +471,7 @@ mod tests {
         assert_ne!(form_of(&p, jar.clone()).await.0, StatusCode::OK);
         assert_eq!(
             finalize_login(&p, jar, "U1", "acct".into()).await.err(),
-            Some("started in another browser")
+            Some((StatusCode::BAD_REQUEST, "started in another browser"))
         );
     }
 
@@ -557,7 +563,7 @@ mod tests {
         for other in [CookieJar::default(), forged] {
             assert_eq!(
                 finalize_login(&p, other, "U1", "acct".into()).await.err(),
-                Some("started in another browser")
+                Some((StatusCode::BAD_REQUEST, "started in another browser"))
             );
         }
         assert!(

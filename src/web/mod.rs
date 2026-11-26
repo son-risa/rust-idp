@@ -6,6 +6,7 @@ use crate::context::{AddressedRequest, RawAuthRequest};
 use crate::error::OAuthError;
 use crate::model::{AuthParams, AuthorizationCode, Interaction, Session};
 use crate::provider::Provider;
+use crate::store::StoreResult;
 use axum::extract::{Form, Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -119,17 +120,24 @@ fn requested_client_id(i: &crate::model::Interaction) -> String {
 /// このブラウザが別のアカウントでログイン中なら、そのメールアドレス。
 /// メールのリンクで passkey を作ると、このブラウザのセッションはリンクのアカウントに替わる。
 /// 攻撃者が自分のアカウントのリンクを踏ませると、被害者は気づかずに攻撃者として RP に入る（ログイン CSRF）。
-async fn signed_in_as_other(p: &Provider, jar: &CookieJar, target_email: &str) -> Option<String> {
-    let fs = p.docs.as_deref()?;
-    let session = p.store.get_session(jar.get(SID_COOKIE)?.value()).await?;
-    let email = match crate::registration::find_email_by_account_id(fs, &session.account_id).await {
-        Ok(e) => e?,
-        Err(e) => {
-            tracing::warn!("signed_in_as_other: {e}");
-            return None;
-        }
+/// session やそのメールアドレスを読めないときは誤り（ログイン中かどうか分からないまま、確認を出さずに進めない）。
+async fn signed_in_as_other(
+    p: &Provider,
+    jar: &CookieJar,
+    target_email: &str,
+) -> StoreResult<Option<String>> {
+    let (Some(fs), Some(c)) = (p.docs.as_deref(), jar.get(SID_COOKIE)) else {
+        return Ok(None);
     };
-    (!email.eq_ignore_ascii_case(target_email)).then_some(email)
+    let Some(session) = p.store.get_session(c.value()).await? else {
+        return Ok(None);
+    };
+    let Some(email) =
+        crate::registration::find_email_by_account_id(fs, &session.account_id).await?
+    else {
+        return Ok(None);
+    };
+    Ok((!email.eq_ignore_ascii_case(target_email)).then_some(email))
 }
 
 /// signed_in_as_other のときに、passkey を作る画面（id="main"）の前に出す確認。
@@ -231,7 +239,7 @@ async fn start_session(
     jar: CookieJar,
     account_id: String,
     auth_time: u64,
-) -> CookieJar {
+) -> StoreResult<CookieJar> {
     let sid = uuid::Uuid::new_v4().to_string();
     p.store
         .save_session(Session {
@@ -239,22 +247,24 @@ async fn start_session(
             account_id,
             auth_time,
         })
-        .await;
+        .await?;
     let cookie = Cookie::build((SID_COOKIE, sid))
         .path("/")
         .http_only(true)
         .secure(true)
         .same_site(SameSite::Lax)
         .build();
-    jar.add(cookie)
+    Ok(jar.add(cookie))
 }
 
 /// sid cookie からログイン済み account_id を引く（SSO セッション）。
 /// OAuth の access token 認証（authenticate_token）とは別系統: ブラウザの画面系
 /// エンドポイント（CIBA 承認画面・管理画面）が使う。
-async fn session_account(p: &Provider, jar: &CookieJar) -> Option<String> {
-    let sid = jar.get(SID_COOKIE)?.value().to_string();
-    p.store.get_session(&sid).await.map(|s| s.account_id)
+async fn session_account(p: &Provider, jar: &CookieJar) -> StoreResult<Option<String>> {
+    let Some(c) = jar.get(SID_COOKIE) else {
+        return Ok(None);
+    };
+    Ok(p.store.get_session(c.value()).await?.map(|s| s.account_id))
 }
 
 /// FIDO2 Conformance 用の /fido/* エンドポイントを公開するか。テスト専用。

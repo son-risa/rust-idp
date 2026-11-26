@@ -228,7 +228,8 @@ async fn login_as(p: &Provider, account_id: &str) -> CookieJar {
             account_id: account_id.to_string(),
             auth_time: 0,
         })
-        .await;
+        .await
+        .unwrap();
     CookieJar::default().add(Cookie::new(SID_COOKIE, sid))
 }
 
