@@ -79,7 +79,7 @@ Cloud Run's first 2 million requests each month are free for each billing accoun
 
 rust-idp sets an expiry on short-lived records, such as sessions and authorization codes, and Firestore's TTL deletes them. Google's [TTL page](https://cloud.google.com/firestore/docs/ttl) says: "TTL delete operations count towards your document delete costs." It also says: "Data is typically deleted within 24 hours after its expiration date."
 
-An estimate for 30 people: if each person signs in 10 times a day and, to be generous, every document written is later deleted by TTL, that is about 100,000 TTL deletes a month, or about USD 0.013 (about 2 yen at 150 yen to the dollar). As an observed example, on the first day TTL was turned on in one deployment, it deleted 716 documents, across production and staging together: the expired records that had built up before.
+An estimate for 30 people: if each person signs in 10 times a day and, to be generous, every document written is later deleted by TTL, that is about 100,000 TTL deletes a month, or about USD 0.013 (about 2 yen at 150 yen to the dollar). As an observed example, one production deployment had about 2,000 TTL deletes over 30 days, from a handful to several hundred a day, which comes to about USD 0.0003 (Cloud Monitoring metric `firestore.googleapis.com/document/ttl_deletion_count`, checked on 2026-11-26).
 
 PITR keeps 7 days of history. At rust-idp's scale the stored data is very small, so the PITR storage charge is very small too.
 
@@ -91,6 +91,26 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 ```
 
 **If you want to be told about charges**, set a [budget and budget alerts](https://cloud.google.com/billing/docs/how-to/budgets) in Cloud Billing. A budget sends a notice when spending reaches the amounts you set. It does not stop the charges by itself.
+
+### TTL policies {#ttl}
+
+rust-idp writes an expiry time on short-lived records, but on Firestore it does not delete them itself. You set the TTL policies yourself. Without them, expired records are never deleted and stay in the database. They are no longer used, but they keep taking up storage.
+
+Set a policy on each of these collections and fields:
+
+| Field | Collections |
+|---|---|
+| `expiresAt` | `accessTokens`, `accountLocks`, `authCodes`, `cibaRequests`, `emailChallenges`, `fidoChallenges`, `interactions`, `nonces`, `parRequests`, `refreshFamilyRevocations`, `refreshTokens`, `sessions`, `webauthnChallenges` |
+| `expireAt` | `cibaHistory`, `rateLimits` |
+
+For example, for `sessions` in the `(default)` database:
+
+```sh
+gcloud firestore fields ttls update expiresAt \
+  --collection-group=sessions --enable-ttl --database='(default)'
+```
+
+Run it once for each row and collection above. `gcloud firestore fields ttls list --database='(default)'` shows the policies you have.
 
 ## Run it locally
 

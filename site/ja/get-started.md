@@ -79,7 +79,7 @@ Cloud Run は、請求先アカウントごとに、毎月はじめの 200 万�
 
 rust-idp は、セッションや認可コードのような短命の記録に期限を付け、Firestore の TTL に消させる。Google の [TTL の頁](https://cloud.google.com/firestore/docs/ttl) には "TTL delete operations count towards your document delete costs."（TTL の削除は文書の削除の費用に数える）とあり、"Data is typically deleted within 24 hours after its expiration date."（データはふつう期限から 24 時間以内に消える）ともある。
 
-30 人での目安: 1 人が 1 日 10 回ログインし、書いた文書がすべて後で TTL で消えると多めに置くと、TTL の削除は月におよそ 10 万件、費用はおよそ 0.013 USD（1 USD = 150 円で約 2 円）。実際の例では、ある環境で TTL を有効にした初日に、本番と staging の合計で 716 件が消えた。それまでに溜まっていた、期限切れの記録の分である。
+30 人での目安: 1 人が 1 日 10 回ログインし、書いた文書がすべて後で TTL で消えると多めに置くと、TTL の削除は月におよそ 10 万件、費用はおよそ 0.013 USD（1 USD = 150 円で約 2 円）。実際の例では、ある本番の環境で、30 日間の TTL の削除はおよそ 2,000 件、1 日あたり数件から数百件で、費用はおよそ 0.0003 USD だった（Cloud Monitoring の `firestore.googleapis.com/document/ttl_deletion_count`、2026-11-26 に確かめた）。
 
 PITR は 7 日分の履歴を持つ。rust-idp の規模では保存するデータがごく小さいので、PITR の保存の費用もごく小さい。
 
@@ -91,6 +91,26 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
 ```
 
 **費用が出たら知らせてほしいなら**、Cloud Billing の [予算と予算アラート](https://cloud.google.com/billing/docs/how-to/budgets) を置くとよい。決めた額に達すると知らせが来る。ただし、予算だけでは課金は止まらない。
+
+### TTL の方針 {#ttl}
+
+rust-idp は短命の記録に期限の時刻を書くが、Firestore の上では自分では消さない。TTL の方針は運用者が自分で付ける。付けないと、期限の過ぎた記録は消えずにデータベースに残る。もう使われないが、保存の量は食い続ける。
+
+次の集まりと field に方針を付ける:
+
+| field | 集まり |
+|---|---|
+| `expiresAt` | `accessTokens`・`accountLocks`・`authCodes`・`cibaRequests`・`emailChallenges`・`fidoChallenges`・`interactions`・`nonces`・`parRequests`・`refreshFamilyRevocations`・`refreshTokens`・`sessions`・`webauthnChallenges` |
+| `expireAt` | `cibaHistory`・`rateLimits` |
+
+たとえば `(default)` のデータベースの `sessions` なら:
+
+```sh
+gcloud firestore fields ttls update expiresAt \
+  --collection-group=sessions --enable-ttl --database='(default)'
+```
+
+上の表の集まりごとに 1 回ずつ流す。付いている方針は `gcloud firestore fields ttls list --database='(default)'` で見られる。
 
 ## 手元で動かす
 
