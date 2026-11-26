@@ -192,21 +192,44 @@ mod tests {
     }
 
     /// 同じ key に同時に来ても、通るのは上限の数だけ（前提条件つきの書き込みで 1 ずつ足す）。
-    #[tokio::test]
-    async fn concurrent_hits_never_pass_more_than_the_limit() {
-        let docs = std::sync::Arc::new(MemoryDocumentStore::default());
+    async fn concurrent_hits_never_pass_more_than_the_limit(
+        docs: std::sync::Arc<dyn DocumentStore>,
+    ) {
         let rl = std::sync::Arc::new(RateLimiter::new("t", Duration::from_secs(60), 3));
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(20));
         let tasks: Vec<_> = (0..20)
             .map(|_| {
-                let (docs, rl) = (docs.clone(), rl.clone());
-                tokio::spawn(async move { rl.check_and_record(&*docs, "s", "k").await.unwrap() })
+                let (docs, rl, start) = (docs.clone(), rl.clone(), start.clone());
+                tokio::spawn(async move {
+                    start.wait().await;
+                    rl.check_and_record(&*docs, "s", "k").await.unwrap()
+                })
             })
             .collect();
         let mut passed = 0;
         for t in tasks {
             passed += t.await.unwrap() as usize;
         }
-        assert!(passed <= 3, "{passed} 回通った");
+        assert!((1..=3).contains(&passed), "{passed} 回通った");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_hits_in_memory_never_pass_more_than_the_limit() {
+        concurrent_hits_never_pass_more_than_the_limit(std::sync::Arc::new(
+            MemoryDocumentStore::default(),
+        ))
+        .await;
+    }
+
+    /// 読みと書きの間で await が挟まる保存先（fake Firestore）で、競り合いを起こす。
+    #[cfg(feature = "gcp")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_hits_in_firestore_never_pass_more_than_the_limit() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        concurrent_hits_never_pass_more_than_the_limit(std::sync::Arc::new(
+            crate::firestore::Firestore::new_for_test("proj", host),
+        ))
+        .await;
     }
 
     #[tokio::test]
