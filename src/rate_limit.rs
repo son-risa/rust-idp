@@ -234,7 +234,7 @@ mod tests {
     async fn a_failing_store_lets_nothing_through() {
         let rl = RateLimiter::new("t", Duration::from_secs(60), 5);
         assert!(
-            rl.check_and_record(&crate::document_store::FailingDocs, "s", "k")
+            rl.check_and_record(&crate::document_store::FailingDocs::all(), "s", "k")
                 .await
                 .is_err()
         );

@@ -593,10 +593,8 @@ async fn a_sign_in_survives_instances_being_replaced() {
 
 /* ===== e. 保存先が落ちたら通さない ===== */
 
-/// 全ての読み書きが誤りになる保存先の台。
-fn instance_on_a_failing_store() -> Arc<Provider> {
-    let docs: Arc<dyn crate::document_store::DocumentStore> =
-        Arc::new(crate::document_store::FailingDocs);
+/// `docs` の上の台。Store・CibaStore も、gcp・sqlite の配線と同じく docs の上に置く（Memory の配線では docs だけ）。
+fn instance_on(docs: Arc<crate::document_store::FailingDocs>) -> Arc<Provider> {
     let p = Provider::new("http://localhost:8099").with_document_store(docs.clone());
     #[cfg(any(feature = "gcp", feature = "sqlite"))]
     let p = p
@@ -607,35 +605,52 @@ fn instance_on_a_failing_store() -> Arc<Provider> {
     with_test_clients(p)
 }
 
-/// 数えられないときは、登録・復旧のメールも CIBA の要求も通さない。
+/// 数を置く集まりだけが落ちたら、登録のメールも CIBA の要求も通さない（ほかの読み書きは通る）。
 #[tokio::test]
-async fn rate_limited_paths_refuse_when_the_store_is_down() {
-    let p = instance_on_a_failing_store();
+async fn rate_limited_paths_refuse_when_the_counts_cannot_be_read() {
+    let docs = Arc::new(crate::document_store::FailingDocs::only(
+        crate::rate_limit::COLLECTION,
+    ));
+    let p = instance_on(docs);
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
     let r = register::register_email_challenge(
         State(p.clone()),
         from_ip("192.0.2.1"),
-        Json(serde_json::from_value(json!({ "email": "a@example.com" })).unwrap()),
+        Json(serde_json::from_value(json!({ "email": "new@example.com" })).unwrap()),
     )
     .await;
-    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        r.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "数えずに送った"
+    );
     let r = ciba::backchannel_auth(
         State(p.clone()),
         HeaderMap::new(),
         Form(form(&[
             ("client_id", "test-ciba-rp"),
-            ("login_hint", "a@example.com"),
+            ("login_hint", &email),
             ("scope", "openid"),
         ])),
     )
     .await;
-    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        r.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "数えずに要求を作った"
+    );
 }
 
-/// 保存先が落ちたら、コード・refresh token・CIBA の引き換えは成功を返さず、session と token は無いものとして扱う。
+/// 保存先が落ちたら、在るコード・refresh token・承認済みの CIBA も引き換えず、session・interaction・
+/// access token は無いものとして扱う。
 #[cfg(any(feature = "gcp", feature = "sqlite"))]
 #[tokio::test]
 async fn single_use_and_session_reads_refuse_when_the_store_is_down() {
-    let p = instance_on_a_failing_store();
+    let docs = Arc::new(crate::document_store::FailingDocs::up());
+    let p = instance_on(docs.clone());
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (_, _, account_id) = register_test_account(&p, &email).await;
     let c = Client {
         grant_types: vec![
             "authorization_code".into(),
@@ -644,6 +659,39 @@ async fn single_use_and_session_reads_refuse_when_the_store_is_down() {
         ],
         ..p.clients["rp-entry"].clone()
     };
+    p.store
+        .save_code(AuthorizationCode {
+            code: "C1".into(),
+            client_id: c.client_id.clone(),
+            account_id: account_id.clone(),
+            redirect_uri: CB.into(),
+            scope: "openid".into(),
+            nonce: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            auth_time: now(),
+            acr: None,
+            dpop_jkt: None,
+            resource: None,
+            expires_at: now() + 60,
+        })
+        .await
+        .unwrap();
+    let (at, rt) = issue_tokens(&p, &account_id).await;
+    let ciba_id = p
+        .ciba
+        .create(&c.client_id, &account_id, "openid", "", None)
+        .await
+        .unwrap();
+    p.ciba
+        .transition_if_pending(&ciba_id.0, CibaStatus::Approved)
+        .await
+        .unwrap();
+    let jar = session_jar(&p, &account_id, now()).await;
+    let sid = jar.get(SID_COOKIE).unwrap().value().to_string();
+    let (uid, _) = sign_in_started_here(&p, &c.client_id).await;
+
+    docs.go_down();
     let code = form(&[("code", "C1"), ("redirect_uri", CB)]);
     assert!(
         AuthorizationCodeGrant
@@ -651,15 +699,15 @@ async fn single_use_and_session_reads_refuse_when_the_store_is_down() {
             .await
             .is_err()
     );
-    let rt = form(&[("refresh_token", "RT1")]);
+    let rt = form(&[("refresh_token", &rt)]);
     assert!(RefreshTokenGrant.handle(&p, &c, &rt, None).await.is_err());
-    let ciba = form(&[("auth_req_id", "R1")]);
+    let ciba = form(&[("auth_req_id", &ciba_id.0)]);
     assert!(CibaGrant.handle(&p, &c, &ciba, None).await.is_err());
-    assert!(p.store.get_session("S1").await.is_none());
-    assert!(p.store.get_interaction("U1").await.is_none());
-    assert!(!p.store.consume_interaction("U1").await);
+    assert!(p.store.get_session(&sid).await.is_none());
+    assert!(p.store.get_interaction(&uid).await.is_none());
+    assert!(!p.store.consume_interaction(&uid).await);
     assert_ne!(
-        oidc::userinfo_get(State(p.clone()), bearer("AT1"))
+        oidc::userinfo_get(State(p.clone()), bearer(&at))
             .await
             .status(),
         StatusCode::OK

@@ -338,69 +338,153 @@ impl DocumentStore for MemoryDocumentStore {
     }
 }
 
-/// どの操作にも誤りを返す保存先。保存先が落ちたときに通さないことの試験に使う。
+/// `only` の集まり（None なら全て）への操作に誤りを返し、ほかはメモリに置く保存先。
+/// 保存先が落ちたときに通さないことの試験に使う。
 #[cfg(test)]
-pub(crate) struct FailingDocs;
+#[derive(Default)]
+pub(crate) struct FailingDocs {
+    only: Option<&'static str>,
+    /// 立てた後に落とす試験のため。all・only は落ちた状態で作る。
+    up: std::sync::atomic::AtomicBool,
+    inner: MemoryDocumentStore,
+}
+
+#[cfg(test)]
+impl FailingDocs {
+    pub(crate) fn all() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn only(col: &'static str) -> Self {
+        Self {
+            only: Some(col),
+            ..Self::default()
+        }
+    }
+
+    /// 動いている保存先。`go_down` で全ての集まりを落とす。
+    pub(crate) fn up() -> Self {
+        let s = Self::default();
+        s.up.store(true, std::sync::atomic::Ordering::SeqCst);
+        s
+    }
+
+    pub(crate) fn go_down(&self) {
+        self.up.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn check(&self, col: &str) -> Result<(), String> {
+        if self.up.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        match self.only {
+            Some(c) if c != col => Ok(()),
+            _ => Err(format!("{col}: down")),
+        }
+    }
+}
 
 #[cfg(test)]
 #[async_trait]
 impl DocumentStore for FailingDocs {
-    async fn set_doc(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
-        Err("down".into())
+    async fn set_doc(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.set_doc(col, id, fields).await
     }
-    async fn update_field(&self, _: &str, _: &str, _: &str, _: Value) -> Result<(), String> {
-        Err("down".into())
+    async fn update_field(
+        &self,
+        col: &str,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.update_field(col, id, field, value).await
     }
-    async fn update_fields(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
-        Err("down".into())
+    async fn update_fields(&self, col: &str, id: &str, fields: Value) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.update_fields(col, id, fields).await
     }
-    async fn merge_fields(&self, _: &str, _: &str, _: Value, _: &[String]) -> Result<(), String> {
-        Err("down".into())
+    async fn merge_fields(
+        &self,
+        col: &str,
+        id: &str,
+        fields: Value,
+        remove: &[String],
+    ) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.merge_fields(col, id, fields, remove).await
     }
-    async fn get_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
-        Err("down".into())
+    async fn get_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        self.check(col)?;
+        self.inner.get_doc(col, id).await
     }
     async fn get_doc_with_update_time(
         &self,
-        _: &str,
-        _: &str,
+        col: &str,
+        id: &str,
     ) -> Result<Option<(Value, String)>, String> {
-        Err("down".into())
+        self.check(col)?;
+        self.inner.get_doc_with_update_time(col, id).await
     }
     async fn set_doc_if_unchanged(
         &self,
-        _: &str,
-        _: &str,
-        _: Value,
-        _: &str,
+        col: &str,
+        id: &str,
+        fields: Value,
+        update_time: &str,
     ) -> Result<bool, String> {
-        Err("down".into())
+        self.check(col)?;
+        self.inner
+            .set_doc_if_unchanged(col, id, fields, update_time)
+            .await
     }
-    async fn create_if_absent(&self, _: &str, _: &str, _: Value) -> Result<bool, String> {
-        Err("down".into())
+    async fn create_if_absent(&self, col: &str, id: &str, fields: Value) -> Result<bool, String> {
+        self.check(col)?;
+        self.inner.create_if_absent(col, id, fields).await
     }
-    async fn delete_doc_if_unchanged(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
-        Err("down".into())
+    async fn delete_doc_if_unchanged(
+        &self,
+        col: &str,
+        id: &str,
+        update_time: &str,
+    ) -> Result<bool, String> {
+        self.check(col)?;
+        self.inner
+            .delete_doc_if_unchanged(col, id, update_time)
+            .await
     }
-    async fn take_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
-        Err("down".into())
+    async fn take_doc(&self, col: &str, id: &str) -> Result<Option<Value>, String> {
+        self.check(col)?;
+        self.inner.take_doc(col, id).await
     }
-    async fn query_eq(&self, _: &str, _: &str, _: &str) -> Result<Vec<(String, Value)>, String> {
-        Err("down".into())
+    async fn query_eq(
+        &self,
+        col: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<(String, Value)>, String> {
+        self.check(col)?;
+        self.inner.query_eq(col, field, value).await
     }
     async fn list_recent_ordered(
         &self,
-        _: &str,
-        _: &str,
-        _: u32,
+        col: &str,
+        order_field: &str,
+        limit: u32,
     ) -> Result<Vec<(String, Value)>, String> {
-        Err("down".into())
+        self.check(col)?;
+        self.inner
+            .list_recent_ordered(col, order_field, limit)
+            .await
     }
-    async fn list_collection(&self, _: &str) -> Result<Vec<(String, Value, String)>, String> {
-        Err("down".into())
+    async fn list_collection(&self, col: &str) -> Result<Vec<(String, Value, String)>, String> {
+        self.check(col)?;
+        self.inner.list_collection(col).await
     }
-    async fn delete_doc(&self, _: &str, _: &str) -> Result<(), String> {
-        Err("down".into())
+    async fn delete_doc(&self, col: &str, id: &str) -> Result<(), String> {
+        self.check(col)?;
+        self.inner.delete_doc(col, id).await
     }
 }
 
