@@ -53,6 +53,45 @@ On Cloud Run, the binary refuses to start if it cannot load both signing keys. A
 
 Map your custom domain directly to the Cloud Run service. No load balancer is needed.
 
+### What it costs {#costs}
+
+For a small organization, running rust-idp this way costs almost nothing, but it is not entirely free.
+
+**You must enable billing.** The Google Cloud project needs a billing account. Cloud Run does not run without one, and Firestore's TTL (deleting expired documents) does not work without one.
+
+**What fits in the free tier.** Firestore has a daily free quota per project. Within it, these cost nothing:
+
+| Firestore (Tokyo, `asia-northeast1`) | Free each day | Price above the free quota |
+|---|---|---|
+| Document reads | 50,000 | USD 0.38 per million |
+| Document writes | 20,000 | USD 1.15 per million |
+| Document deletes | 20,000 | USD 0.13 per million |
+| Stored data | 1 GiB | USD 0.115 per GiB per month |
+
+Cloud Run's first 2 million requests each month are free for each billing account. For the free amounts of CPU and memory, see the [Cloud Run pricing page](https://cloud.google.com/run/pricing). rust-idp runs with a minimum of 0 instances, so nothing runs while nobody signs in.
+
+**What has no free tier.** These are charged from the first unit, so a deployment that otherwise stays in the free tier still gets a small bill:
+
+| Firestore (Tokyo, `asia-northeast1`) | Price |
+|---|---|
+| TTL deletes (documents deleted by a TTL policy after they expire) | USD 0.13 per million |
+| Point-in-time recovery (PITR) storage | USD 0.115 per GiB per month |
+
+rust-idp sets an expiry on short-lived records, such as sessions and authorization codes, and Firestore's TTL deletes them. Google's [TTL page](https://cloud.google.com/firestore/docs/ttl) says: "TTL delete operations count towards your document delete costs." It also says: "Data is typically deleted within 24 hours after its expiration date."
+
+An estimate for 30 people: if each person signs in 10 times a day and, to be generous, every document written is later deleted by TTL, that is about 100,000 TTL deletes a month, or about USD 0.013 (about 2 yen at 150 yen to the dollar). As an observed example, on the first day TTL was turned on in one deployment, it deleted 716 documents, across production and staging together: the expired records that had built up before.
+
+PITR keeps 7 days of history. At rust-idp's scale the stored data is very small, so the PITR storage charge is very small too.
+
+**Prices can change.** The prices above are from Google's price list, checked on 2026-11-26 (Cloud Billing Catalog API, Firestore Standard edition, Tokyo). Check the current prices on the [Firestore pricing page](https://cloud.google.com/firestore/pricing) and the [Cloud Run pricing page](https://cloud.google.com/run/pricing). To check them yourself from the catalog:
+
+```sh
+curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  'https://cloudbilling.googleapis.com/v1/services/EE2C-7FAC-5E08/skus?pageSize=5000&currencyCode=USD'
+```
+
+**If you want to be told about charges**, set a [budget and budget alerts](https://cloud.google.com/billing/docs/how-to/budgets) in Cloud Billing. A budget sends a notice when spending reaches the amounts you set. It does not stop the charges by itself.
+
 ## Run it locally
 
 ```sh

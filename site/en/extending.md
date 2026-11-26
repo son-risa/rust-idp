@@ -16,7 +16,7 @@ There are three ways to use rust-idp. Each one is meant to have its own extensio
 
 | Type | What rust-idp holds | Status |
 |---|---|---|
-| A. Start right away on the free tier of Cloud Run and Firestore | The users and their sign-in credentials, such as passkeys | Available today. A small organization that one machine can serve can use SQLite instead (Example 1) |
+| A. Start right away on Cloud Run and Firestore, at almost no cost within their free tiers. Billing must be enabled, and a few charges have no free tier ([costs](get-started.md#costs)) | The users and their sign-in credentials, such as passkeys | Available today. A small organization that one machine can serve can use SQLite instead (Example 1) |
 | B. Run next to your own system and use its existing sign-in | Only the tokens. Your system shows the sign-in page and checks who the user is | Planned. Not available yet |
 | C. Keep the data in an RDB (PostgreSQL) and read an existing user table | Only the sign-in credentials. The users are read from the existing table | Planned. Not available yet. PostgreSQL waits until someone needs it |
 
