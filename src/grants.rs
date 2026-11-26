@@ -1387,10 +1387,10 @@ mod tests {
                 .complete_interaction(uid, account_id, auth_time)
                 .await
         }
-        async fn save_session(&self, s: crate::model::Session) {
+        async fn save_session(&self, s: crate::model::Session) -> StoreResult<()> {
             self.inner.save_session(s).await
         }
-        async fn get_session(&self, sid: &str) -> Option<crate::model::Session> {
+        async fn get_session(&self, sid: &str) -> StoreResult<Option<crate::model::Session>> {
             self.inner.get_session(sid).await
         }
         async fn revoke_account(

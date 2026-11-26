@@ -169,7 +169,12 @@ async fn finalize_login(
         return Err("interaction not found");
     }
     tracing::info!(event = "login_success", sub = %super::pseudonymize_sub(&account_sub));
-    let jar = start_session(p, jar, account_sub, auth_time).await;
+    let jar = start_session(p, jar, account_sub, auth_time)
+        .await
+        .map_err(|e| {
+            tracing::error!("finalize_login: start_session: {e}");
+            "error"
+        })?;
     Ok((jar, p.path(&format!("/authorize/resume?uid={uid}"))))
 }
 
@@ -228,6 +233,7 @@ pub(super) async fn login_passkey_verify(
     let account = p.store.find_account(&account.account_id).await;
     match finalize_login(&p, jar, &uid, account.sub).await {
         Ok((jar, resume)) => (jar, Json(serde_json::json!({ "redirect": resume }))).into_response(),
+        Err("error") => (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response(),
         // "interaction not found" のとき、画面は期限切れと見て読み直す（login_form の JS）。
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }

@@ -431,7 +431,7 @@ async fn a_logout_on_one_instance_ends_the_session_on_the_other() {
     let (a, b) = (c.instance(), c.instance());
     let jar = session_jar(&a, "acct", now()).await;
     let sid = jar.get(SID_COOKIE).unwrap().value().to_string();
-    assert!(b.store.get_session(&sid).await.is_some());
+    assert!(b.store.get_session(&sid).await.unwrap().is_some());
 
     // 確かめの画面の「ログアウト」の POST（自分の origin から、confirm 付き）。
     let mut h = HeaderMap::new();
@@ -445,7 +445,7 @@ async fn a_logout_on_one_instance_ends_the_session_on_the_other() {
     .await;
     assert_eq!(r.status(), StatusCode::OK);
     assert!(
-        b.store.get_session(&sid).await.is_none(),
+        b.store.get_session(&sid).await.unwrap().is_none(),
         "台 A でログアウトした session が台 B に残った"
     );
 }
@@ -466,7 +466,7 @@ async fn disabling_an_account_on_one_instance_holds_on_the_other() {
         .unwrap();
 
     assert!(
-        b.store.get_session(&sid).await.is_none(),
+        b.store.get_session(&sid).await.unwrap().is_none(),
         "session が残った"
     );
     assert_eq!(tokens_alive(&b, &tokens).await, (false, false));
@@ -561,7 +561,11 @@ async fn a_sign_in_survives_instances_being_replaced() {
     c.restart();
     let cc = c.instance();
     assert_eq!(
-        cc.store.get_session(&sid).await.map(|s| s.account_id),
+        cc.store
+            .get_session(&sid)
+            .await
+            .unwrap()
+            .map(|s| s.account_id),
         Some(account_id.clone()),
         "入れ替えた台で session が消えた"
     );
@@ -772,8 +776,47 @@ async fn sign_out_refuses_when_the_session_cannot_be_deleted() {
     }
 }
 
-/// 保存先が落ちたら、在るコード・refresh token・承認済みの CIBA も引き換えず、session・interaction・
-/// access token は無いものとして扱う。
+/// session の集まりだけが落ちたら、session を読む画面も張る道も 500 を返す。読めないのを「ログインしていない」とは
+/// 扱わず、張れないのに cookie を渡さない。
+#[cfg(any(feature = "gcp", feature = "sqlite"))]
+#[tokio::test]
+async fn session_reads_and_writes_refuse_when_sessions_are_down() {
+    let docs = Arc::new(crate::document_store::FailingDocs::up_until_only(
+        "sessions",
+    ));
+    let p = instance_on(docs.clone());
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    let (key, cred_id, account_id) = register_test_account(&p, &email).await;
+    let jar = session_jar(&p, &account_id, now()).await;
+    docs.go_down();
+
+    let r = account::account_page(
+        State(p.clone()),
+        HeaderMap::new(),
+        jar.clone(),
+        Query(serde_json::from_value(json!({})).unwrap()),
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR, "/account");
+    let r = ciba::ciba_pending(State(p.clone()), HeaderMap::new(), jar.clone()).await;
+    assert_eq!(
+        r.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "CIBA の承認画面"
+    );
+    let r = admin::admin_home(State(p.clone()), HeaderMap::new(), jar.clone()).await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR, "管理画面");
+    // 前の session が無いブラウザでのサインイン。passkey は確かめられるが、session を張れない。
+    let r = account_signin(&p, &CookieJar::default(), &cred_id, &key, 1, &account_id).await;
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR, "サインイン");
+    assert!(
+        r.headers().get(header::SET_COOKIE).is_none(),
+        "張れない session の cookie を渡した"
+    );
+}
+
+/// 保存先が落ちたら、在るコード・refresh token・承認済みの CIBA も引き換えず、session は読めないと返し、
+/// interaction・access token は無いものとして扱う。
 #[cfg(any(feature = "gcp", feature = "sqlite"))]
 #[tokio::test]
 async fn single_use_and_session_reads_refuse_when_the_store_is_down() {
@@ -833,7 +876,7 @@ async fn single_use_and_session_reads_refuse_when_the_store_is_down() {
     assert!(RefreshTokenGrant.handle(&p, &c, &rt, None).await.is_err());
     let ciba = form(&[("auth_req_id", &ciba_id.0)]);
     assert!(CibaGrant.handle(&p, &c, &ciba, None).await.is_err());
-    assert!(p.store.get_session(&sid).await.is_none());
+    assert!(p.store.get_session(&sid).await.is_err());
     assert!(p.store.get_interaction(&uid).await.is_none());
     assert!(!p.store.consume_interaction(&uid).await);
     assert_ne!(

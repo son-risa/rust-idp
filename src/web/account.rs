@@ -43,7 +43,7 @@ async fn me(
     let Some(sid) = jar.get(SID_COOKIE).map(|c| c.value().to_string()) else {
         return Ok(None);
     };
-    let Some(s) = p.store.get_session(&sid).await else {
+    let Some(s) = p.store.get_session(&sid).await.map_err(|e| e.to_string())? else {
         return Ok(None);
     };
     let Some(email) = registration::find_email_by_account_id(fs, &s.account_id).await? else {
@@ -363,7 +363,10 @@ pub(super) async fn signin_verify(
         return internal("signin_verify: delete old session", &e.to_string());
     }
     tracing::info!(event = "account_signin", sub = %pseudonymize_sub(&account.account_id));
-    let jar = start_session(&p, jar, account.account_id, now()).await;
+    let jar = match start_session(&p, jar, account.account_id, now()).await {
+        Ok(jar) => jar,
+        Err(e) => return internal("signin_verify: start_session", &e.to_string()),
+    };
     (jar, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
@@ -462,11 +465,16 @@ pub(super) async fn add_verify(
     }
     // 確かめた後に、管理者が passkey を全部消してセッションを失効させていたら、足した 1 本も消す
     // （失効させてから消すので、消す前に足したものは消され、消した後に足したものはここで見つかる）。
-    if p.store.get_session(&me.sid).await.is_none() {
+    // session を読めなければ、失効されたかどうか分からない。足した 1 本は消し、成功とは返さない。
+    let alive = p.store.get_session(&me.sid).await;
+    if !matches!(alive, Ok(Some(_))) {
         if let Err(e) = registration::discard_credential(fs, &email, &outcome.credential_id).await {
             tracing::error!("add_verify: passkey added after revocation was not removed: {e}");
         }
-        return (StatusCode::UNAUTHORIZED, "sign-in required").into_response();
+        return match alive {
+            Err(e) => internal("add_verify: get_session", &e.to_string()),
+            _ => (StatusCode::UNAUTHORIZED, "sign-in required").into_response(),
+        };
     }
     crate::audit_log::record(
         fs,
@@ -518,11 +526,20 @@ pub(super) async fn delete_passkey(
                 "delete_passkey",
                 &a.account_id,
                 &format!(
-                    "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
-                    req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors
+                    "credential_id={} other_sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+                    req.id, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
                 ),
             )
             .await;
+            if !c.complete() {
+                return internal(
+                    "delete_passkey: revocation incomplete",
+                    &format!(
+                        "query_errors={:?} delete_errors={}",
+                        c.query_errors, c.delete_errors
+                    ),
+                );
+            }
             Json(serde_json::json!({ "ok": true })).into_response()
         }
         Ok(RemoveOutcome::NotFound) => (StatusCode::NOT_FOUND, "passkey not found").into_response(),
@@ -611,7 +628,8 @@ mod tests {
                     account_id: "acc-u".into(),
                     auth_time,
                 })
-                .await;
+                .await
+                .unwrap();
             sid
         }
 

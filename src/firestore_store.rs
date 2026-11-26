@@ -179,25 +179,27 @@ impl Store for FirestoreStore {
         matches!(self.fs.take_doc("interactions", uid).await, Ok(Some(_)))
     }
 
-    async fn save_session(&self, s: Session) {
+    async fn save_session(&self, s: Session) -> StoreResult<()> {
         let f = json!({
             "accountId": fs_h::s(&s.account_id),
             "authTime": fs_h::int(s.auth_time),
             "expiresAt": fs_h::ts(&fs_h::rfc3339(now() + SESSION_TTL)),
         });
-        let _ = self.fs.set_doc("sessions", &s.sid, f).await;
+        Ok(self.fs.set_doc("sessions", &s.sid, f).await?)
     }
 
-    async fn get_session(&self, sid: &str) -> Option<Session> {
-        let f = self.fs.get_doc("sessions", sid).await.ok()??;
+    async fn get_session(&self, sid: &str) -> StoreResult<Option<Session>> {
+        let Some(f) = self.fs.get_doc("sessions", sid).await? else {
+            return Ok(None);
+        };
         if doc_expired(&f) {
-            return None;
+            return Ok(None);
         }
-        Some(Session {
+        Ok(Some(Session {
             sid: sid.to_string(),
             account_id: fs_h::field_str(&f, "accountId").unwrap_or("").to_string(),
             auth_time: fs_h::field_u64(&f, "authTime").unwrap_or(0),
-        })
+        }))
     }
 
     async fn delete_session(&self, sid: &str) -> StoreResult<()> {
@@ -538,6 +540,7 @@ impl Store for FirestoreStore {
 
     /// account_id → doc の逆引きを別に持たず、accountId の query_eq でその場で探して消す。
     /// 1 種類の検索が失敗しても他の種類の失効は続け、失敗した種類は query_errors に残す（存否不明）。
+    /// 見つけたが消せなかった件数は delete_errors に数える。
     async fn revoke_account(&self, account_id: &str, keep_sid: &str) -> RevocationCounts {
         let mut counts = RevocationCounts::default();
         for (col, n) in [
@@ -554,7 +557,8 @@ impl Store for FirestoreStore {
                         match self.fs.delete_doc(col, id).await {
                             Ok(()) => *n += 1,
                             Err(e) => {
-                                tracing::error!("account_admin: {col} revoke failed id={id}: {e}")
+                                tracing::error!("account_admin: {col} revoke failed id={id}: {e}");
+                                counts.delete_errors += 1;
                             }
                         }
                     }

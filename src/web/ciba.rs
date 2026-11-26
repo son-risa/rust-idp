@@ -341,8 +341,12 @@ pub(super) async fn ciba_pending(
 ) -> Response {
     let lang = Lang::from_headers(&headers);
     let account = match session_account(&p, &jar).await {
-        Some(a) => a,
-        None => {
+        Ok(Some(a)) => a,
+        Err(e) => {
+            tracing::error!("ciba_pending: get_session: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+        Ok(None) => {
             return Html(localize(
                 &format!(
                     "<!doctype html><html lang=\"__LANG__\"><meta charset=\"utf-8\"><p>[[You need to sign in to approve.]] <a href=\"{}\">[[Sign in]]</a></p>",
@@ -450,12 +454,18 @@ async fn own_request(
         .account_id
     } else {
         match session_account(p, jar).await {
-            Some(a) if from_own_origin(headers, &p.origin()) => a,
-            Some(_) => {
+            Ok(Some(a)) if from_own_origin(headers, &p.origin()) => a,
+            Ok(Some(_)) => {
                 tracing::warn!(event = "ciba_cross_origin_rejected", action);
                 return Err((StatusCode::FORBIDDEN, "forbidden").into_response());
             }
-            None => return Err((StatusCode::UNAUTHORIZED, "sign-in required").into_response()),
+            Ok(None) => {
+                return Err((StatusCode::UNAUTHORIZED, "sign-in required").into_response());
+            }
+            Err(e) => {
+                tracing::error!("ciba {action}: get_session: {e}");
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "error").into_response());
+            }
         }
     };
     // Firestore が文書 ID として断る形を引くと 400 が返り、ただの「無い」が 500 になる。
@@ -799,7 +809,8 @@ mod tests {
                 account_id: account.into(),
                 auth_time: 0,
             })
-            .await;
+            .await
+            .unwrap();
         let mut c = HeaderMap::new();
         c.insert(
             header::COOKIE,

@@ -41,7 +41,8 @@ async fn main() {
             account_id: "alice".into(),
             auth_time: now,
         })
-        .await;
+        .await
+        .unwrap();
 
     let provider = Provider::new(issuer.clone())
         .with_store(store)

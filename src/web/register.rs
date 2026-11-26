@@ -453,7 +453,13 @@ async fn link_landing(
         None => None,
     };
     let current = match &target {
-        Some(t) => super::signed_in_as_other(p, jar, t).await,
+        Some(t) => match super::signed_in_as_other(p, jar, t).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("link_landing: signed_in_as_other: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+            }
+        },
         None => None,
     };
     passkey_register_page(p, lang, token, None, web_only, target.as_deref(), current)
@@ -683,7 +689,13 @@ pub(super) async fn invite_page(
     if matches!(crate::registration::has_passkey(fs, &email).await, Ok(true)) {
         return Redirect::to(&return_to).into_response();
     }
-    let current = super::signed_in_as_other(&p, &jar, &email).await;
+    let current = match super::signed_in_as_other(&p, &jar, &email).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("invite_page: signed_in_as_other: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "error").into_response();
+        }
+    };
     passkey_register_page(
         &p,
         lang,
@@ -938,7 +950,15 @@ pub(super) async fn register_passkey_verify(
             );
         }
         let redirect = super::continue_after_email(&p, &jar, &from, &account_id, false).await;
-        (start_session(&p, jar, account_id, now()).await, redirect)
+        match start_session(&p, jar, account_id, now()).await {
+            Ok(jar) => (jar, redirect),
+            Err(e) => {
+                return super::passkey_saved_sign_in_again(
+                    "register: start_session",
+                    &e.to_string(),
+                );
+            }
+        }
     } else {
         (jar, super::account_url(&p, &from.client_id, false))
     };

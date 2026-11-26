@@ -159,7 +159,10 @@ pub(super) async fn recover_page(
                 super::account_url(&p, &from.client_id, false),
             )
         };
-    let current = super::signed_in_as_other(&p, &jar, &email).await;
+    let current = match super::signed_in_as_other(&p, &jar, &email).await {
+        Ok(c) => c,
+        Err(e) => return internal("recover page: signed_in_as_other", &e.to_string()),
+    };
     let body = r##"__SWITCH__<div id="main" __MAIN_HIDDEN__><h1>[[Add a passkey on this device]]</h1>
 <p>{target}</p>
 <p>[[Create a passkey on this device to sign in again. Your other passkeys are kept. When you finish, you are signed out on your other devices.]]</p>
@@ -438,7 +441,15 @@ pub(super) async fn recover_verify(
     }
     tracing::info!(event = "recover_passkey", sub = %pseudonymize_sub(&account_id));
     let redirect = super::continue_after_email(&p, &jar, &from, &account_id, true).await;
-    let jar = start_session(&p, jar, account_id, now()).await;
+    let jar = match start_session(&p, jar, account_id, now()).await {
+        Ok(jar) => jar,
+        Err(e) => {
+            return super::passkey_saved_sign_in_again(
+                "recover_verify: start_session",
+                &e.to_string(),
+            );
+        }
+    };
     (
         jar,
         (
@@ -461,22 +472,23 @@ async fn add_and_revoke(
     registration::mark_recovered(fs, email, &outcome.credential_id).await?;
     registration::save_credential(fs, email, account_id, outcome).await?;
     let c = p.store.revoke_account(account_id, "").await;
-    if !c.query_errors.is_empty() {
-        tracing::error!(
-            "recover_passkey: revocation incomplete for account_id={account_id}: {:?}",
-            c.query_errors
-        );
-    }
     crate::audit_log::record(
         fs,
         account_id,
         "recover_passkey",
         account_id,
         &format!(
-            "credential_id={} aaguid={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?}",
-            outcome.credential_id, outcome.aaguid, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors
+            "credential_id={} aaguid={} sessions={} access_tokens={} refresh_tokens={} query_errors={:?} delete_errors={}",
+            outcome.credential_id, outcome.aaguid, c.sessions, c.access_tokens, c.refresh_tokens, c.query_errors, c.delete_errors
         ),
     )
     .await;
+    // 失効しきれなかったら、ほかの端末のログインが残っている。成功とは返さない（もう一度で失効し直す）。
+    if !c.complete() {
+        return Err(format!(
+            "revocation incomplete: query_errors={:?} delete_errors={}",
+            c.query_errors, c.delete_errors
+        ));
+    }
     Ok(matches!(registration::get_account(fs, email).await?, Some(a) if !a.disabled))
 }
