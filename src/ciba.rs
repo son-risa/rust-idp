@@ -277,68 +277,6 @@ pub trait CibaStore: Send + Sync {
     async fn sweep_expired(&self, account: &str) -> Result<u32, String>;
 }
 
-/// (client_id, account) 単位の sliding-window レート制限。
-/// in-memory（インスタンス単位）。Cloud Run は同時インスタンスが少ない CIBA RP では
-/// 1〜数個に収まるので、まず十分な防御。スパムの主因（同 RP × 同ユーザの連発）に効く。
-pub struct CibaRateLimiter {
-    window: std::time::Duration,
-    max: usize,
-    map: std::sync::Mutex<
-        std::collections::HashMap<(String, String), std::collections::VecDeque<std::time::Instant>>,
-    >,
-}
-
-impl CibaRateLimiter {
-    pub fn new(window: std::time::Duration, max: usize) -> Self {
-        Self {
-            window,
-            max,
-            map: std::sync::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-
-    /// 許可なら true（履歴に今を記録）。超過なら false。
-    pub fn check_and_record(&self, client_id: &str, account: &str) -> bool {
-        let now = std::time::Instant::now();
-        let mut map = self.map.lock().unwrap();
-        let dq = map
-            .entry((client_id.to_string(), account.to_string()))
-            .or_default();
-        while let Some(&front) = dq.front() {
-            if now.duration_since(front) > self.window {
-                dq.pop_front();
-            } else {
-                break;
-            }
-        }
-        if dq.len() >= self.max {
-            return false;
-        }
-        dq.push_back(now);
-        true
-    }
-}
-
-impl CibaRateLimiter {
-    /// 窓を過ぎた記録だけの鍵を消す。未認証の /signup は鍵（email・IP）を送り手が選べるので、
-    /// 消さないと表が伸び続ける。
-    pub fn sweep(&self) {
-        let now = std::time::Instant::now();
-        let mut map = self.map.lock().unwrap();
-        map.retain(|_, dq| {
-            dq.back()
-                .is_some_and(|&last| now.duration_since(last) <= self.window)
-        });
-    }
-}
-
-impl Default for CibaRateLimiter {
-    /// 60 秒に 3 要求まで。ciba-rp の正常運用では絶対超えない値。
-    fn default() -> Self {
-        Self::new(std::time::Duration::from_secs(60), 3)
-    }
-}
-
 /// [`DocumentStore`] の上の実装。CAS は文書の版（Firestore の updateTime・SQLite の version）の前提条件で行う。
 /// gcp では Firestore、sqlite では SQLite の file を下に置く。
 #[cfg(any(feature = "gcp", feature = "sqlite"))]
@@ -677,47 +615,6 @@ mod tests {
         for bad in ["", "__x__", "__x", "a/b", "a.b", &"a".repeat(129)] {
             assert!(!AuthReqId::well_formed(bad), "{bad}");
         }
-    }
-
-    #[test]
-    fn rate_limiter_admits_then_blocks_within_window() {
-        let rl = CibaRateLimiter::new(std::time::Duration::from_secs(60), 3);
-        assert!(rl.check_and_record("rp", "u"));
-        assert!(rl.check_and_record("rp", "u"));
-        assert!(rl.check_and_record("rp", "u"));
-        // 4 回目で拒否
-        assert!(!rl.check_and_record("rp", "u"));
-        // 別 client は独立
-        assert!(rl.check_and_record("rp2", "u"));
-        // 別 account も独立
-        assert!(rl.check_and_record("rp", "v"));
-    }
-
-    #[test]
-    fn rate_limiter_recovers_after_window() {
-        let rl = CibaRateLimiter::new(std::time::Duration::from_millis(50), 2);
-        assert!(rl.check_and_record("rp", "u"));
-        assert!(rl.check_and_record("rp", "u"));
-        assert!(!rl.check_and_record("rp", "u"));
-        std::thread::sleep(std::time::Duration::from_millis(70));
-        assert!(rl.check_and_record("rp", "u"));
-    }
-
-    #[test]
-    fn sweeping_drops_only_keys_whose_window_has_passed() {
-        let rl = CibaRateLimiter::new(std::time::Duration::from_millis(50), 2);
-        assert!(rl.check_and_record("ip", "old"));
-        std::thread::sleep(std::time::Duration::from_millis(60));
-        assert!(rl.check_and_record("ip", "new"));
-        rl.sweep();
-        let keys: Vec<_> = rl
-            .map
-            .lock()
-            .unwrap()
-            .keys()
-            .map(|(_, k)| k.clone())
-            .collect();
-        assert_eq!(keys, vec!["new".to_string()]);
     }
 
     mod memory {

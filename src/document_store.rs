@@ -338,6 +338,72 @@ impl DocumentStore for MemoryDocumentStore {
     }
 }
 
+/// どの操作にも誤りを返す保存先。保存先が落ちたときに通さないことの試験に使う。
+#[cfg(test)]
+pub(crate) struct FailingDocs;
+
+#[cfg(test)]
+#[async_trait]
+impl DocumentStore for FailingDocs {
+    async fn set_doc(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
+        Err("down".into())
+    }
+    async fn update_field(&self, _: &str, _: &str, _: &str, _: Value) -> Result<(), String> {
+        Err("down".into())
+    }
+    async fn update_fields(&self, _: &str, _: &str, _: Value) -> Result<(), String> {
+        Err("down".into())
+    }
+    async fn merge_fields(&self, _: &str, _: &str, _: Value, _: &[String]) -> Result<(), String> {
+        Err("down".into())
+    }
+    async fn get_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
+        Err("down".into())
+    }
+    async fn get_doc_with_update_time(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<(Value, String)>, String> {
+        Err("down".into())
+    }
+    async fn set_doc_if_unchanged(
+        &self,
+        _: &str,
+        _: &str,
+        _: Value,
+        _: &str,
+    ) -> Result<bool, String> {
+        Err("down".into())
+    }
+    async fn create_if_absent(&self, _: &str, _: &str, _: Value) -> Result<bool, String> {
+        Err("down".into())
+    }
+    async fn delete_doc_if_unchanged(&self, _: &str, _: &str, _: &str) -> Result<bool, String> {
+        Err("down".into())
+    }
+    async fn take_doc(&self, _: &str, _: &str) -> Result<Option<Value>, String> {
+        Err("down".into())
+    }
+    async fn query_eq(&self, _: &str, _: &str, _: &str) -> Result<Vec<(String, Value)>, String> {
+        Err("down".into())
+    }
+    async fn list_recent_ordered(
+        &self,
+        _: &str,
+        _: &str,
+        _: u32,
+    ) -> Result<Vec<(String, Value)>, String> {
+        Err("down".into())
+    }
+    async fn list_collection(&self, _: &str) -> Result<Vec<(String, Value, String)>, String> {
+        Err("down".into())
+    }
+    async fn delete_doc(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("down".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

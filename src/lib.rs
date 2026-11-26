@@ -77,6 +77,7 @@ mod model;
 mod nonce;
 mod par;
 mod provider;
+mod rate_limit;
 mod registration;
 mod request_object;
 mod response_mode;

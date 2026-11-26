@@ -81,7 +81,7 @@ PostgreSQL では、次の点を確かめる。
 
 - 1 度だけ通す操作（`take_doc`・`take_code`・`mark_refresh_used` など）が、同時に来ても 1 つだけ通る。契約の試験には、同時に呼ぶ試験（`racing_*`）がある。行の lock か、条件つきの `UPDATE ... RETURNING` で書く。
 - `*_if_unchanged` は、読んだときの版と同じときだけ書く。版の列を持つ。
-- 複数の process で動かすと、メモリにある物は process ごとに分かれる。jti の記録（`NonceStore`）と、回数の上限（rate limit）がそうなる。jti の記録を PostgreSQL に置くには、`NonceStore` を trait にするところから始める。
+- 複数の process で動かすと、メモリにある物は process ごとに分かれる。回数の上限（rate limit）の数は `DocumentStore` の `rateLimits` に置くので、同じ保存先を使う process の全体で 1 つの上限になる。jti の記録（`NonceStore`）は、Firestore の配線のほかはメモリにある。jti の記録を PostgreSQL に置くには、`NonceStore` を trait にするところから始める。private_key_jwt の公開鍵の cache（5 分）も process ごとで、鍵の入れ替えの反映が最大 5 分遅れる。
 
 ## 実例 3: 既存の利用者 DB があり、Basic 認証をしているサイトと連携する
 

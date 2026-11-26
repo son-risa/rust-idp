@@ -2,7 +2,7 @@
 //! 新機能 = 新しい trait impl を register するだけ、が拡張の基本方針。
 
 use crate::auth_checks::*;
-use crate::ciba::{CibaRateLimiter, CibaStore, MemoryCibaStore};
+use crate::ciba::{CibaStore, MemoryCibaStore};
 use crate::client_auth::*;
 use crate::document_store::DocumentStore;
 use crate::dpop::{DpopVerifier, Es256Dpop};
@@ -13,6 +13,7 @@ use crate::grants::*;
 use crate::jws::{Es256Signer, JwsSigner};
 use crate::mailer::{LogMailer, Mailer};
 use crate::model::Client;
+use crate::rate_limit::RateLimiter;
 use crate::response_mode::*;
 use crate::store::{MemoryStore, Store};
 use std::collections::HashMap;
@@ -38,10 +39,11 @@ pub struct Provider {
     pub(crate) fcm: Option<Arc<Firestore>>,
     /// CIBA バックチャネル要求の永続化。既定は In-memory、本番は Firestore 実装を注入する。
     pub(crate) ciba: Arc<dyn CibaStore>,
-    /// CIBA の (client_id, account) ごとレート制限。push スパム抑止のバックストップ。
-    pub(crate) ciba_rate: Arc<CibaRateLimiter>,
-    /// 登録メール送信のレート制限（email / IP ごと）。無認証メール乱用のバックストップ。
-    pub(crate) register_rate: Arc<CibaRateLimiter>,
+    /// CIBA の (client_id, login_hint) ごとの回数の上限。push スパム抑止のバックストップ。
+    /// 数は `docs` に置くので、同じ保存先を使う台の全体で 1 つの上限になる。
+    pub(crate) ciba_rate: RateLimiter,
+    /// 登録・復旧のメールと DCR の回数の上限（email / IP ごと）。無認証メール乱用のバックストップ。
+    pub(crate) register_rate: RateLimiter,
     pub(crate) mailer: Arc<dyn Mailer>,
     pub(crate) dpop: Arc<dyn DpopVerifier>,
     /// JAR (request object) の jti 単回ストア。本番は Firestore（with_firestore で注入）。
@@ -111,12 +113,10 @@ impl Provider {
             fcm: None,
             mailer: Arc::new(LogMailer),
             ciba: Arc::new(MemoryCibaStore::default()),
-            ciba_rate: Arc::new(CibaRateLimiter::default()),
+            // 60 秒に 3 要求まで。ciba-rp の正常運用では超えない。
+            ciba_rate: RateLimiter::new("ciba", std::time::Duration::from_secs(60), 3),
             // 1 時間に 5 通まで（同一 email / 同一 IP）。正常な登録では超えない。
-            register_rate: Arc::new(CibaRateLimiter::new(
-                std::time::Duration::from_secs(3600),
-                5,
-            )),
+            register_rate: RateLimiter::new("register", std::time::Duration::from_secs(3600), 5),
             dpop: Arc::new(Es256Dpop::default()),
             jar_jti: crate::nonce::NonceStore::memory(),
             clients: HashMap::new(),
@@ -184,10 +184,21 @@ impl Provider {
             loop {
                 tick.tick().await;
                 p.store.sweep_expired().await;
-                p.ciba_rate.sweep();
-                p.register_rate.sweep();
+                if let Some(docs) = p.docs.as_deref()
+                    && !p.docs_expire_themselves()
+                {
+                    crate::rate_limit::sweep(docs).await;
+                }
             }
         })
+    }
+
+    /// 文書の保存先が、古い文書を自分で消すか（Firestore の TTL ポリシー）。
+    fn docs_expire_themselves(&self) -> bool {
+        #[cfg(feature = "gcp")]
+        return self.fcm.is_some();
+        #[cfg(not(feature = "gcp"))]
+        false
     }
 
     /// client_id を解決する。静的登録(HashMap)を先に見て、無ければ Firestore の
