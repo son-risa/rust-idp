@@ -900,6 +900,14 @@ pub(crate) mod fake_firestore {
     }
 
     type Gate = (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+
+    /// 課金の単位で数えた、文書の操作の種類。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum Op {
+        Read,
+        Write,
+        Delete,
+    }
     type Failure = (&'static str, String, Option<String>, StatusCode);
 
     #[derive(Default)]
@@ -912,6 +920,8 @@ pub(crate) mod fake_firestore {
         fcm_sent: Mutex<Vec<Value>>,
         /// 失敗の注入: (メソッド, col, id) に合う次の要求に 1 回だけ、その状態の番号を返す。id が None なら col の全ての id に合う。
         failures: Mutex<Vec<Failure>>,
+        /// 受けた要求を Firestore の課金の数え方で数えた記録（1 件が 1 回）。注入した失敗は数えない。
+        ops: Mutex<Vec<(Op, String)>>,
     }
 
     impl FakeState {
@@ -919,6 +929,18 @@ pub(crate) mod fake_firestore {
             let mut n = self.next_version.lock().unwrap();
             *n += 1;
             *n
+        }
+
+        fn count(&self, op: Op, col: &str, n: usize) {
+            let mut ops = self.ops.lock().unwrap();
+            for _ in 0..n {
+                ops.push((op, col.to_string()));
+            }
+        }
+
+        /// ここまでの操作の記録を取り出して空にする。
+        pub fn take_ops(&self) -> Vec<(Op, String)> {
+            std::mem::take(&mut *self.ops.lock().unwrap())
         }
 
         pub fn clear_failures(&self) {
@@ -933,6 +955,10 @@ pub(crate) mod fake_firestore {
                 .filter(|(c, _)| c == col)
                 .map(|(_, id)| id.clone())
                 .collect()
+        }
+
+        pub fn all_doc_keys(&self) -> Vec<(String, String)> {
+            self.docs.lock().unwrap().keys().cloned().collect()
         }
 
         pub fn fcm_sent_messages(&self) -> Vec<Value> {
@@ -1042,6 +1068,8 @@ pub(crate) mod fake_firestore {
         if let Some(status) = st.take_failure("GET", &col, &id) {
             return status.into_response();
         }
+        // 無い文書を引いても 1 読みと数える（Google の頁は無い文書について書いていないので、多い側に倒す）。
+        st.count(Op::Read, &col, 1);
         let docs = st.docs.lock().unwrap();
         match docs.get(&(col, id)) {
             Some(d) => {
@@ -1063,6 +1091,8 @@ pub(crate) mod fake_firestore {
         if let Some(status) = st.take_failure("PATCH", &col, &id) {
             return status.into_response();
         }
+        // 前提条件で断られた書き込みも 1 書きと数える（多い側に倒す）。
+        st.count(Op::Write, &col, 1);
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);
         if let Some(want) = &pre.exists {
@@ -1130,6 +1160,8 @@ pub(crate) mod fake_firestore {
         if let Some(status) = st.take_failure("DELETE", &col, &id) {
             return status.into_response();
         }
+        // 無い文書・前提条件で断られた消しも 1 消しと数える（多い側に倒す）。
+        st.count(Op::Delete, &col, 1);
         let mut docs = st.docs.lock().unwrap();
         let key = (col, id);
         if let Some(want_ut) = &pre.update_time {
@@ -1216,6 +1248,8 @@ pub(crate) mod fake_firestore {
         if let Some(limit) = sq.get("limit").and_then(|v| v.as_u64()) {
             matching.truncate(limit as usize);
         }
+        // query は返した文書ごとに 1 読み、0 件でも 1 読み。
+        st.count(Op::Read, &col, matching.len().max(1));
 
         let rows: Vec<Value> = matching
             .iter()
@@ -1274,6 +1308,8 @@ pub(crate) mod fake_firestore {
             .unwrap_or(0);
         let page: Vec<_> = matching.into_iter().skip(offset).take(page_size).collect();
         let consumed = offset + page.len();
+        // 一覧も query と同じく、頁ごとに返した文書の数（0 件でも 1）を読みと数える。
+        st.count(Op::Read, &col, page.len().max(1));
 
         let documents: Vec<Value> = page
             .iter()
