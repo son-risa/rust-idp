@@ -8,6 +8,35 @@ This page is for developers who want to adapt rust-idp to their own environment.
 - **Contract tests**: a set of tests for the promises of a trait. The same tests run against every implementation. They live in `src/*_contract.rs`. One macro call runs all of them against an implementation.
 - **No extension point yet**: the current code has no place to plug in. To add one, first decide its shape: the trait's functions and its promises.
 
+## Integration types
+
+rust-idp serves one organization (single tenant). One rust-idp is one issuer. A relying party that works with several organizations connects to a separate rust-idp for each organization.
+
+There are three ways to use rust-idp. Each one is meant to have its own extension points. Only type A works today. Types B and C are planned and not written yet.
+
+| Type | What rust-idp holds | Status |
+|---|---|---|
+| A. Start right away on the free tier of Cloud Run and Firestore | The users and their sign-in credentials, such as passkeys | Available today. A small organization that one machine can serve can use SQLite instead (Example 1) |
+| B. Run next to your own system and use its existing sign-in | Only the tokens. Your system shows the sign-in page and checks who the user is | Planned. Not available yet |
+| C. Keep the data in an RDB (PostgreSQL) and read an existing user table | Only the sign-in credentials. The users are read from the existing table | Planned. Not available yet. PostgreSQL waits until someone needs it |
+
+Type B takes the shape of Ory Hydra. The endpoints stay in rust-idp. rust-idp hands the sign-in to your system with a challenge and receives the result. rust-idp will not take the other shape, used by Authlete, where the endpoints live on your side.
+
+### Extension points for the types
+
+| Extension point | Used by | Status |
+|---|---|---|
+| Storage: `DocumentStore`. Get by key (`get_doc`), compare-and-swap (`create_if_absent`, `set_doc_if_unchanged`, `delete_doc_if_unchanged`), filter by one field value (`query_eq`), list newest first (`list_recent_ordered`), delete expired entries (`sweep_expired`) | All types | Available today. Implementations: memory, Firestore, SQLite |
+| Delegating the sign-in | Type B | Planned. Not available yet |
+| Looking up users | Type C | Planned. Not available yet. Today the users are the `accounts` collection in `DocumentStore` |
+| Environment: signing keys, mail, secrets | All types | Partly available. Signing keys: Cloud KMS, with Secret Manager as a fallback, is available; key files are planned. Mail: Resend is available; SMTP is planned. Secrets are read from Secret Manager and environment variables; there is no extension point for them yet |
+
+The planned extension points are built in this order: delegating the sign-in, then looking up users, then PostgreSQL.
+
+### Scale
+
+On Cloud Run, rust-idp runs with at least 0 instances (none stays running) and at most 3. One instance is meant to handle 30 people signing in at the same time. With Firestore, the rate limit counts and the single-use records (such as authorization codes and jti) are kept in the shared storage. So each limit and each single-use record is one for all instances, and they still hold when instances are added.
+
 ## Extension axes
 
 | Axis | Examples | Extension point | Contract tests |
