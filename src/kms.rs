@@ -193,12 +193,13 @@ async fn verify_only_at(
     base: &str,
 ) -> Result<serde_json::Value, String> {
     // 版を書かずに鍵の道だけを渡すと版 1 になり、入れ替え後の新しい版と取り違えやすい。版を必ず書かせる。
-    if !path.contains("/cryptoKeyVersions/") {
+    // version_path が版 1 を足した（＝渡された道に版が無かった）なら断る。
+    let version = version_path(path);
+    if version != path.trim().trim_end_matches('/') {
         return Err(format!(
             "verify-only key needs a cryptoKeyVersions path: {path}"
         ));
     }
-    let version = version_path(path);
     let (jwk, _) = public_jwk(kind, fs, &crate::http::client(), base, &version).await?;
     Ok(jwk)
 }
@@ -366,6 +367,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(header["kid"], after.kid);
+
+        // 署名は版 2 の鍵で行われ、版 2 の JWK で確かめられ、版 1 の JWK では通らない。
+        let verifies_with = |jwk: &Value| {
+            use p256::ecdsa::signature::Verifier;
+            let (input, sig) = jwt.rsplit_once('.').unwrap();
+            let part = |n: &str| crate::es256::b64url_decode(jwk[n].as_str().unwrap()).unwrap();
+            let vk = crate::es256::verifying_key_from_xy(&part("x"), &part("y")).unwrap();
+            let sig = crate::es256::b64url_decode(sig).unwrap();
+            let sig = p256::ecdsa::Signature::from_slice(&sig).unwrap();
+            vk.verify(input.as_bytes(), &sig).is_ok()
+        };
+        assert!(verifies_with(&after.public_jwk()));
+        assert!(!verifies_with(&old));
     }
 
     #[tokio::test]

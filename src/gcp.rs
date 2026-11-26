@@ -125,8 +125,9 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
                 std::process::exit(1);
             }
             // 鍵の入れ替えの前後に、署名には使わず jwks と ID Token の確かめにだけ載せる版
-            // （カンマ区切りの cryptoKeyVersion の道）。書いたのに読めなければ起動しない:
-            // 新しい revision が立たなければ、Cloud Run は前の revision に流し続ける。
+            // （カンマ区切りの cryptoKeyVersion の道）。読めなかった版は記録して飛ばし、起動は続ける:
+            // 最小 0 台で起動のたびに KMS を読むので、止めると KMS の不調で全台が立たなくなる。
+            // 飛ばした版の ID Token は、ログアウトの hint が確かめの画面に回るだけで、安全側に倒れる。
             for (env, rs256) in [
                 ("KMS_ES256_VERIFY_ONLY", false),
                 ("KMS_RS256_VERIFY_ONLY", true),
@@ -147,8 +148,10 @@ pub async fn configure_from_env(mut provider: Provider) -> Provider {
                             provider = provider.add_verify_only_jwk(jwk);
                         }
                         Err(e) => {
-                            tracing::error!("FATAL: {env} {path}: {e}");
-                            std::process::exit(1);
+                            tracing::error!(
+                                event = "kms_verify_only_key_skipped",
+                                "{env} {path}: {e}"
+                            );
                         }
                     }
                 }
