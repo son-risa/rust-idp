@@ -23,6 +23,28 @@ description: rust-idp は Rust 製の OSS の OpenID Provider。Cloud Run の 1 
   </ul>
 </header>
 
+<section class="rh-section" aria-labelledby="usecases">
+  <h2 id="usecases">ユースケース</h2>
+  <div class="rh-grid rh-grid--3">
+    <article class="rh-card">
+      <h3>業務アプリにパスキーでログイン</h3>
+      <p>マルチテナントの業務アプリの利用者が、合言葉なしでログインする。招待と登録のリンクは、アプリから送る。</p>
+      <p class="rh-scope">いま。本番で動いている。</p>
+    </article>
+    <article class="rh-card">
+      <h3>1 つの操作を、別の端末で承認</h3>
+      <p>危ない操作の前に、利用者が自分の端末のパスキーで、その操作だけを承認する（CIBA と RAR）。</p>
+      <p class="rh-scope">いま。適合試験は受けていない。</p>
+    </article>
+    <article class="rh-card">
+      <h3>人や組織の代わりに動く AI エージェント</h3>
+      <p>どのソフトウェアか、誰の代わりか、何をしてよいかを示すエージェントに、狭く短いトークンを渡す。</p>
+      <p class="rh-scope">計画中。まだ実装していない。</p>
+    </article>
+  </div>
+  <p class="rh-actions"><a class="rh-button" href="use-cases/">ユースケースと仕様の一覧</a></p>
+</section>
+
 <section class="rh-section" aria-labelledby="principles">
   <h2 id="principles">設計方針</h2>
   <div class="rh-grid rh-grid--3">

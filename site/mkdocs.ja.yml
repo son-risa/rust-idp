@@ -59,6 +59,7 @@ markdown_extensions:
 
 nav:
   - ホーム: index.md
+  - ユースケース: use-cases.md
   - 使い始める: get-started.md
   - 拡張のしかた: extending.md
   - 検証: verification.md

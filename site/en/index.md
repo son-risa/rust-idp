@@ -23,6 +23,28 @@ description: rust-idp is an open-source OpenID Provider in Rust. It runs as a si
   </ul>
 </header>
 
+<section class="rh-section" aria-labelledby="usecases">
+  <h2 id="usecases">Use cases</h2>
+  <div class="rh-grid rh-grid--3">
+    <article class="rh-card">
+      <h3>Passkey sign-in for a business app</h3>
+      <p>Users of a multi-tenant business app sign in without passwords. Invitations and sign-up links go out through the app.</p>
+      <p class="rh-scope">Today. In production.</p>
+    </article>
+    <article class="rh-card">
+      <h3>Approve one action on another device</h3>
+      <p>Before a risky action, the user approves exactly that action with a passkey on their own device (CIBA with RAR).</p>
+      <p class="rh-scope">Today. Not conformance-tested.</p>
+    </article>
+    <article class="rh-card">
+      <h3>AI agents acting for people and organisations</h3>
+      <p>Agents that say which software they are, whom they act for, and what they may do, with narrow, short-lived tokens.</p>
+      <p class="rh-scope">Planned. Not implemented yet.</p>
+    </article>
+  </div>
+  <p class="rh-actions"><a class="rh-button" href="use-cases/">All use cases and specifications</a></p>
+</section>
+
 <section class="rh-section" aria-labelledby="principles">
   <h2 id="principles">Design principles</h2>
   <div class="rh-grid rh-grid--3">
