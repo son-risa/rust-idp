@@ -14,9 +14,9 @@ description: rust-idp がいま何に使われているか、それぞれがど�
 | ユースケース | 何が起きるか | 使う仕様 |
 |---|---|---|
 | 業務アプリにパスキーでログインする | 利用者が、合言葉なしで Web アプリにログインする（本番では、マルチテナントの業務アプリ AMATE） | OpenID Connect の認可コードフロー、PKCE、WebAuthn（パスキー） |
-| 招待で参加する | アプリが rust-idp に登録のリンクを頼み、自分のメールで送る。招かれた人は、リンクからパスキーを登録する | confidential client の認証（`client_secret_basic` または `private_key_jwt`） |
+| 招待で参加する | 管理者が許したアプリが rust-idp に登録のリンクを頼み、自分のメールで送る。招かれた人は、リンクからパスキーを登録する | confidential client の認証（`client_secret_basic` または `private_key_jwt`） |
 | 危ない操作の前に、別の端末で承認する | アプリが、ある 1 つの操作について承認を求める。利用者は自分の端末のパスキーで承認する。何を承認したかが、そのまま記録に残る | CIBA（poll モード）、Rich Authorization Requests（RAR） |
-| 価値の高い API を守る | client は、ログイン・要求の開始・API の呼び出しのたびに、自分の鍵を持っていることを示す。トークンを盗んだだけでは使えない | `private_key_jwt`、Pushed Authorization Requests（PAR）、PKCE、DPoP |
+| 価値の高い API を守る | client は、ログイン・要求の開始・API の呼び出しのたびに、自分の鍵を持っていることを示す。トークンを盗んだだけでは使えない。管理者が client に FAPI 2.0 の形を選んだときに限る。本番の client では、まだ使っていない | `private_key_jwt`、Pushed Authorization Requests（PAR）、PKCE、DPoP |
 | 管理者の決めた強さで client を登録する | client を、決まった手順（プロトコル）で登録する。どこまで厳しくするかは管理者が決め、client の側からは弱められない | Dynamic Client Registration（RFC 7591） |
 
 それぞれについて、何を形式検証しているかは[検証](verification.md)の頁にあります。かいつまむと次のとおりです。

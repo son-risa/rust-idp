@@ -14,9 +14,9 @@ When a specification is implemented, its row moves from Part 2 to Part 1. Pull r
 | Use case | What happens | Specifications |
 |---|---|---|
 | Sign in to a business app with a passkey | A user signs in to a web app (in production: AMATE, a multi-tenant business app) without a password. | OpenID Connect authorization code flow, PKCE, WebAuthn (passkeys) |
-| Join by invitation | The app asks rust-idp for a sign-up link and sends it in its own email. The invitee registers a passkey from the link. | Confidential client authentication (`client_secret_basic` or `private_key_jwt`) |
+| Join by invitation | An app the admin has allowed asks rust-idp for a sign-up link and sends it in its own email. The invitee registers a passkey from the link. | Confidential client authentication (`client_secret_basic` or `private_key_jwt`) |
 | Approve a risky action on another device | The app asks the user to approve one specific action. The user approves on their own device with a passkey. The approval names exactly what was approved. | CIBA (poll mode), Rich Authorization Requests (RAR) |
-| Protect a high-value API | A client must prove possession of its key when it signs in, starts a request and calls the API. A stolen token alone is not enough. | `private_key_jwt`, Pushed Authorization Requests (PAR), PKCE, DPoP |
+| Protect a high-value API | A client must prove possession of its key when it signs in, starts a request and calls the API. A stolen token alone is not enough. This applies when the admin gives the client the FAPI 2.0 profile; no production client uses it yet. | `private_key_jwt`, Pushed Authorization Requests (PAR), PKCE, DPoP |
 | Register clients under admin control | A client is registered through a protocol. The admin decides how strict it must be; the client cannot weaken that. | Dynamic Client Registration (RFC 7591) |
 
 What is formally verified for each of these is on [Verification](verification.md). In short: the passkey sign-in with PKCE, DPoP, `private_key_jwt` and CIBA with RAR have Tamarin models; PAR has none, and nothing here is certified.
