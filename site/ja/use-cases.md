@@ -21,8 +21,8 @@ description: rust-idp がいま何に使われているか、それぞれがど�
 
 それぞれについて、何を形式検証しているかは[検証](verification.md)の頁にあります。かいつまむと次のとおりです。
 
-- パスキーのログインと PKCE、DPoP、`private_key_jwt`、CIBA と RAR には、Tamarin のモデルがあります。
-- PAR には、モデルがありません。
+- パスキーのログインと PKCE、DPoP、`private_key_jwt`、CIBA と RAR は、普通の試験と、形式検証（Tamarin のモデル）の両方で確かめています。
+- PAR は普通の試験でだけ確かめていて、形式検証（Tamarin のモデル）には入っていません。
 - どれも認証（certification）は受けていません。
 
 ## 2 部　AI エージェントのユースケース（これから） {#agents}
