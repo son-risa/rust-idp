@@ -1,11 +1,30 @@
 use super::*;
 
+/// 承認の口に access token で来てよいのは、rust-idp 自身のアプリ（OP のデモの画面と、承認のアプリ）だけ。
+/// RP が利用者の token を持っていても、その利用者宛ての他の RP の要求の一覧・拒否、passkey の credential ID、
+/// 通知先の登録には触れさせない。
+const APPROVER_CLIENTS: &[&str] = &["demo-rp", "mobile-rp"];
+
+async fn approver_token(
+    p: &Provider,
+    headers: &HeaderMap,
+    method: &str,
+    path_suffix: &str,
+) -> Result<crate::model::AccessToken, Response> {
+    let at = authenticate_token(p, headers, method, path_suffix, None).await?;
+    if !APPROVER_CLIENTS.contains(&at.client_id.as_str()) {
+        tracing::warn!(event = "ciba_foreign_client_rejected", path = path_suffix);
+        return Err((StatusCode::FORBIDDEN, "forbidden").into_response());
+    }
+    Ok(at)
+}
+
 /// プロフィール画面のポーリング用: 自分宛の pending CIBA 依頼一覧（access token 認証）。
 pub(super) async fn ciba_pending_list(
     State(p): State<Arc<Provider>>,
     headers: HeaderMap,
 ) -> Response {
-    let at = match authenticate_token(&p, &headers, "GET", "/ciba/pending", None).await {
+    let at = match approver_token(&p, &headers, "GET", "/ciba/pending").await {
         Ok(at) => at,
         Err(r) => return r,
     };
@@ -39,7 +58,7 @@ pub(super) async fn ciba_pending_list(
 
 /// 自分宛の解決済み CIBA 履歴（承認/拒否/期限切れ）。access token 認証。新しい順・最大50件。
 pub(super) async fn ciba_history(State(p): State<Arc<Provider>>, headers: HeaderMap) -> Response {
-    let at = match authenticate_token(&p, &headers, "GET", "/ciba/history", None).await {
+    let at = match approver_token(&p, &headers, "GET", "/ciba/history").await {
         Ok(at) => at,
         Err(r) => return r,
     };
@@ -83,7 +102,7 @@ pub(super) async fn fcm_token_register(
     headers: HeaderMap,
     Json(req): Json<FcmTokenReq>,
 ) -> Response {
-    let at = match authenticate_token(&p, &headers, "POST", "/ciba/fcm-tokens", None).await {
+    let at = match approver_token(&p, &headers, "POST", "/ciba/fcm-tokens").await {
         Ok(at) => at,
         Err(r) => return r,
     };
@@ -432,7 +451,7 @@ setInterval(()=>{if(!window.__busy)location.reload();},4000);
 /// 知っているだけでは足りないようにする。名乗り方は approve の呼び手に合わせて 2 つ。
 /// - ブラウザ（`/ciba` の画面）: cookie（sid）。`__Host-sid` は兄弟のサブドメインからの POST にも付くので、
 ///   管理画面の門と同じく自分の origin から来た要求に限る。
-/// - アプリ（承認インボックス）: `/ciba/pending` と同じ access token。
+/// - アプリ（承認インボックス）: `/ciba/pending` と同じ access token（承認のアプリの client のものだけ）。
 ///
 /// 無い要求と他人の要求は、どちらも 404 にして見分けさせない。期限切れは呼び手が扱う。
 async fn own_request(
@@ -443,15 +462,9 @@ async fn own_request(
     action: &str,
 ) -> Result<crate::ciba::BackchannelAuthRequest, Response> {
     let account = if headers.contains_key(header::AUTHORIZATION) {
-        authenticate_token(
-            p,
-            headers,
-            "POST",
-            &format!("/ciba/{auth_req_id}/{action}"),
-            None,
-        )
-        .await?
-        .account_id
+        approver_token(p, headers, "POST", &format!("/ciba/{auth_req_id}/{action}"))
+            .await?
+            .account_id
     } else {
         match session_account(p, jar).await {
             Ok(Some(a)) if from_own_origin(headers, &p.origin()) => a,
@@ -825,11 +838,15 @@ mod tests {
 
     /// アプリの名乗り: access token（Bearer）。
     async fn app_of(p: &Provider, account: &str) -> (HeaderMap, CookieJar) {
-        let token = format!("at-{account}");
+        token_of(p, account, "mobile-rp").await
+    }
+
+    async fn token_of(p: &Provider, account: &str, client: &str) -> (HeaderMap, CookieJar) {
+        let token = format!("at-{client}-{account}");
         p.store
             .save_access_token(crate::model::AccessToken {
                 token: token.clone(),
-                client_id: "app".into(),
+                client_id: client.into(),
                 account_id: account.into(),
                 scope: "openid".into(),
                 jkt: None,
@@ -931,6 +948,57 @@ mod tests {
             ciba.get(other.as_str()).await.unwrap().unwrap().status,
             CibaStatus::Denied
         );
+    }
+
+    /// 利用者の access token を持つ RP でも、承認の口には入れない。入れるのは承認のアプリ（demo-rp・mobile-rp）の token だけ。
+    #[tokio::test]
+    async fn an_rps_token_for_the_user_cannot_use_the_approval_endpoints() {
+        let owner = SigningKey::generate();
+        let (p, ciba, id) = seeded(&owner).await;
+        let rp = || token_of(&p, ACCOUNT, "rp");
+
+        assert_eq!(reject_as(&p, &id, rp().await).await, StatusCode::FORBIDDEN);
+        assert_eq!(
+            options_as(&p, &id, rp().await).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            ciba_pending_list(State(p.clone()), rp().await.0)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            ciba_history(State(p.clone()), rp().await.0).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            fcm_token_register(
+                State(p.clone()),
+                rp().await.0,
+                Json(FcmTokenReq {
+                    token: "rp-device".into(),
+                    platform: None,
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            ciba.get(&id).await.unwrap().unwrap().status,
+            CibaStatus::Pending
+        );
+
+        for app in ["demo-rp", "mobile-rp"] {
+            assert_eq!(
+                ciba_pending_list(State(p.clone()), token_of(&p, ACCOUNT, app).await.0)
+                    .await
+                    .status(),
+                StatusCode::OK,
+                "{app}"
+            );
+        }
     }
 
     /// Firestore が文書 ID として断る形の auth_req_id は、引かずに 404 にする（引けば 400 が 500 になる）。
