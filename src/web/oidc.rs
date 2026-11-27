@@ -1060,6 +1060,25 @@ pub(super) async fn par(
     } else {
         body
     };
+    // client の資格情報は認可要求の値ではない。保存した要求（authorize の raw_query にも写る）に
+    // 残すと、記録から漏れた assertion を jti の記録が消えた後に使い直せる。
+    let body = match serde_urlencoded::from_str::<Vec<(String, String)>>(&body) {
+        Ok(pairs) => serde_urlencoded::to_string(
+            pairs
+                .into_iter()
+                .filter(|(k, _)| {
+                    !matches!(
+                        k.as_str(),
+                        "client_assertion" | "client_assertion_type" | "client_secret"
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default(),
+        Err(_) => {
+            return OAuthError::InvalidRequest("invalid PAR body".into()).into_response();
+        }
+    };
     match crate::par::create(fs, &client.client_id, &body).await {
         Ok(ru) => (
             StatusCode::CREATED,
@@ -2392,6 +2411,52 @@ mod tests {
         token_form.extend(auth.map(|(k, v)| (k.to_string(), v.to_string())));
         let r = token(State(p.clone()), HeaderMap::new(), Form(token_form)).await;
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// /par は client の資格情報を、預かる要求に残さない（authorize の raw_query にも写らない）。
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn par_does_not_store_the_client_assertion() {
+        use crate::client_auth::tests::{ISS, assertion, good_claims, pkjwt_client};
+        use p256::elliptic_curve::Generate;
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let key = p256::ecdsa::SigningKey::generate();
+        let p = Arc::new(
+            Provider::new(ISS)
+                .with_firestore(fs.clone())
+                .with_client(pkjwt_client("rp", &key, "k1")),
+        );
+        let a = assertion(&key, "k1", "ES256", good_claims("rp", "stored"));
+        let body = serde_urlencoded::to_string([
+            ("client_id", "rp"),
+            ("response_type", "code"),
+            ("scope", "openid profile"),
+            (
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            ),
+            ("client_assertion", a.as_str()),
+        ])
+        .unwrap();
+        let r = par(State(p.clone()), HeaderMap::new(), body).await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let v: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(r.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let ru = v["request_uri"].as_str().unwrap();
+        let (_, stored) = crate::par::peek(&*fs, ru).await.unwrap().unwrap();
+        let stored: HashMap<String, String> = serde_urlencoded::from_str(&stored).unwrap();
+        assert!(!stored.contains_key("client_assertion"), "{stored:?}");
+        assert!(!stored.contains_key("client_assertion_type"), "{stored:?}");
+        assert_eq!(
+            stored.get("scope").map(String::as_str),
+            Some("openid profile")
+        );
+        assert_eq!(stored.get("client_id").map(String::as_str), Some("rp"));
     }
 
     /// フロントチャネルが client_id を省いても、預けた値が別の client を名指していれば断る。
