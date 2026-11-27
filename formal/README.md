@@ -669,13 +669,13 @@ private_key_jwt の変種:
 | P-ENVSEP | ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない | Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事 |
 | P-ATSTORE | Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`） | RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける |
 | P-CPRIVKEY | client の秘密鍵は client の保管庫から**漏れない**（漏れればなりすませる: `limit_key_leak_impersonation`） | RP の鍵の保管。rust-idp は公開鍵（jwks / jwks_uri）だけを持つ |
-| P-AJTI | client_assertion の jti は、/par と token endpoint をまたいで **1 回だけ**受ける（記録から漏れた assertion を使い回させない） | `PrivateKeyJwt::authenticate` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ |
+| P-AJTI | client_assertion の jti は、/par と token endpoint をまたいで **1 回だけ**受ける（記録から漏れた assertion を使い回させない） | /par と token endpoint は同じ `authenticate_client` を通り、Provider に 1 つだけ登録した `PrivateKeyJwt` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ |
 | P-NOLEGACYSECRET | private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない） | `ClientSecretBasic::authenticate` は、登録された `token_endpoint_auth_method` が `client_secret_basic`（空は RFC 7591 §2 の既定として同じ扱い）でなければ `invalid_client` で断る。private_key_jwt に移した client にハッシュが残っていても、Basic では通らない |
 | P-REQUIREPAR | この client の認可要求は **PAR を経たものだけ**を受ける（モデルには、フロントチャネルに中身を並べる道が無い） | client の旗 `require_par=true` のとき、authorize は request_uri を経ない要求を `invalid_request` で断る。旗を立てるのは client の登録（本番の client の記録） |
 | P-PARSTORED | request_uri で来た要求は、**預けた値だけ**で進む（フロントチャネルに並べた値で上書きしない） | authorize は request_uri が PAR の urn なら、`par::peek` で読んだ保存済みの値で要求を置き換える |
-| P-PARBIND | request_uri は**預けた client だけ**が使える（フロントチャネルの client_id が違えば断る） | authorize が、PAR を作った client と authorize の client_id を比べる |
+| P-PARBIND | request_uri は**預けた client だけ**が使える（フロントチャネルの client_id が違っても、省かれても） | authorize が、PAR を作った client を、フロントチャネルの client_id と、預けた値から引いた code の宛先の client の両方と比べる。/par も、本体の client_id が認証した client と違えば断る |
 | P-PARONCE | request_uri は code を出すときに**原子的に 1 回だけ**消費される（`PARReq` が linear） | `issue_code` が `par::consume`（`take_doc`）で消し、消せなければ code を出さない |
-| P-PARFRESH | request_uri は**推測できない**（モデルでは Fr） | `par::create` が OS の乱数源から 32 byte を取る。期限は 60 秒 |
+| P-PARFRESH | request_uri は**推測できない**（モデルでは Fr） | `par::create` が OS の乱数源から 32 byte を取る。期限は 60 秒で、authorize に来た時点（`par::peek`）で見る |
 <!-- /premises -->
 
 ### 限界
