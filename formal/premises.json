@@ -336,7 +336,102 @@
     "id": "P-NOLEGACYSECRET",
     "model": "composition_code_bearer_pkjwt.spthy",
     "premise": "private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない）",
-    "assurance": "**いまは担保が無い**。`ClientSecretBasic::authenticate` は登録された `token_endpoint_auth_method` を見ず、`client_secret` のハッシュが残っていれば Basic で通す。private_key_jwt に移した client にハッシュが残ると、漏れた秘密でなりすませる。本番の主な RP の移行の後で、登録された方式だけを受けるように直す予定",
-    "outside": "守るコードがまだ無い（本番の主な RP の移行の後で直す予定）"
+    "assurance": "`ClientSecretBasic::authenticate` は、登録された `token_endpoint_auth_method` が `client_secret_basic`（空は RFC 7591 §2 の既定として同じ扱い）でなければ `invalid_client` で断る。private_key_jwt に移した client にハッシュが残っていても、Basic では通らない",
+    "guard": ["src/client_auth.rs: ClientSecretBasic::authenticate"],
+    "tests": ["web::oidc::tests::a_private_key_jwt_client_with_a_stored_secret_is_still_refused_with_client_secret_basic"]
+  },
+  {
+    "id": "P-VERIFIER",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない）",
+    "assurance": "`CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる）",
+    "guard": ["src/auth_checks.rs: CheckPkce::check", "src/auth_checks.rs: pkce_method_is_s256", "src/grants.rs: AuthorizationCodeGrant::handle"],
+    "tests": ["auth_checks::tests::check_pkce_rules", "grants::tests::authorization_code::contract::redeems_what_was_issued_to_the_client", "grants::tests::authorization_code::contract::refuses_any_altered_value"],
+    "kani": ["pkce_method_no_downgrade"]
+  },
+  {
+    "id": "P-TLS",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "/par・token endpoint・RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵）",
+    "assurance": "TLS（Cloud Run のドメインのマッピング）。HSTS",
+    "outside": "TLS は配備の基盤（Cloud Run）が担う"
+  },
+  {
+    "id": "P-ENVSEP",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない",
+    "assurance": "Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事",
+    "outside": "配備の構成（KMS の鍵の IAM と、サービスごとの実行 SA）で決まり、試験の形をしていない"
+  },
+  {
+    "id": "P-ATSTORE",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`）",
+    "assurance": "RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける",
+    "outside": "token の保管は RP の側の実装で、rust-idp の試験で示せない"
+  },
+  {
+    "id": "P-CPRIVKEY",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "client の秘密鍵は client の保管庫から**漏れない**（漏れればなりすませる: `limit_key_leak_impersonation`）",
+    "assurance": "RP の鍵の保管。rust-idp は公開鍵（jwks / jwks_uri）だけを持つ",
+    "outside": "鍵は RP が持つ。rust-idp は公開鍵だけを持つ"
+  },
+  {
+    "id": "P-AJTI",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "client_assertion の jti は、/par と token endpoint をまたいで **1 回だけ**受ける（記録から漏れた assertion を使い回させない）",
+    "assurance": "/par と token endpoint は同じ `authenticate_client` を通り、Provider に 1 つだけ登録した `PrivateKeyJwt` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ",
+    "guard": ["src/client_auth.rs: PrivateKeyJwt::authenticate", "src/nonce.rs: NonceStore::claim", "src/web/mod.rs: authenticate_client"],
+    "tests": ["web::oidc::tests::a_client_assertion_used_at_par_is_refused_at_the_token_endpoint", "client_auth::tests::pkjwt_rejects_jti_replay", "client_auth::tests::pkjwt_rejects_alg_aud_and_expiry", "client_auth::tests::pkjwt_rejects_iss_sub_mismatch", "client_auth::tests::private_key_jwt::contract::refuses_forged_material"],
+    "kani": ["jti_ttl_is_bounded", "exp_in_window_spec"]
+  },
+  {
+    "id": "P-NOLEGACYSECRET",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない）",
+    "assurance": "`ClientSecretBasic::authenticate` は、登録された `token_endpoint_auth_method` が `client_secret_basic`（空は RFC 7591 §2 の既定として同じ扱い）でなければ `invalid_client` で断る。private_key_jwt に移した client にハッシュが残っていても、Basic では通らない",
+    "guard": ["src/client_auth.rs: ClientSecretBasic::authenticate"],
+    "tests": ["web::oidc::tests::a_private_key_jwt_client_with_a_stored_secret_is_still_refused_with_client_secret_basic"]
+  },
+  {
+    "id": "P-REQUIREPAR",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "この client の認可要求は **PAR を経たものだけ**を受ける（モデルには、フロントチャネルに中身を並べる道が無い）",
+    "assurance": "client の旗 `require_par=true` のとき、authorize は request_uri を経ない要求を `invalid_request` で断る。旗を立てるのは client の登録（本番の client の記録）",
+    "guard": ["src/web/oidc.rs: authorize"],
+    "tests": ["web::oidc::tests::a_client_that_requires_par_is_refused_without_a_pushed_request"]
+  },
+  {
+    "id": "P-PARSTORED",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "request_uri で来た要求は、**預けた値だけ**で進む（フロントチャネルに並べた値で上書きしない）",
+    "assurance": "authorize は request_uri が PAR の urn なら、`par::peek` で読んだ保存済みの値で要求を置き換える",
+    "guard": ["src/web/oidc.rs: authorize", "src/par.rs: peek"],
+    "tests": ["web::oidc::tests::a_par_request_proceeds_with_the_pushed_values_only"]
+  },
+  {
+    "id": "P-PARBIND",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "request_uri は**預けた client だけ**が使える（フロントチャネルの client_id が違っても、省かれても）",
+    "assurance": "authorize が、PAR を作った client を、フロントチャネルの client_id と、預けた値から引いた code の宛先の client の両方と比べる。/par も、本体の client_id が認証した client と違えば断る",
+    "guard": ["src/web/oidc.rs: authorize", "src/web/oidc.rs: par"],
+    "tests": ["web::oidc::tests::a_request_uri_cannot_be_used_by_another_client", "web::oidc::tests::a_request_uri_naming_another_client_is_refused_without_a_front_client_id"]
+  },
+  {
+    "id": "P-PARONCE",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "request_uri は code を出すときに**原子的に 1 回だけ**消費される（`PARReq` が linear）",
+    "assurance": "`issue_code` が `par::consume`（`take_doc`）で消し、消せなければ code を出さない",
+    "guard": ["src/web/oidc.rs: issue_code", "src/par.rs: consume"],
+    "tests": ["web::oidc::tests::a_par_request_uri_yields_a_code_only_once"]
+  },
+  {
+    "id": "P-PARFRESH",
+    "model": "composition_code_par_pkjwt.spthy",
+    "premise": "request_uri は**推測できない**（モデルでは Fr）",
+    "assurance": "`par::create` が OS の乱数源から 32 byte を取る。期限は 60 秒で、authorize に来た時点（`par::peek`）で見る",
+    "guard": ["src/par.rs: create"],
+    "outside": "乱数源（getrandom = OS の CSPRNG）の性質で、試験で示せる形をしていない"
   }
 ]

@@ -248,7 +248,7 @@ impl ClientAuthMethod for PrivateKeyJwt {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::es256::b64url_encode;
     use crate::model::JwkPub;
@@ -256,7 +256,7 @@ mod tests {
     use p256::ecdsa::{Signature, SigningKey};
     use p256::elliptic_curve::Generate;
 
-    const ISS: &str = "https://op.example.com";
+    pub(crate) const ISS: &str = "https://op.example.com";
 
     fn provider() -> Provider {
         Provider::new(ISS)
@@ -326,7 +326,7 @@ mod tests {
         );
     }
 
-    fn pkjwt_client(id: &str, key: &SigningKey, kid: &str) -> Client {
+    pub(crate) fn pkjwt_client(id: &str, key: &SigningKey, kid: &str) -> Client {
         let pt = key.verifying_key().to_sec1_point(false);
         Client {
             client_id: id.into(),
@@ -349,7 +349,12 @@ mod tests {
         }
     }
 
-    fn assertion(key: &SigningKey, kid: &str, alg: &str, claims: serde_json::Value) -> String {
+    pub(crate) fn assertion(
+        key: &SigningKey,
+        kid: &str,
+        alg: &str,
+        claims: serde_json::Value,
+    ) -> String {
         let header = serde_json::json!({ "alg": alg, "typ": "JWT", "kid": kid });
         let h = b64url_encode(serde_json::to_vec(&header).unwrap());
         let pl = b64url_encode(serde_json::to_vec(&claims).unwrap());
@@ -358,7 +363,7 @@ mod tests {
         format!("{signing_input}.{}", b64url_encode(sig.to_bytes()))
     }
 
-    fn good_claims(id: &str, jti: &str) -> serde_json::Value {
+    pub(crate) fn good_claims(id: &str, jti: &str) -> serde_json::Value {
         let exp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

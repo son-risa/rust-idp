@@ -180,6 +180,17 @@ pub(super) async fn authorize(
         Ok(r) => r,
         Err(e) => return app_error(lang, e.code(), &e.description()),
     };
+    // フロントチャネルが client_id を省いた場合も含め、code の宛先は PAR を作った client に限る。
+    // /par の client_id の一致の確認や、本体の欄の重なりの読み方に依らないよう、ここでも比べる。
+    if let Some(creator) = &par_creator
+        && &req.client.client_id != creator
+    {
+        return app_error(
+            lang,
+            "invalid_request_uri",
+            "request_uri was issued to a different client",
+        );
+    }
     // Phase 1: 可換なポリシーチェック群。以降のエラーは検証済み redirect へ返せる。
     if let Err(e) = run_checks(&p, &req).await {
         return authorize_error(&p, &req, e);
@@ -2295,6 +2306,164 @@ mod tests {
         assert!(
             !second.contains("code=") && second.contains("error=invalid_request"),
             "{second}"
+        );
+    }
+
+    /// PAR の要求は、預けた値だけで進む。フロントチャネルに並べた値（PKCE の challenge、scope）で上書きできない。
+    /// formal/composition_code_par_pkjwt.spthy の par_integrity が置く前提（P-PARSTORED）。
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn a_par_request_proceeds_with_the_pushed_values_only() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_firestore(fs.clone())
+                .with_client(client_with_post_logout(&[])),
+        );
+        let pushed = "client_id=dcr-x&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code\
+                      &scope=openid&code_challenge=PUSHED&code_challenge_method=S256";
+        let ru = crate::par::create(&*fs, "dcr-x", pushed).await.unwrap();
+        let q = serde_urlencoded::to_string([
+            ("client_id", "dcr-x"),
+            ("request_uri", ru.0.as_str()),
+            ("scope", "openid admin"),
+            ("code_challenge", "FRONT"),
+        ])
+        .unwrap();
+        let r = authorize(
+            State(p.clone()),
+            HeaderMap::new(),
+            CookieJar::default(),
+            RawQuery(Some(q)),
+        )
+        .await;
+        let location = r.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let uid = location
+            .split("/login/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
+            .unwrap_or_else(|| panic!("{location}"));
+        let i = p.store.get_interaction(uid).await.unwrap();
+        assert_eq!(i.raw_query, pushed);
+        assert_eq!(i.request_uri.as_deref(), Some(ru.0.as_str()));
+    }
+
+    /// /par で使った client_assertion は、token endpoint で使い直せない（jti の記録は口をまたいで 1 つ）。
+    /// formal/composition_code_par_pkjwt.spthy が置く前提（P-AJTI）。
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn a_client_assertion_used_at_par_is_refused_at_the_token_endpoint() {
+        use crate::client_auth::tests::{ISS, assertion, good_claims, pkjwt_client};
+        use p256::elliptic_curve::Generate;
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let key = p256::ecdsa::SigningKey::generate();
+        let p = Arc::new(
+            Provider::new(ISS)
+                .with_firestore(fs.clone())
+                .with_client(pkjwt_client("rp", &key, "k1")),
+        );
+        let a = assertion(&key, "k1", "ES256", good_claims("rp", "once"));
+        let auth = [
+            (
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            ),
+            ("client_assertion", a.as_str()),
+        ];
+        let mut par_body = vec![("client_id", "rp"), ("response_type", "code")];
+        par_body.extend(auth);
+        let r = par(
+            State(p.clone()),
+            HeaderMap::new(),
+            serde_urlencoded::to_string(&par_body).unwrap(),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let mut token_form: HashMap<String, String> = [
+            ("grant_type", "authorization_code"),
+            ("code", "unused"),
+            ("client_id", "rp"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        token_form.extend(auth.map(|(k, v)| (k.to_string(), v.to_string())));
+        let r = token(State(p.clone()), HeaderMap::new(), Form(token_form)).await;
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// フロントチャネルが client_id を省いても、預けた値が別の client を名指していれば断る。
+    /// formal/composition_code_par_pkjwt.spthy が置く前提（P-PARBIND）。
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn a_request_uri_naming_another_client_is_refused_without_a_front_client_id() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_firestore(fs.clone())
+                .with_client(client_with_post_logout(&[])),
+        );
+        let pushed = "client_id=dcr-x&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code\
+                      &scope=openid&code_challenge=PUSHED&code_challenge_method=S256";
+        let ru = crate::par::create(&*fs, "dcr-attacker", pushed)
+            .await
+            .unwrap();
+        let q = serde_urlencoded::to_string([("request_uri", ru.0.as_str())]).unwrap();
+        let r = authorize(
+            State(p.clone()),
+            HeaderMap::new(),
+            CookieJar::default(),
+            RawQuery(Some(q)),
+        )
+        .await;
+        assert!(r.headers().get(header::LOCATION).is_none());
+        let body = String::from_utf8(
+            axum::body::to_bytes(r.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(body.contains("invalid_request_uri"), "{body}");
+    }
+
+    /// require_par の client は、request_uri を経ない要求で先へ進めない（PAR を外した要求に code を出さない）。
+    /// formal/composition_code_par_pkjwt.spthy が置く前提（P-REQUIREPAR）。
+    #[tokio::test]
+    async fn a_client_that_requires_par_is_refused_without_a_pushed_request() {
+        let c = crate::model::Client {
+            require_par: true,
+            ..client_with_post_logout(&[])
+        };
+        let p = Arc::new(Provider::new("https://op.example").with_client(c));
+        let q = serde_urlencoded::to_string([
+            ("client_id", "dcr-x"),
+            ("redirect_uri", "https://rp.example.com/cb"),
+            ("response_type", "code"),
+            ("scope", "openid"),
+            (
+                "code_challenge",
+                "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            ),
+            ("code_challenge_method", "S256"),
+        ])
+        .unwrap();
+        let r = authorize(
+            State(p),
+            HeaderMap::new(),
+            CookieJar::default(),
+            RawQuery(Some(q)),
+        )
+        .await;
+        let location = r.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert!(
+            location.starts_with("https://rp.example.com/cb?")
+                && location.contains("error=invalid_request")
+                && !location.contains("code="),
+            "{location}"
         );
     }
 

@@ -104,7 +104,7 @@ description: rust-idp is an open-source OpenID Provider in Rust. It runs as a si
     </article>
     <article class="rh-card rh-feature">
       <h3>Formal verification</h3>
-      <p>13 Tamarin models, plus 19 variants with a defence removed. 9 Kani harnesses.</p>
+      <p>14 Tamarin models, plus 20 variants with a defence removed. 9 Kani harnesses.</p>
       <p class="rh-scope">Scope: the models are hand-written. This is not a proof of the whole code base.</p>
       <p class="rh-src"><a href="https://github.com/son-risa/rust-idp/blob/main/formal/expected.tsv">formal/expected.tsv</a> <a href="https://github.com/son-risa/rust-idp/blob/main/formal/kani-harnesses.txt">formal/kani-harnesses.txt</a></p>
     </article>
@@ -229,10 +229,10 @@ description: rust-idp is an open-source OpenID Provider in Rust. It runs as a si
     <table>
       <thead><tr><th>Method</th><th>Covers</th><th>Does not cover</th></tr></thead>
       <tbody>
-        <tr><td>Tamarin</td><td>13 protocol models; 19 variants with one defence removed must be falsified</td><td>Whether the code matches the models</td></tr>
+        <tr><td>Tamarin</td><td>14 protocol models; 20 variants with one defence removed must be falsified</td><td>Whether the code matches the models</td></tr>
         <tr><td>Kani</td><td>9 harnesses (byte parsing, PKCE downgrade, exact redirect match, and others)</td><td>The rest of the code</td></tr>
         <tr><td>Tests and conformance tools</td><td>Externally visible behaviour</td><td>Client shapes the conformance tools were not run against</td></tr>
-        <tr><td>Premise ledger</td><td>44 premises; 25 name a guarding test, 19 cannot be tested and say why</td><td>Whether the untestable premises hold in operation</td></tr>
+        <tr><td>Premise ledger</td><td>56 premises; 33 name a guarding test, 23 cannot be tested and say why</td><td>Whether the untestable premises hold in operation</td></tr>
       </tbody>
     </table>
   </div>

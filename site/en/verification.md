@@ -6,7 +6,7 @@ rust-idp states each security claim as "promise Z holds against attacker X under
 
 | Method | Covers | Does not cover |
 |---|---|---|
-| Tamarin | 13 protocol models. 19 variants, each with one defence removed, must be falsified | Whether the code matches the models |
+| Tamarin | 14 protocol models. 20 variants, each with one defence removed, must be falsified | Whether the code matches the models |
 | Kani | 9 harnesses over parts of the code | The rest of the code |
 | Tests | Externally visible behaviour, and every premise that can be tested | Premises that cannot be tested |
 | Conformance tools | FIDO Alliance server tests on the `/fido` surface; OpenID Foundation FAPI 2.0 tests on the FAPI 2.0 client shape | Other client shapes. Production sign-in is a separate code path from `/fido` |
@@ -15,7 +15,7 @@ The Tamarin results are compared with an expected table on every pull request th
 
 ## Premises
 
-The premise ledger has 44 entries. 25 name the test that guards them. 19 cannot be tested and say why, for example "TLS to the token endpoint authenticates the server".
+The premise ledger has 56 entries. 33 name the test that guards them. 23 cannot be tested and say why, for example "TLS to the token endpoint authenticates the server".
 
 ## By client profile
 
@@ -24,8 +24,10 @@ What a verification result means depends on the client's profile. The full table
 | Client profile | Auth / PAR / token | Tamarin models | Conformance-tested | In production |
 |---|---|---|---|---|
 | `Public` | none / no / DPoP | code + PKCE, DPoP, ID token, composition #8 | No | Test RPs only |
-| `ConfidentialSecret` | client_secret_basic / no / Bearer | composition #11, including what cannot hold (a stolen Bearer token is usable) | No | Main RP |
-| `ConfidentialKey` (FAPI 2.0 shape) | private_key_jwt / yes / DPoP | #1, #2, #5, composition #6. PAR is in no model | FAPI 2.0 test plan; records not yet published | None |
+| `ConfidentialSecret` | client_secret_basic / no / Bearer | composition #11, including what cannot hold (a stolen Bearer token is usable) | No | Development RP only |
+| private_key_jwt, flags set per client | private_key_jwt / no / Bearer | composition #11 | No | Main RP |
+| private_key_jwt + PAR, flags set per client | private_key_jwt / yes / Bearer | composition #12, which also shows that without PAR the request can be altered | No | None yet; the main RP moves here |
+| `ConfidentialKey` (FAPI 2.0 shape) | private_key_jwt / yes / DPoP | #1, #2, #5, composition #6. PAR is covered by #12, without DPoP | FAPI 2.0 test plan; records not yet published | None |
 | CIBA | client_secret_basic / — / Bearer | #3 (binding, single use) | No | One RP |
 
 ## Not certified
