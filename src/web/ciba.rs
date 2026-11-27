@@ -990,6 +990,21 @@ mod tests {
             CibaStatus::Pending
         );
 
+        // Authorization が在れば、値が壊れていても cookie の道には落ちない（宛先の利用者の sid を持っていても）。
+        for bad in ["Basic cnA6cnA=", "Bearer", "bogus"] {
+            let (mut h, jar) = browser_of(&p, ACCOUNT, Some("https://idp.example")).await;
+            h.insert(header::AUTHORIZATION, bad.parse().unwrap());
+            assert_eq!(
+                reject_as(&p, &id, (h, jar)).await,
+                StatusCode::UNAUTHORIZED,
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            ciba.get(&id).await.unwrap().unwrap().status,
+            CibaStatus::Pending
+        );
+
         for app in ["demo-rp", "mobile-rp"] {
             assert_eq!(
                 ciba_pending_list(State(p.clone()), token_of(&p, ACCOUNT, app).await.0)
@@ -998,7 +1013,25 @@ mod tests {
                 StatusCode::OK,
                 "{app}"
             );
+            assert_eq!(
+                ciba_history(State(p.clone()), token_of(&p, ACCOUNT, app).await.0)
+                    .await
+                    .status(),
+                StatusCode::OK,
+                "{app}"
+            );
+            assert_eq!(
+                options_as(&p, &id, token_of(&p, ACCOUNT, app).await)
+                    .await
+                    .status(),
+                StatusCode::OK,
+                "{app}"
+            );
         }
+        assert_eq!(
+            reject_as(&p, &id, token_of(&p, ACCOUNT, "demo-rp").await).await,
+            StatusCode::NO_CONTENT
+        );
     }
 
     /// Firestore が文書 ID として断る形の auth_req_id は、引かずに 404 にする（引けば 400 が 500 になる）。
