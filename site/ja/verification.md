@@ -6,7 +6,7 @@ rust-idp は、安全性の主張を「約束 Z は、攻撃者 X に対し、�
 
 | 確かめ方 | 対象 | 見ないもの |
 |---|---|---|
-| Tamarin | プロトコルのモデル 13 本。守りを 1 つ外した 19 本は、破れることを確かめる | コードとモデルの一致 |
+| Tamarin | プロトコルのモデル 14 本。守りを 1 つ外した 20 本は、破れることを確かめる | コードとモデルの一致 |
 | Kani | コードの一部に当てたハーネス 9 本 | 残りのコード |
 | 試験 | 外から見える振る舞いと、試験にできる前提 | 試験にできない前提 |
 | 適合試験の道具 | FIDO Alliance のサーバの試験は `/fido` の面に、OpenID Foundation の FAPI 2.0 の試験は FAPI 2.0 の形の client に当てる | ほかの client の形。本番のログインは `/fido` とは別の経路 |
@@ -15,7 +15,7 @@ rust-idp は、安全性の主張を「約束 Z は、攻撃者 X に対し、�
 
 ## 前提
 
-前提の台帳は 44 件。25 件は、守る試験の名前を持つ。19 件は試験にできず、その理由を書く（例：「token endpoint への通信路はサーバ認証の TLS」）。
+前提の台帳は 56 件。33 件は、守る試験の名前を持つ。23 件は試験にできず、その理由を書く（例：「token endpoint への通信路はサーバ認証の TLS」）。
 
 ## client の profile ごと
 
@@ -24,8 +24,10 @@ rust-idp は、安全性の主張を「約束 Z は、攻撃者 X に対し、�
 | client の profile | 認証 / PAR / token | Tamarin のモデル | 適合試験 | 本番 |
 |---|---|---|---|---|
 | `Public` | none / なし / DPoP | 認可コード + PKCE、DPoP、ID token、合成 #8 | 無い | 試し用の RP だけ |
-| `ConfidentialSecret` | client_secret_basic / なし / Bearer | 合成 #11。示せない性質（盗まれた Bearer の token は使える）も載せる | 無い | 主な RP |
-| `ConfidentialKey`（FAPI 2.0 の形） | private_key_jwt / 必須 / DPoP | #1、#2、#5、合成 #6。PAR はどのモデルにも無い | FAPI 2.0 の試験計画。記録は未公開 | 0 件 |
+| `ConfidentialSecret` | client_secret_basic / なし / Bearer | 合成 #11。示せない性質（盗まれた Bearer の token は使える）も載せる | 無い | 開発用の RP だけ |
+| 旗を個別に決めた private_key_jwt | private_key_jwt / なし / Bearer | 合成 #11 | 無い | 主な RP |
+| 旗を個別に決めた private_key_jwt + PAR | private_key_jwt / 必須 / Bearer | 合成 #12（PAR を外すと、要求の中身を差し替えられることも示す） | 無い | 0 件。主な RP が移る先 |
+| `ConfidentialKey`（FAPI 2.0 の形） | private_key_jwt / 必須 / DPoP | #1、#2、#5、合成 #6。PAR は #12 が DPoP 抜きの形で見る | FAPI 2.0 の試験計画。記録は未公開 | 0 件 |
 | CIBA | client_secret_basic / — / Bearer | #3（束縛、単回） | 無い | RP 1 件 |
 
 ## 認定は取っていない

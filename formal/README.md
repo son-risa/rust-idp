@@ -566,9 +566,9 @@ PKCE が個別に効く場面がはっきりする。
 → **2 つの client 認証の差は、送った値が後から漏れた場合に出る**。`client_secret_basic` は毎回同じ秘密を送るので、
 記録（前段のログ、RP の側の記録）に残れば秘密が漏れたのと同じになる。`private_key_jwt` は jti を 1 回だけ受けるので、
 記録から漏れた assertion では通れない（`client_auth_sound` の条件に記録の漏れが無い）。保管庫から鍵が漏れた場合は、どちらも同じく破れる。
-ただしこれは、private_key_jwt の client が Basic では通らないこと（P-NOLEGACYSECRET）を前提にしている。いまのコードの
-`ClientSecretBasic::authenticate`（`src/client_auth.rs`）は登録された方式を見ないので、移した client に秘密のハッシュが残っていれば、
-漏れた秘密で Basic のまま通る。実装は本番の主な RP の移行の後で直す予定。
+ただしこれは、private_key_jwt の client が Basic では通らないこと（P-NOLEGACYSECRET）を前提にしている。
+`ClientSecretBasic::authenticate`（`src/client_auth.rs`）は、登録された方式が `client_secret_basic` でなければ断るので、
+移した client に秘密のハッシュが残っていても Basic では通らない。
 → **Bearer は盗まれれば使える**。これは仕様どおりで、防ぐのは DPoP（#6）の役目。この形では、access token の寿命（900 秒）と、
 RP の側の保管が守りになる。
 
@@ -597,7 +597,7 @@ private_key_jwt の変種:
 | P-ATSTORE | Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`） | RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける |
 | P-CPRIVKEY | client の秘密鍵は client の保管庫から**漏れない**（漏れればなりすませる: `limit_key_leak_impersonation`） | RP の鍵の保管。rust-idp は公開鍵（jwks / jwks_uri）だけを持つ |
 | P-AJTI | client_assertion の jti は **1 回だけ**受ける（記録から漏れた assertion を使い回させない） | `PrivateKeyJwt::authenticate` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ |
-| P-NOLEGACYSECRET | private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない） | **いまは担保が無い**。`ClientSecretBasic::authenticate` は登録された `token_endpoint_auth_method` を見ず、`client_secret` のハッシュが残っていれば Basic で通す。private_key_jwt に移した client にハッシュが残ると、漏れた秘密でなりすませる。本番の主な RP の移行の後で、登録された方式だけを受けるように直す予定 |
+| P-NOLEGACYSECRET | private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない） | `ClientSecretBasic::authenticate` は、登録された `token_endpoint_auth_method` が `client_secret_basic`（空は RFC 7591 §2 の既定として同じ扱い）でなければ `invalid_client` で断る。private_key_jwt に移した client にハッシュが残っていても、Basic では通らない |
 <!-- /premises -->
 
 - （攻撃者モデル）フロントチャネルを完全に支配し、認可コードを横取りできる（担保: —。redirect_uri の完全一致は効いていない場合として置く）
@@ -615,6 +615,74 @@ private_key_jwt の変種:
 - refresh token は外（ローテーションと系列の失効は #10 が見る）。
 - private_key_jwt の変種（PAR・DPoP なし）は、いまの DCR の profile には無い組み合わせ（ConfidentialKey は PAR と DPoP を必ず付ける）。
   移すときは、profile を足すか、client の記録の旗を個別に決める。
+
+---
+
+## モデル #12: 合成（認可コード + PKCE + PAR + private_key_jwt + Bearer。AMATE の形）
+
+#11 の private_key_jwt の変種に、PAR（RFC 9126）の段を足したモデル。AMATE は private_key_jwt と PAR を使い、DPoP は使わないので、
+この形を書いた。client の旗は `token_endpoint_auth_method=private_key_jwt`、`require_par=true`、`require_pkce=true`、`dpop_bound=false`。
+
+| file | 違う所 |
+|---|---|
+| `composition_code_par_pkjwt.spthy` | client は認可要求の中身（PKCE の challenge、nonce、scope）を、private_key_jwt で名乗って /par に TLS の中で預ける。フロントチャネルには client_id と request_uri だけが通る |
+| `composition_par_NEG_no_par.spthy` | NEG 版。PAR を外し、中身をフロントチャネルに並べる（AS はフロントチャネルで届いた中身で code を出す） |
+
+#11 との違い:
+- 要求の中身の代表として scope を置く。#11 には、フロントチャネルでの中身の差し替えを見る値が無い（PKCE と nonce は client の
+  手元の値と照らすので、差し替えは注入として #11 の `no_injection` が見る）。
+- /par は token endpoint と同じ client_assertion で名乗る。jti は 2 つの口をまたいで 1 回だけ受ける（`OnceJti`）。
+- request_uri は、code を出すときに 1 回だけ消費する（`PARReq` が linear）。フロントチャネルの client_id は、預けた client と同じでなければならない。
+- 記録の漏れ（`Leak_TokenRequestLog`）は置かない。jti の単回が記録の漏れを止めることは #11 が示す。
+
+### 示す性質（lemma。すべて verified）
+| lemma | 主張 | 条件 |
+|---|---|---|
+| `executable` | 正直な流れ（/par → 同意 → code → token → RS）が最後まで通る | 漏れなし |
+| `par_integrity` | AS が code を出したなら、その要求の中身（challenge、nonce、scope）は、client C 自身が /par に預けたもの | C の秘密鍵の漏れを除く |
+| `request_integrity` | 正直な client が要求 (v, n, s) で受け取った token は、AS がこの client に、この要求の challenge・nonce・scope で出した code に対するもの。応答の scope も預けた scope と同じ | 条件なし |
+| `request_uri_single_use` | request_uri は 1 回だけ code になる | 条件なし |
+| `intercepted_code_unusable` | 正直な client の要求から出た code を横取りしても、その code の token を攻撃者は知らない | Bearer token の漏れだけを除く |
+| `consent_agreement` | その token の利用者 U は、まさにこの client が預けた要求（の request_uri）に同意している | U の passkey の漏れを除く |
+| `client_auth_sound` | AS が /par と token endpoint で C として認めた assertion は、C 自身がその口のために作ったもの | C の秘密鍵の漏れを除く |
+| `resource_secrecy` | 利用者のリソースは攻撃者に漏れない | 利用者の passkey、client の秘密鍵、Bearer token のどれも漏れない限り |
+
+### 検証結果（Tamarin 1.12.0 / maude 3.5.1, 2026-11-27 実測。手元の Apple Silicon で 1 つずつ）
+| モデル | 結果 | 時間 |
+|---|---|---|
+| `composition_code_par_pkjwt.spthy` | 示す性質 8 つ（`executable` を含む）が、すべて **verified** | 約 60 秒 |
+| `composition_par_NEG_no_par.spthy` | `par_integrity`（5 steps）と `request_integrity`（12 steps）が **falsified**。`executable` は verified | 約 8 秒 |
+
+→ **PAR は、要求の中身をフロントチャネルの改ざんから守る**。NEG 版では、攻撃者がフロントチャネルの scope を差し替え、利用者が
+それに同意すると、client は預けたつもりと違う scope の token を受け取る（`request_integrity` が破れる）。PKCE と private_key_jwt は
+これを止めない（challenge は client の手元の値のままなので、償還は通る）。
+→ ただし PAR が効くのは、その client が PAR を経ない要求を受けない場合だけ（P-REQUIREPAR）。`require_par` を立てないと、
+攻撃者はフロントチャネルに中身を並べた要求を作れ、NEG 版と同じになる。PAR に移す client は、`require_par=true` にする。
+
+### 表に出た前提 → rust-idp の担保
+
+<!-- premises: composition_code_par_pkjwt.spthy -->
+| ID | 前提（抽象） | rust-idp の担保 |
+|---|---|---|
+| P-VERIFIER | PKCE の verifier は**秘密**で、token endpoint が `h(verifier)=challenge` を検査（横取りした code を償還させず、別の要求の code を差し込ませない） | `CheckPkce`（S256 のみ受理）。client の旗 `require_pkce=true`（ConfidentialSecret の profile は必ず立てる） |
+| P-TLS | /par・token endpoint・RS への通信路は**サーバ認証の TLS**（モデルでは AS の公開鍵への暗号化と、client が作る応答の鍵） | TLS（Cloud Run のドメインのマッピング）。HSTS |
+| P-ENVSEP | ID token の署名鍵は**本番の版だけ**が使える（staging と本番で鍵を分ける）。モデルは署名鍵の漏れの規則を置かない | Cloud KMS の鍵（`KMS_ES256_KEY`・`KMS_RS256_KEY`）と実行 SA。staging の鍵と SA を分けるのは配備の仕事 |
+| P-ATSTORE | Bearer の access token は client の側で**漏れない**（漏れれば使える: `limit_bearer_theft_usable`） | RP の実装（token を記録やブラウザへ出さない）。rust-idp の側は寿命を 900 秒にし、失効（`/revoke`）を受ける |
+| P-CPRIVKEY | client の秘密鍵は client の保管庫から**漏れない**（漏れればなりすませる: `limit_key_leak_impersonation`） | RP の鍵の保管。rust-idp は公開鍵（jwks / jwks_uri）だけを持つ |
+| P-AJTI | client_assertion の jti は、/par と token endpoint をまたいで **1 回だけ**受ける（記録から漏れた assertion を使い回させない） | `PrivateKeyJwt::authenticate` が `NonceStore::claim` で jti を exp まで覚える。aud は issuer の文字列だけ |
+| P-NOLEGACYSECRET | private_key_jwt の client は **client_secret_basic では通らない**（モデルの client は秘密を持たない） | `ClientSecretBasic::authenticate` は、登録された `token_endpoint_auth_method` が `client_secret_basic`（空は RFC 7591 §2 の既定として同じ扱い）でなければ `invalid_client` で断る。private_key_jwt に移した client にハッシュが残っていても、Basic では通らない |
+| P-REQUIREPAR | この client の認可要求は **PAR を経たものだけ**を受ける（モデルには、フロントチャネルに中身を並べる道が無い） | client の旗 `require_par=true` のとき、authorize は request_uri を経ない要求を `invalid_request` で断る。旗を立てるのは client の登録（本番の client の記録） |
+| P-PARSTORED | request_uri で来た要求は、**預けた値だけ**で進む（フロントチャネルに並べた値で上書きしない） | authorize は request_uri が PAR の urn なら、`par::peek` で読んだ保存済みの値で要求を置き換える |
+| P-PARBIND | request_uri は**預けた client だけ**が使える（フロントチャネルの client_id が違えば断る） | authorize が、PAR を作った client と authorize の client_id を比べる |
+| P-PARONCE | request_uri は code を出すときに**原子的に 1 回だけ**消費される（`PARReq` が linear） | `issue_code` が `par::consume`（`take_doc`）で消し、消せなければ code を出さない |
+| P-PARFRESH | request_uri は**推測できない**（モデルでは Fr） | `par::create` が OS の乱数源から 32 byte を取る。期限は 60 秒 |
+<!-- /premises -->
+
+### 限界
+- request_uri の期限（60 秒）、assertion の exp、token の 900 秒は記号モデルの外。
+- 同意は、モデルでは要求ごとの passkey の署名で表す（#11 と同じ）。同意の画面に scope をどう見せるかは外。
+- JAR（PAR の中の request object）と、PAR での DPoP の束縛（`dpop_jkt`）は外。AMATE の形は使わない。
+- refresh token は外（#10 が見る）。
 
 ---
 

@@ -2298,6 +2298,80 @@ mod tests {
         );
     }
 
+    /// PAR の要求は、預けた値だけで進む。フロントチャネルに並べた値（PKCE の challenge、scope）で上書きできない。
+    /// formal/composition_code_par_pkjwt.spthy の par_integrity が置く前提（P-PARSTORED）。
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn a_par_request_proceeds_with_the_pushed_values_only() {
+        let (host, _state) = crate::firestore::fake_firestore::spawn().await;
+        let fs = Arc::new(crate::firestore::Firestore::new_for_test("proj", host));
+        let p = Arc::new(
+            Provider::new("https://op.example")
+                .with_firestore(fs.clone())
+                .with_client(client_with_post_logout(&[])),
+        );
+        let pushed = "client_id=dcr-x&redirect_uri=https%3A%2F%2Frp.example.com%2Fcb&response_type=code\
+                      &scope=openid&code_challenge=PUSHED&code_challenge_method=S256";
+        let ru = crate::par::create(&*fs, "dcr-x", pushed).await.unwrap();
+        let q = serde_urlencoded::to_string([
+            ("client_id", "dcr-x"),
+            ("request_uri", ru.0.as_str()),
+            ("scope", "openid admin"),
+            ("code_challenge", "FRONT"),
+        ])
+        .unwrap();
+        let r = authorize(
+            State(p.clone()),
+            HeaderMap::new(),
+            CookieJar::default(),
+            RawQuery(Some(q)),
+        )
+        .await;
+        let location = r.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        let uid = location
+            .split("/login/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
+            .unwrap_or_else(|| panic!("{location}"));
+        let i = p.store.get_interaction(uid).await.unwrap();
+        assert_eq!(i.raw_query, pushed);
+        assert_eq!(i.request_uri.as_deref(), Some(ru.0.as_str()));
+    }
+
+    /// require_par の client は、request_uri を経ない要求で先へ進めない（PAR を外した要求に code を出さない）。
+    /// formal/composition_code_par_pkjwt.spthy が置く前提（P-REQUIREPAR）。
+    #[tokio::test]
+    async fn a_client_that_requires_par_is_refused_without_a_pushed_request() {
+        let c = crate::model::Client {
+            require_par: true,
+            ..client_with_post_logout(&[])
+        };
+        let p = Arc::new(Provider::new("https://op.example").with_client(c));
+        let q = serde_urlencoded::to_string([
+            ("client_id", "dcr-x"),
+            ("redirect_uri", "https://rp.example.com/cb"),
+            ("response_type", "code"),
+            ("scope", "openid"),
+            ("code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"),
+            ("code_challenge_method", "S256"),
+        ])
+        .unwrap();
+        let r = authorize(
+            State(p),
+            HeaderMap::new(),
+            CookieJar::default(),
+            RawQuery(Some(q)),
+        )
+        .await;
+        let location = r.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert!(
+            location.starts_with("https://rp.example.com/cb?")
+                && location.contains("error=invalid_request")
+                && !location.contains("code="),
+            "{location}"
+        );
+    }
+
     /// A2: ログインで UV を求めていないので、満たせる acr を名乗らない。
     #[tokio::test]
     async fn discovery_does_not_advertise_acr_values() {

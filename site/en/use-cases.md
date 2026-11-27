@@ -19,7 +19,7 @@ When a specification is implemented, its row moves from Part 2 to Part 1. Pull r
 | Protect a high-value API | A client must prove possession of its key when it signs in, starts a request and calls the API. A stolen token alone is not enough. This applies when the admin gives the client the FAPI 2.0 profile; no production client uses it yet. | `private_key_jwt`, Pushed Authorization Requests (PAR), PKCE, DPoP |
 | Register clients under admin control | A client is registered through a protocol. The admin decides how strict it must be; the client cannot weaken that. | Dynamic Client Registration (RFC 7591) |
 
-What is formally verified for each of these is on [Verification](verification.md). In short: the passkey sign-in with PKCE, DPoP, `private_key_jwt` and CIBA with RAR are checked both by ordinary tests and by formal verification (Tamarin models). PAR is covered by ordinary tests only; it is not in any of the Tamarin models. Nothing here is certified.
+What is formally verified for each of these is on [Verification](verification.md). In short: the passkey sign-in with PKCE, DPoP, `private_key_jwt`, PAR, and CIBA with RAR are checked both by ordinary tests and by formal verification (Tamarin models). The PAR model covers the shape without DPoP (`private_key_jwt`, PKCE and PAR); there is no model of PAR combined with DPoP. Nothing here is certified.
 
 ## Part 2. Use cases for AI agents (planned) {#agents}
 

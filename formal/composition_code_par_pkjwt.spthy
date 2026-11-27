@@ -1,0 +1,219 @@
+theory CompositionCodeParPkjwt
+begin
+
+/*
+  モデル #12: 認可コード + PKCE + PAR + private_key_jwt + Bearer（AMATE が使う形）
+  token_endpoint_auth_method=private_key_jwt、require_pkce=true、require_par=true、dpop_bound=false。
+  #11b（composition_code_bearer_pkjwt）に PAR（RFC 9126）の段を足したもの。違いは次のとおり。
+    - client は認可要求の中身（PKCE の challenge、nonce、scope）を、private_key_jwt で名乗って
+      /par に TLS の中で預け、request_uri を受け取る（web::oidc::par、par::create）。
+    - フロントチャネルには client_id と request_uri だけが通る。AS は預かった中身だけを使い、
+      フロントチャネルの client_id が預けた client と違えば断る（web::oidc::authorize、par::peek）。
+    - request_uri は code を出すときに 1 回だけ消費される（par::consume。PARReq を linear にする）。
+    - 要求の中身の代表として scope $s を置く。#11b には中身の改ざんを見る scope が無い。
+  request_uri の期限（60 秒）と推測できなさ（32 byte の乱数 = Fr）は、記号モデルでは Fr で表す。
+
+  攻撃者: Dolev-Yao。フロントチャネル（authreq、同意、code の redirect）は全部見えて、差し替えられる。
+  認可コードは横取りできる（#11b と同じ最悪の場合）。利用者は、AS が見せた client C 宛ての要求なら何にでも同意する。
+
+  漏れの規則:
+    Reveal_ClientKey     client の保管庫から秘密鍵が漏れる        → P-CPRIVKEY
+    Leak_AT              client が持つ Bearer token が漏れる       → P-ATSTORE
+    Reveal_User          利用者の passkey が漏れる                 → （#4 の前提）
+
+  PAR を外すと何が起きるかは composition_par_NEG_no_par.spthy（request_integrity と par_integrity が falsified）。
+
+  実行: tamarin-prover --prove --auto-sources formal/composition_code_par_pkjwt.spthy
+*/
+
+builtins: hashing, signing, asymmetric-encryption, symmetric-encryption
+
+rule Setup_AS:
+    [ Fr(~tls), Fr(~sk) ]
+  --[ OnlyOnce('AS') ]->
+    [ !ASTls(~tls), !ASTlsPub(pk(~tls)), !OPSig(~sk), !OPSigPub(pk(~sk))
+    , Out(pk(~tls)), Out(pk(~sk)) ]
+
+rule Setup_User:
+    [ Fr(~uk), Fr(~res) ]
+  --[ OnlyOnce(<'user', $U>), Protected($U, ~res) ]->
+    [ !UserKey($U, ~uk), !UserPub($U, pk(~uk)), !Resource($U, ~res), Out(pk(~uk)) ]
+
+rule Reveal_User:
+    [ !UserKey(U, ~uk) ] --[ RevealUser(U) ]-> [ Out(~uk) ]
+
+rule Register_Client:
+    [ Fr(~ck) ]
+  --[ OnlyOnce(<'client', $C>) ]->
+    [ !ClientKey($C, ~ck), !ClientPub($C, pk(~ck)), Out(pk(~ck)) ]
+
+rule Reveal_ClientKey:
+    [ !ClientKey(C, ~ck) ] --[ RevealClient(C) ]-> [ Out(~ck) ]
+
+/* ---- client: 認可要求の中身を /par に預ける。TLS の中で client_assertion（新しい jti）と、
+   PKCE の challenge、nonce、scope を送る。応答は ~k0 で返る ---- */
+rule C_Push:
+    let ac = <'assert', $C, 'iss', ~jti>
+    in
+    [ Fr(~v), Fr(~n), Fr(~k0), Fr(~jti), !ClientKey($C, ~ck), !ASTlsPub(pkAS) ]
+  --[ ClientStart($C, ~v, ~n, $s), ClientPush($C, h(~v), ~n, $s), ClientAssert($C, ~jti, 'par') ]->
+    [ St_C0($C, ~v, ~n, $s, ~k0)
+    , Out(aenc(<'parreq', $C, <ac, sign(ac, ~ck)>, h(~v), ~n, $s, ~k0>, pkAS)) ]
+
+/* ---- AS: /par。client を private_key_jwt で確かめ、中身を預かり、request_uri を返す ---- */
+rule AS_Par:
+    let ac = <'assert', C, 'iss', jti>
+    in
+    [ !ASTls(~tls), !ClientPub(C, cpk)
+    , In(aenc(<'parreq', C, <ac, asig>, ch, n, s, k0>, pk(~tls)))
+    , Fr(~ru) ]
+  --[ Eq(verify(asig, ac, cpk), true)
+    , OnceJti(C, jti)
+    , AuthedAssertion(C, jti, 'par')
+    , ParStored(C, ~ru, ch, n, s) ]->
+    [ PARReq(~ru, C, ch, n, s), Out(senc(<'ru', ~ru>, k0)) ]
+
+/* ---- client: request_uri を受け取り、フロントチャネルに client_id と request_uri だけを出す ---- */
+rule C_AuthReq:
+    [ St_C0(C, v, n, s, k0), In(senc(<'ru', ru>, k0)) ]
+  -->
+    [ St_C1(C, v, n, s), Out(<'authreq', C, ru>) ]
+
+/* ---- 利用者: client C 宛ての要求に passkey で同意する ---- */
+rule U_Consent:
+    [ !UserKey(U, ~uk), In(<'authreq', C, ru>) ]
+  --[ UserConsent(U, C, ru) ]->
+    [ Out(<'consent', U, C, ru, sign(<'consent', U, C, ru>, ~uk)>) ]
+
+/* ---- AS: 同意を確かめ、預かった中身で code を出す。request_uri はここで消費する ----
+   フロントチャネルの C と預けた client が同じであること（PARReq の C と照らす）。 */
+rule AS_IssueCode:
+    [ In(<'consent', U, C, ru, sig>), !UserPub(U, upk), PARReq(ru, C, ch, n, s), Fr(~code) ]
+  --[ Eq(verify(sig, <'consent', U, C, ru>, upk), true)
+    , ConsumeRU(ru)
+    , IssueCode(C, U, ~code, ch, n, s) ]->
+    [ AS_Code(C, U, ~code, ch, n, s), Out(~code) ]
+
+rule C_Redeem:
+    let ac = <'assert', C, 'iss', ~jti>
+    in
+    [ St_C1(C, ~v, ~n, s), !ClientKey(C, ~ck), !ASTlsPub(pkAS), In(code), Fr(~k), Fr(~jti) ]
+  --[ ClientRedeem(C, code, ~v), ClientAssert(C, ~jti, code) ]->
+    [ St_C2(C, ~v, ~n, s, ~k), Out(aenc(<'tokenreq', C, <ac, sign(ac, ~ck)>, code, ~v, ~k>, pkAS)) ]
+
+/* ---- AS: token endpoint。code の単回消費 + private_key_jwt + PKCE。scope は code から引き継ぐ ---- */
+rule AS_IssueToken:
+    let idc = <'idt', 'iss', C, U, n, h(~at)>
+        idt = <idc, sign(idc, ~sk)>
+        ac  = <'assert', C, 'iss', jti>
+    in
+    [ AS_Code(C, U, code, ch, n, s)
+    , !ASTls(~tls), !ClientPub(C, cpk), !OPSig(~sk)
+    , In(aenc(<'tokenreq', C, <ac, asig>, code, v, k>, pk(~tls)))
+    , Fr(~at)
+    ]
+  --[ Eq(verify(asig, ac, cpk), true)
+    , OnceJti(C, jti)
+    , Eq(h(v), ch)
+    , AuthedAssertion(C, jti, code)
+    , IssueToken(C, U, code, ~at, idt, s)
+    ]->
+    [ !ATUser(~at, U), Out(senc(<~at, s, idt>, k)) ]
+
+/* ---- client: 応答を受け取り、ID token の署名・aud・nonce を確かめる ---- */
+rule C_GetTokens:
+    let idc = <'idt', 'iss', C, U, n, h(at)>
+    in
+    [ St_C2(C, v, n, s, k), !OPSigPub(opk), In(senc(<at, s2, <idc, isig>>, k)) ]
+  --[ Eq(verify(isig, idc, opk), true)
+    , ClientAccept(C, v, n, s, U, at, s2) ]->
+    [ !ClientAT(C, U, at) ]
+
+rule Leak_AT:
+    [ !ClientAT(C, U, at) ] --[ RevealAT(at) ]-> [ Out(at) ]
+
+rule C_UseAT:
+    [ !ClientAT(C, U, at), !ASTlsPub(pkAS), Fr(~k2) ]
+  --[ ClientUse(C, at) ]->
+    [ Out(aenc(<'rsreq', at, ~k2>, pkAS)) ]
+
+rule RS_Accept:
+    [ !ATUser(at, U), !Resource(U, ~res), !ASTls(~tls), In(aenc(<'rsreq', at, k2>, pk(~tls))) ]
+  --[ RS_Grant(at, U) ]->
+    [ Out(senc(~res, k2)) ]
+
+restriction Equality:
+    "All x y #i. Eq(x, y) @ #i ==> x = y"
+restriction OnceJti:
+    "All c j #i #k. OnceJti(c, j) @ #i & OnceJti(c, j) @ #k ==> #i = #k"
+restriction OnlyOnce:
+    "All x #i #j. OnlyOnce(x) @ #i & OnlyOnce(x) @ #j ==> #i = #j"
+
+/* ======================== 示す性質 ======================== */
+
+lemma executable:
+  exists-trace
+    "Ex C v n s U at s2 code #a #b #g.
+        ClientAccept(C, v, n, s, U, at, s2) @ #a
+      & ClientRedeem(C, code, v) @ #b
+      & RS_Grant(at, U) @ #g
+      & not (Ex X #r. RevealClient(X) @ #r)
+      & not (Ex X #r. RevealUser(X) @ #r)
+      & not (Ex X #r. RevealAT(X) @ #r)"
+
+/* PAR の要: AS が code を出したなら、その要求の中身（challenge、nonce、scope）は、
+   client C 自身が /par に預けたもの。フロントチャネルで中身を差し替えられない。
+   C の秘密鍵が漏れた場合は除く（攻撃者が C として好きな中身を預けられる）。 */
+lemma par_integrity:
+    "All C U code ch n s #c.
+        IssueCode(C, U, code, ch, n, s) @ #c
+      ==> (Ex #p. ClientPush(C, ch, n, s) @ #p & #p < #c)
+        | (Ex #r. RevealClient(C) @ #r)"
+
+/* 正直な client がこの要求（v, n, s）で受け取った token は、AS がこの client に、この要求の
+   challenge・nonce・scope で出した code に対するもの。応答の scope も預けた scope と同じ。
+   どの漏れの下でも成り立つ（条件が無い）。 */
+lemma request_integrity:
+    "All C v n s U at s2 #a.
+        ClientAccept(C, v, n, s, U, at, s2) @ #a
+      ==> s2 = s
+        & (Ex code idt #c #t.
+            IssueCode(C, U, code, h(v), n, s) @ #c
+          & IssueToken(C, U, code, at, idt, s) @ #t
+          & #c < #t & #t < #a)"
+
+/* request_uri は 1 回だけ code になる。 */
+lemma request_uri_single_use:
+    "All ru #i #j. ConsumeRU(ru) @ #i & ConsumeRU(ru) @ #j ==> #i = #j"
+
+/* PKCE: 正直な client の要求から出た code を横取りしても、token は得られない。 */
+lemma intercepted_code_unusable:
+    "All C v n s U code at idt #s #c #t.
+        ClientStart(C, v, n, s) @ #s
+      & IssueCode(C, U, code, h(v), n, s) @ #c
+      & IssueToken(C, U, code, at, idt, s) @ #t
+      ==> (not (Ex #k. K(at) @ #k)) | (Ex #r. RevealAT(at) @ #r)"
+
+/* 利用者との一致: その token の利用者 U は、まさにこの client が預けた要求に同意している。 */
+lemma consent_agreement:
+    "All C v n s U at s2 #a.
+        ClientAccept(C, v, n, s, U, at, s2) @ #a
+      ==> (Ex ru #c #q. UserConsent(U, C, ru) @ #c & ParStored(C, ru, h(v), n, s) @ #q & #c < #a)
+        | (Ex #r. RevealUser(U) @ #r)"
+
+/* client のなりすまし: AS が /par と token endpoint で C として認めた assertion は、C 自身がその口のために作ったもの。 */
+lemma client_auth_sound:
+    "All C jti x #i.
+        AuthedAssertion(C, jti, x) @ #i
+      ==> (Ex #r. ClientAssert(C, jti, x) @ #r & #r < #i)
+        | (Ex #r. RevealClient(C) @ #r)"
+
+lemma resource_secrecy:
+    "All U res #p.
+        Protected(U, res) @ #p
+      & not (Ex #r. RevealUser(U) @ #r)
+      & not (Ex X #r. RevealClient(X) @ #r)
+      & not (Ex X #r. RevealAT(X) @ #r)
+      ==> not (Ex #k. K(res) @ #k)"
+
+end

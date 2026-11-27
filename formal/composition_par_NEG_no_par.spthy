@@ -1,0 +1,142 @@
+theory CompositionParNegNoPar
+begin
+
+/*
+  NEG 版: composition_code_par_pkjwt.spthy から PAR を外したもの。
+  client は認可要求の中身（challenge、nonce、scope）をフロントチャネルにそのまま出し、AS はフロントチャネルで
+  届いた中身で code を出す。それ以外（private_key_jwt、PKCE、Bearer）は本体と同じ。
+  期待: par_integrity と request_integrity が falsified（攻撃者がフロントチャネルで scope などを差し替え、
+  利用者がそれに同意すると、client は預けたつもりの中身と違う token を受け取る）。executable は verified。
+
+  実行: tamarin-prover --prove --auto-sources formal/composition_par_NEG_no_par.spthy
+*/
+
+builtins: hashing, signing, asymmetric-encryption, symmetric-encryption
+
+rule Setup_AS:
+    [ Fr(~tls), Fr(~sk) ]
+  --[ OnlyOnce('AS') ]->
+    [ !ASTls(~tls), !ASTlsPub(pk(~tls)), !OPSig(~sk), !OPSigPub(pk(~sk))
+    , Out(pk(~tls)), Out(pk(~sk)) ]
+
+rule Setup_User:
+    [ Fr(~uk), Fr(~res) ]
+  --[ OnlyOnce(<'user', $U>), Protected($U, ~res) ]->
+    [ !UserKey($U, ~uk), !UserPub($U, pk(~uk)), !Resource($U, ~res), Out(pk(~uk)) ]
+
+rule Reveal_User:
+    [ !UserKey(U, ~uk) ] --[ RevealUser(U) ]-> [ Out(~uk) ]
+
+rule Register_Client:
+    [ Fr(~ck) ]
+  --[ OnlyOnce(<'client', $C>) ]->
+    [ !ClientKey($C, ~ck), !ClientPub($C, pk(~ck)), Out(pk(~ck)) ]
+
+rule Reveal_ClientKey:
+    [ !ClientKey(C, ~ck) ] --[ RevealClient(C) ]-> [ Out(~ck) ]
+
+/* ---- client: 認可要求の中身をフロントチャネルにそのまま出す（PAR なし）---- */
+rule C_AuthReq:
+    [ Fr(~v), Fr(~n), !ClientKey($C, ~ck) ]
+  --[ ClientStart($C, ~v, ~n, $s), ClientPush($C, h(~v), ~n, $s) ]->
+    [ St_C1($C, ~v, ~n, $s), Out(<'authreq', $C, h(~v), ~n, $s>) ]
+
+/* ---- 利用者: client C 宛ての要求に passkey で同意する（届いた中身のまま）---- */
+rule U_Consent:
+    [ !UserKey(U, ~uk), In(<'authreq', C, ch, n, s>) ]
+  --[ UserConsent(U, C, <ch, n, s>) ]->
+    [ Out(<'consent', U, C, ch, n, s, sign(<'consent', U, C, ch, n, s>, ~uk)>) ]
+
+/* ---- AS: 同意を確かめ、フロントチャネルで届いた中身で code を出す ---- */
+rule AS_IssueCode:
+    [ In(<'consent', U, C, ch, n, s, sig>), !UserPub(U, upk), Fr(~code) ]
+  --[ Eq(verify(sig, <'consent', U, C, ch, n, s>, upk), true)
+    , ConsumeRU(~code)
+    , IssueCode(C, U, ~code, ch, n, s) ]->
+    [ AS_Code(C, U, ~code, ch, n, s), Out(~code) ]
+
+rule C_Redeem:
+    let ac = <'assert', C, 'iss', ~jti>
+    in
+    [ St_C1(C, ~v, ~n, s), !ClientKey(C, ~ck), !ASTlsPub(pkAS), In(code), Fr(~k), Fr(~jti) ]
+  --[ ClientRedeem(C, code, ~v), ClientAssert(C, ~jti, code) ]->
+    [ St_C2(C, ~v, ~n, s, ~k), Out(aenc(<'tokenreq', C, <ac, sign(ac, ~ck)>, code, ~v, ~k>, pkAS)) ]
+
+/* ---- AS: token endpoint。code の単回消費 + private_key_jwt + PKCE。scope は code から引き継ぐ ---- */
+rule AS_IssueToken:
+    let idc = <'idt', 'iss', C, U, n, h(~at)>
+        idt = <idc, sign(idc, ~sk)>
+        ac  = <'assert', C, 'iss', jti>
+    in
+    [ AS_Code(C, U, code, ch, n, s)
+    , !ASTls(~tls), !ClientPub(C, cpk), !OPSig(~sk)
+    , In(aenc(<'tokenreq', C, <ac, asig>, code, v, k>, pk(~tls)))
+    , Fr(~at)
+    ]
+  --[ Eq(verify(asig, ac, cpk), true)
+    , OnceJti(C, jti)
+    , Eq(h(v), ch)
+    , AuthedAssertion(C, jti, code)
+    , IssueToken(C, U, code, ~at, idt, s)
+    ]->
+    [ !ATUser(~at, U), Out(senc(<~at, s, idt>, k)) ]
+
+/* ---- client: 応答を受け取り、ID token の署名・aud・nonce を確かめる ---- */
+rule C_GetTokens:
+    let idc = <'idt', 'iss', C, U, n, h(at)>
+    in
+    [ St_C2(C, v, n, s, k), !OPSigPub(opk), In(senc(<at, s2, <idc, isig>>, k)) ]
+  --[ Eq(verify(isig, idc, opk), true)
+    , ClientAccept(C, v, n, s, U, at, s2) ]->
+    [ !ClientAT(C, U, at) ]
+
+rule Leak_AT:
+    [ !ClientAT(C, U, at) ] --[ RevealAT(at) ]-> [ Out(at) ]
+
+rule C_UseAT:
+    [ !ClientAT(C, U, at), !ASTlsPub(pkAS), Fr(~k2) ]
+  --[ ClientUse(C, at) ]->
+    [ Out(aenc(<'rsreq', at, ~k2>, pkAS)) ]
+
+rule RS_Accept:
+    [ !ATUser(at, U), !Resource(U, ~res), !ASTls(~tls), In(aenc(<'rsreq', at, k2>, pk(~tls))) ]
+  --[ RS_Grant(at, U) ]->
+    [ Out(senc(~res, k2)) ]
+
+restriction Equality:
+    "All x y #i. Eq(x, y) @ #i ==> x = y"
+restriction OnceJti:
+    "All c j #i #k. OnceJti(c, j) @ #i & OnceJti(c, j) @ #k ==> #i = #k"
+restriction OnlyOnce:
+    "All x #i #j. OnlyOnce(x) @ #i & OnlyOnce(x) @ #j ==> #i = #j"
+
+/* ======================== 示す性質 ======================== */
+
+lemma executable:
+  exists-trace
+    "Ex C v n s U at s2 code #a #b #g.
+        ClientAccept(C, v, n, s, U, at, s2) @ #a
+      & ClientRedeem(C, code, v) @ #b
+      & RS_Grant(at, U) @ #g
+      & not (Ex X #r. RevealClient(X) @ #r)
+      & not (Ex X #r. RevealUser(X) @ #r)
+      & not (Ex X #r. RevealAT(X) @ #r)"
+
+/* 本体と同じ文。PAR が無いと、攻撃者がフロントチャネルで作った要求に code が出る（falsified を期待）。 */
+lemma par_integrity:
+    "All C U code ch n s #c.
+        IssueCode(C, U, code, ch, n, s) @ #c
+      ==> (Ex #p. ClientPush(C, ch, n, s) @ #p & #p < #c)
+        | (Ex #r. RevealClient(C) @ #r)"
+
+/* 本体と同じ文。scope を差し替えられ、client は預けたつもりと違う scope の token を受け取る（falsified を期待）。 */
+lemma request_integrity:
+    "All C v n s U at s2 #a.
+        ClientAccept(C, v, n, s, U, at, s2) @ #a
+      ==> s2 = s
+        & (Ex code idt #c #t.
+            IssueCode(C, U, code, h(v), n, s) @ #c
+          & IssueToken(C, U, code, at, idt, s) @ #t
+          & #c < #t & #t < #a)"
+
+end
