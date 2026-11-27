@@ -109,7 +109,7 @@ async fn came_from(p: &Provider, jar: &CookieJar, uid: &str) -> crate::registrat
 }
 
 /// interaction の元の要求の client_id。利用者の入力でなく、/authorize が受けた要求から取る
-/// （PAR でも client_id はクエリに在る）。
+/// （PAR では預けた本体。authorize は client_id の無い要求を断るので、interaction には必ず在る）。
 fn requested_client_id(i: &crate::model::Interaction) -> String {
     serde_urlencoded::from_str::<HashMap<String, String>>(&i.raw_query)
         .ok()

@@ -2437,6 +2437,8 @@ mod tests {
                 "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
             ),
             ("client_assertion", a.as_str()),
+            ("client_secret", "leaked"),
+            ("dpop_jkt", "jkt-value"),
         ])
         .unwrap();
         let r = par(State(p.clone()), HeaderMap::new(), body).await;
@@ -2452,11 +2454,34 @@ mod tests {
         let stored: HashMap<String, String> = serde_urlencoded::from_str(&stored).unwrap();
         assert!(!stored.contains_key("client_assertion"), "{stored:?}");
         assert!(!stored.contains_key("client_assertion_type"), "{stored:?}");
+        assert!(!stored.contains_key("client_secret"), "{stored:?}");
+        assert_eq!(
+            stored.get("dpop_jkt").map(String::as_str),
+            Some("jkt-value")
+        );
         assert_eq!(
             stored.get("scope").map(String::as_str),
             Some("openid profile")
         );
         assert_eq!(stored.get("client_id").map(String::as_str), Some("rp"));
+    }
+
+    /// /par の書き直し（読んで資格情報を除き、符号化し直す）は、崩れた本体でも断らず、
+    /// authorize が読む値を変えない。
+    #[test]
+    fn par_body_rewrite_keeps_what_authorize_reads() {
+        for raw in [
+            "",
+            "scope=openid%20profile&client_id=rp",
+            "scope=openid+profile&&prompt&=x&a=b=c&nonce=%FF",
+            "state=%E3%81%82&redirect_uri=https%3A%2F%2Frp.example%2Fcb%3Fa%3D1",
+        ] {
+            let pairs: Vec<(String, String)> = serde_urlencoded::from_str(raw).unwrap();
+            let rewritten = serde_urlencoded::to_string(pairs).unwrap();
+            let before: AuthParams = serde_urlencoded::from_str(raw).unwrap();
+            let after: AuthParams = serde_urlencoded::from_str(&rewritten).unwrap();
+            assert_eq!(format!("{before:?}"), format!("{after:?}"), "{raw}");
+        }
     }
 
     /// フロントチャネルが client_id を省いても、預けた値が別の client を名指していれば断る。
