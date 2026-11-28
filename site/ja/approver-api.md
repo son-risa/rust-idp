@@ -32,7 +32,7 @@ CIBA Core が決めているのは、client が要求を始めて結果を待つ
 
     `--scope ""` で外せます。このコマンドが変えるのは `scope` だけです。登録のほかの項目は変えません。
 
-許されていない client が `ciba:approve` を求めると、`invalid_scope`（"ciba:approve is not allowed for this client"）が返ります。`/authorize`・PAR・`/backchannel-authentication` のどれでも同じです。
+許されていない client が `ciba:approve` を求めると、`invalid_scope`（"ciba:approve is not allowed for this client"）が返ります。`/authorize` と `/backchannel-authentication` で同じです。PAR では、`POST /par` は要求を受け付けます。誤りは、`/authorize` がその `request_uri` を使うときに返ります。
 
 ### 利用者をログインさせる
 
@@ -78,11 +78,13 @@ access token を受ける口に共通の誤り:
 
 | 状態 | 本文 | 意味 |
 |---|---|---|
-| 401 | `access token required` | `Authorization` の header が無い |
-| 401 | `invalid token` | token が無いか、期限が切れている |
+| 401 | `access token required` | `Authorization` の header が無いか、`Bearer <token>`・`DPoP <token>` の形でない |
+| 401 | `invalid token` | rust-idp が知らない token か、期限が切れている |
 | 401 | `DPoP scheme required`・`DPoP proof required`・`DPoP jkt mismatch`・`DPoP: …` | token が DPoP に束縛されているのに、鍵を持つことを示していない |
 | 403 | `forbidden` | token に `ciba:approve` が無いか、client の登録がもう許していない |
 | 503 | `temporarily unavailable` | token の保存先を読めなかった。token は捨てずに、やり直す |
+
+文書の保存先（Firestore）が無い配備では、`fcm-tokens`・`passkey-options`・`approve` が 503 `no firestore` を返します。
 
 ### GET /ciba/pending
 
@@ -161,7 +163,7 @@ rust-idp は、次の 3 つを確かめます。
 - 要求が、同じ利用者のものであること
 - assertion が正しく、利用者の確認（user verification）を伴うこと
 
-`clientDataJSON` の `origin` は、OP の origin と完全に一致する必要があります。RP ID は issuer の host です。iOS のアプリ向けに、OP は `/.well-known/apple-app-site-association` を出します。その `webcredentials` には、設定したアプリ（`APPLE_APP_ID`）が入ります。いまの OP は `assetlinks.json` を出しません。`android:apk-key-hash:` の origin も受けません。
+`clientDataJSON` の `origin` は、OP の origin と完全に一致する必要があります。RP ID は issuer の host です。iOS のアプリ向けに、OP は `https://<host>/.well-known/apple-app-site-association` を出します。置き場は origin の直下で、`{i}` の下ではありません。その `webcredentials` には、設定したアプリ（`APPLE_APP_ID`）が入ります。出すのは `APP_NAME`・`APP_SCHEME`・`APP_ANDROID_PACKAGE`・`APPLE_APP_ID` の 4 つがそろったときだけです（そろわなければ 404）。いまの OP は `assetlinks.json` を出しません。`android:apk-key-hash:` の origin も受けません。
 
 | 状態 | 意味 |
 |---|---|

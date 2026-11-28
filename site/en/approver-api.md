@@ -32,7 +32,7 @@ Users can also approve without an app. The browser page `/ciba` lists the signed
 
     `--scope ""` removes it again. The subcommand changes only `scope` and leaves the rest of the registration as it is.
 
-A client without the scope that asks for `ciba:approve` gets `invalid_scope` ("ciba:approve is not allowed for this client"). This applies to `/authorize`, PAR and `/backchannel-authentication`.
+A client without the scope that asks for `ciba:approve` gets `invalid_scope` ("ciba:approve is not allowed for this client"). This applies to `/authorize` and `/backchannel-authentication`. With PAR, `POST /par` accepts the request; the error comes when `/authorize` uses the `request_uri`.
 
 ### Sign the user in
 
@@ -78,11 +78,13 @@ Errors common to the endpoints that take an access token:
 
 | Status | Body | Meaning |
 |---|---|---|
-| 401 | `access token required` | No `Authorization` header |
+| 401 | `access token required` | No `Authorization` header, or it is not in the `Bearer <token>` or `DPoP <token>` form |
 | 401 | `invalid token` | The token is unknown or expired |
 | 401 | `DPoP scheme required`, `DPoP proof required`, `DPoP jkt mismatch`, `DPoP: …` | The token is DPoP-bound and the call did not prove the key |
 | 403 | `forbidden` | The token lacks `ciba:approve`, or the client's registration no longer allows it |
 | 503 | `temporarily unavailable` | The token store could not be read. Keep the token and retry |
+
+A deployment without the document store (Firestore) returns 503 `no firestore` from `fcm-tokens`, `passkey-options` and `approve`.
 
 ### GET /ciba/pending
 
@@ -155,7 +157,7 @@ Sends the passkey assertion made with the options above. Send it without an acce
 }
 ```
 
-rust-idp checks that the challenge was issued for this request, that the request belongs to the same user, and that the assertion is valid with user verification. The `origin` in `clientDataJSON` must equal the OP's origin exactly, and the RP ID is the issuer's host. For an iOS app, the OP serves `/.well-known/apple-app-site-association` with the configured app (`APPLE_APP_ID`) under `webcredentials`. The OP does not serve `assetlinks.json` and does not accept `android:apk-key-hash:` origins today.
+rust-idp checks that the challenge was issued for this request, that the request belongs to the same user, and that the assertion is valid with user verification. The `origin` in `clientDataJSON` must equal the OP's origin exactly, and the RP ID is the issuer's host. For an iOS app, the OP serves `https://<host>/.well-known/apple-app-site-association` at the origin's root, not under `{i}`. It lists the configured app (`APPLE_APP_ID`) under `webcredentials`, and it is served only when `APP_NAME`, `APP_SCHEME`, `APP_ANDROID_PACKAGE` and `APPLE_APP_ID` are all set (404 otherwise). The OP does not serve `assetlinks.json` and does not accept `android:apk-key-hash:` origins today.
 
 | Status | Meaning |
 |---|---|
