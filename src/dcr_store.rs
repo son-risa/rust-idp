@@ -95,6 +95,7 @@ pub async fn put_client_if_unchanged(
 }
 
 /// [`set_client_scope`] の結果。
+#[cfg(feature = "gcp")]
 #[derive(Debug, PartialEq, Eq)]
 pub enum SetScopeResult {
     Updated,
@@ -107,6 +108,7 @@ pub enum SetScopeResult {
 /// 既にある client の登録の `scope` を置き換える（`set-client-scope`）。他の項目は変えない。
 /// 移行（`migrate-static-clients`）は create_if_absent で既存の登録に書けないので、
 /// 制限付きの scope を後から許すのはこの口だけ。
+#[cfg(feature = "gcp")]
 pub async fn set_client_scope(
     fs: &dyn DocumentStore,
     client_id: &str,
