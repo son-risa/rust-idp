@@ -1987,6 +1987,41 @@ mod tests {
         assert_eq!(r.scope, "openid");
     }
 
+    // 元の scope に無い ciba:approve は refresh で足せない。断ったときは RT を使わせない。
+    #[tokio::test]
+    async fn refresh_cannot_add_the_approve_scope() {
+        let p = provider();
+        let c = client("rp");
+        for (i, scope) in [
+            "openid offline_access ciba:approve",
+            "ciba:approve",
+            "openid\tciba:approve",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let rt = format!("RTA{i}");
+            p.store
+                .save_refresh_token(rt_bound(&rt, "rp", "openid offline_access", "KEY-A"))
+                .await
+                .unwrap();
+            let f = form(&[("refresh_token", rt.as_str()), ("scope", scope)]);
+            assert!(
+                matches!(
+                    RefreshTokenGrant
+                        .handle(&p, &c, &f, Some("KEY-A".into()))
+                        .await,
+                    Err(OAuthError::InvalidScope(_))
+                ),
+                "{scope}"
+            );
+            assert!(
+                !p.store.get_refresh_token(&rt).await.unwrap().unwrap().used,
+                "{scope}"
+            );
+        }
+    }
+
     // ===== CIBA grant 統合テスト（MemoryCibaStore 注入）=====
     // grant ロジックが store を正しく使うことを検証する。Firestore の updateTime CAS
     // 自体の検証ではない（そこはコードレビュー担保 / MemoryCibaStore の単体テストで補強）。
