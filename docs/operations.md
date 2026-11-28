@@ -107,11 +107,13 @@ Firestore の `(default)`（本番）と `staging` は PITR（7 日）と削除�
 
 ```sh
 rust-idp set-client-scope --client mobile-rp --scope ciba:approve
+rust-idp set-client-scope --client demo-rp --scope ciba:approve
 ```
 
 - 承認の口を scope で絞る版を配る前に、staging と本番の Firestore で、承認のアプリの client と `demo-rp` に書いておく。書かずに配ると、承認のアプリの token は承認の口で 403 になる。デモの画面は登録を見て `ciba:approve` を求めないので、サインインと管理画面は止まらない。
 - scope を持たない前の版が、管理画面で client を保存し直すと、`scope` が消える（前の版は知らない項目を読み捨てて書き戻す）。配っている途中と前の版へ戻したときは、管理画面で client を保存しない。戻した後は書き直す。
 - 配った後、承認のアプリの利用者はログインし直す（前の refresh token では scope を広げられない）。
+- 配る前の版で開いたままのデモの画面は、前の scope を求める。配った後は開き直す。
 
 ## 旧名
 

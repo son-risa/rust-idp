@@ -450,7 +450,8 @@ async fn set_client_scope_cmd(args: &[String]) {
                     .next()
                     .map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "))
             }
-            _ => {}
+            // 引用符を付けずに `--scope openid ciba:approve` と書くと、後ろの語が黙って捨てられる。
+            _ => usage(),
         }
     }
     let (Some(client_id), Some(scope)) = (client_id, scope) else {
