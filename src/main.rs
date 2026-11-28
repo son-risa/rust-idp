@@ -185,14 +185,21 @@ fn mobile_app_from_env() -> Option<MobileApp> {
 /// カンマ区切りの Apple の appID（`TEAMID.bundle.id`）。書き違いは AASA に黙って載り、
 /// アプリの passkey が通らない原因が見えなくなるので、起動しない。
 fn apple_app_ids_from_env(name: &str) -> Vec<String> {
-    let ids = client_ids_from_env(name);
-    for id in &ids {
-        if !is_apple_app_id(id) {
+    match checked_apple_app_ids(client_ids_from_env(name)) {
+        Ok(ids) => ids,
+        Err(id) => {
             tracing::error!("FATAL: {name} has a malformed app id (want TEAMID.bundle.id): {id}");
             std::process::exit(1);
         }
     }
-    ids
+}
+
+/// 形の違う appID があれば、その 1 つ目を返す。
+fn checked_apple_app_ids(ids: Vec<String>) -> Result<Vec<String>, String> {
+    match ids.iter().find(|id| !is_apple_app_id(id)) {
+        Some(bad) => Err(bad.clone()),
+        None => Ok(ids),
+    }
 }
 
 /// Team ID は英大文字と数字の 10 文字。その後に `.` と空でない bundle id。
@@ -245,7 +252,20 @@ fn fapi_client_from_env(client_id: &str, prefix: &str) -> Option<Client> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_apple_app_id;
+    use super::{checked_apple_app_ids, is_apple_app_id};
+
+    #[test]
+    fn a_malformed_app_id_is_reported() {
+        let ok = vec!["TEAM123456.com.example.a".to_string()];
+        assert_eq!(checked_apple_app_ids(ok.clone()), Ok(ok));
+        assert_eq!(
+            checked_apple_app_ids(vec![
+                "TEAM123456.com.example.a".into(),
+                "com.example.b".into(),
+            ]),
+            Err("com.example.b".to_string())
+        );
+    }
 
     #[test]
     fn apple_app_ids_are_team_id_dot_bundle_id() {

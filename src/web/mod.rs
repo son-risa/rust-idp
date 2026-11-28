@@ -1548,7 +1548,7 @@ mod legacy_host_tests {
         );
     }
 
-    /// 両方あれば、登録の画面が渡すアプリを先に、重ねて書いたものは 1 度だけ載せる。
+    /// 両方あれば、登録の画面が渡すアプリを先に載せる。どちらと重なっても、同じアプリは 1 度だけ。
     #[tokio::test]
     async fn aasa_lists_every_app_once_in_webcredentials() {
         let p =
@@ -1556,6 +1556,7 @@ mod legacy_host_tests {
                 .with_passkey_apple_app_ids(vec![
                     "TEAM123456.com.example.approver".into(),
                     "TEAM123456.com.example.demo".into(),
+                    "TEAM123456.com.example.approver".into(),
                 ]);
         let (status, body) = aasa_body(p).await;
         assert_eq!(status, StatusCode::OK);
