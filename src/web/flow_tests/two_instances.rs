@@ -326,7 +326,15 @@ async fn a_refresh_token_is_rotated_once_across_two_instances() {
             .await
     })
     .await;
-    assert_eq!(n, 1, "同じ refresh token で {n} 回回った");
+    // 1 台が使用済みの印を書いた直後に、もう 1 台がその印を見て再利用と判じ系列を失効すると、
+    // 先の 1 台も渡す前の札の確かめで断り、0 回になる（安全側）。0 回は系列が失効したときだけ許す。
+    assert!(n <= 1, "同じ refresh token で {n} 回回った");
+    if n == 0 {
+        assert!(
+            ps[0].store.refresh_family_revoked("F1").await.unwrap(),
+            "0 回なのに系列が失効していない"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
