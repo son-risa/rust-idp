@@ -163,7 +163,7 @@ rust-idp は、次の 3 つを確かめます。
 - 要求が、同じ利用者のものであること
 - assertion が正しく、利用者の確認（user verification）を伴うこと
 
-`clientDataJSON` の `origin` は、OP の origin と完全に一致する必要があります。RP ID は issuer の host です。iOS のアプリ向けに、OP は `https://<host>/.well-known/apple-app-site-association` を出します。置き場は origin の直下で、`{i}` の下ではありません。その `webcredentials` には、設定したアプリ（`APPLE_APP_ID`）が入ります。出すのは `APP_NAME`・`APP_SCHEME`・`APP_ANDROID_PACKAGE`・`APPLE_APP_ID` の 4 つがそろったときだけです（そろわなければ 404）。いまの OP は `assetlinks.json` を出しません。`android:apk-key-hash:` の origin も受けません。
+`clientDataJSON` の `origin` は、OP の origin と完全に一致する必要があります。RP ID は issuer の host です。iOS のアプリ向けに、OP は `https://<host>/.well-known/apple-app-site-association` を出します。置き場は origin の直下で、`{i}` の下ではありません。その `webcredentials` には、`APPLE_APP_ID` のアプリ（`APP_NAME`・`APP_SCHEME`・`APP_ANDROID_PACKAGE`・`APPLE_APP_ID` の 4 つがそろったときだけ）と、`PASSKEY_APPLE_APP_IDS`（`<Team ID>.<Bundle ID>` のカンマ区切り）のアプリがすべて入ります。承認のアプリは、このどちらかに載せる必要があります。どちらにもアプリが無ければ 404 です。いまの OP は `assetlinks.json` を出しません。`android:apk-key-hash:` の origin も受けません。
 
 | 状態 | 意味 |
 |---|---|

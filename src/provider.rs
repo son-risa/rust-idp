@@ -69,6 +69,8 @@ pub struct Provider {
     pub(crate) introspection_clients: Vec<String>,
     /// メールのリンクから passkey の登録を渡すネイティブのアプリ。None ならアプリへの誘導と AASA を出さない。
     pub(crate) mobile_app: Option<MobileApp>,
+    /// AASA の `webcredentials` だけに足すアプリ（`TEAMID.bundle.id`）。登録の画面の誘導には使わない。
+    pub(crate) passkey_apple_app_ids: Vec<String>,
 }
 
 /// 登録の画面からアプリを開く誘導（iOS の custom scheme・Android の intent）と、
@@ -140,6 +142,7 @@ impl Provider {
             invite_clients: Vec::new(),
             introspection_clients: Vec::new(),
             mobile_app: None,
+            passkey_apple_app_ids: Vec::new(),
         }
     }
 
@@ -331,6 +334,11 @@ impl Provider {
 
     pub fn with_mobile_app(mut self, app: MobileApp) -> Self {
         self.mobile_app = Some(app);
+        self
+    }
+
+    pub fn with_passkey_apple_app_ids(mut self, ids: Vec<String>) -> Self {
+        self.passkey_apple_app_ids = ids;
         self
     }
 

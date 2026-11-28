@@ -18,7 +18,8 @@ rust-idp を配備して動かすときの覚え書き。README を短い入口�
 | `CIBA_RP_SECRET` | CIBA クライアントの secret |
 | `RESEND_API_KEY` | メール送信（Secret Manager） |
 | `MAIL_FROM` | Resend で送るメールの差出人（例 `rust-idp <noreply@example.com>`）。無ければ Resend を使わず、メールはログに出る |
-| `APP_NAME` / `APP_SCHEME` / `APP_ANDROID_PACKAGE` / `APPLE_APP_ID` | メールのリンクから passkey の登録を渡すネイティブのアプリ（表示名・custom scheme・Android の package・`<Team ID>.<Bundle ID>`）。4 つが揃ったときだけ、登録の画面のアプリへの誘導と AASA（`/.well-known/apple-app-site-association`）を出す |
+| `APP_NAME` / `APP_SCHEME` / `APP_ANDROID_PACKAGE` / `APPLE_APP_ID` | メールのリンクから passkey の登録を渡すネイティブのアプリ（表示名・custom scheme・Android の package・`<Team ID>.<Bundle ID>`）。4 つが揃ったときだけ、登録の画面のアプリへの誘導と、AASA（`/.well-known/apple-app-site-association`）の applinks（`/r`）と webcredentials にこのアプリを出す |
+| `PASSKEY_APPLE_APP_IDS` | AASA の `webcredentials` だけに足すアプリ（`<Team ID>.<Bundle ID>` のカンマ区切り）。passkey の RP ID は IdP の host なので、この IdP で passkey を使う iOS のアプリは、どれも `APPLE_APP_ID` かここに載せる。登録の画面の誘導と applinks には使わない。上の 4 つが無くても、ここに 1 つあれば AASA を出す。形が違えば起動しない |
 | `FAPI1_X/Y/KID` / `FAPI2_X/Y/KID` | FAPI2 conformance 静的クライアント `fapi-1`/`fapi-2` の公開鍵（**設定時のみ登録 = ON/OFF 切替**。staging にだけ入れ、本番には入れない） |
 | `CONFORMANCE_FAPI_CALLBACK` | FAPI conformance の redirect 上書き |
 | `LOG_PSEUDONYM_KEY` | ログ内 sub の擬似化キー |

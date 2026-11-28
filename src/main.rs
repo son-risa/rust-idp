@@ -59,6 +59,7 @@ async fn main() {
     if let Some(app) = mobile_app_from_env() {
         provider = provider.with_mobile_app(app);
     }
+    provider = provider.with_passkey_apple_app_ids(apple_app_ids_from_env("PASSKEY_APPLE_APP_IDS"));
 
     // FAPI2 conformance 用の静的クライアント（fapi-1 = client / fapi-2 = client2）。
     // FAPI 認定スイートは動的登録 variant を持たず静的クライアント専用なので、認定時のみ
@@ -181,6 +182,46 @@ fn mobile_app_from_env() -> Option<MobileApp> {
     })
 }
 
+/// カンマ区切りの Apple の appID（`TEAMID.bundle.id`）。書き違いは AASA に黙って載り、
+/// アプリの passkey が通らない原因が見えなくなるので、起動しない。
+fn apple_app_ids_from_env(name: &str) -> Vec<String> {
+    match checked_apple_app_ids(client_ids_from_env(name)) {
+        Ok(ids) => ids,
+        Err(id) => {
+            tracing::error!("FATAL: {name} has a malformed app id (want TEAMID.bundle.id): {id}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 形の違う appID があれば、その 1 つ目を返す。
+fn checked_apple_app_ids(ids: Vec<String>) -> Result<Vec<String>, String> {
+    match ids.iter().find(|id| !is_apple_app_id(id)) {
+        Some(bad) => Err(bad.clone()),
+        None => Ok(ids),
+    }
+}
+
+/// Team ID は英大文字と数字の 10 文字。その後に `.` と空でない bundle id。
+fn is_apple_app_id(id: &str) -> bool {
+    match id.split_once('.') {
+        Some((team, bundle)) => {
+            team.len() == 10
+                && team
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                && !bundle.is_empty()
+                && !bundle.starts_with('.')
+                && !bundle.ends_with('.')
+                && !bundle.contains("..")
+                && bundle
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        }
+        None => false,
+    }
+}
+
 /// FAPI conformance クライアントを env から組む。`{prefix}_X` `{prefix}_Y` `{prefix}_KID`
 /// が全て揃っていれば Some。揃っていなければ None（= 本番で未登録）。
 /// redirect は認定スイートの alias コールバック固定（`CONFORMANCE_FAPI_CALLBACK` で上書き可）。
@@ -207,4 +248,41 @@ fn fapi_client_from_env(client_id: &str, prefix: &str) -> Option<Client> {
         id_token_signed_response_alg: None,
         scope: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{checked_apple_app_ids, is_apple_app_id};
+
+    #[test]
+    fn a_malformed_app_id_is_reported() {
+        let ok = vec!["TEAM123456.com.example.a".to_string()];
+        assert_eq!(checked_apple_app_ids(ok.clone()), Ok(ok));
+        assert_eq!(
+            checked_apple_app_ids(vec![
+                "TEAM123456.com.example.a".into(),
+                "com.example.b".into(),
+            ]),
+            Err("com.example.b".to_string())
+        );
+    }
+
+    #[test]
+    fn apple_app_ids_are_team_id_dot_bundle_id() {
+        assert!(is_apple_app_id("TEAM123456.com.example.app"));
+        assert!(is_apple_app_id("A1B2C3D4E5.ai.amate-app"));
+        for bad in [
+            "",
+            "com.example.app",
+            "team123456.com.example.app",
+            "TEAM12345.com.example.app",
+            "TEAM123456.",
+            "TEAM123456..com",
+            "TEAM123456.com.",
+            "TEAM123456.com example",
+            "TEAM123456",
+        ] {
+            assert!(!is_apple_app_id(bad), "{bad}");
+        }
+    }
 }

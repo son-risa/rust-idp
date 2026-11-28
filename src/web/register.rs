@@ -399,15 +399,31 @@ pub(super) async fn magic_redirect(
 
 /// IdP の host が Cloud Run へ直結（Firebase Hosting を経由しない）ため AASA を
 /// ここで返す。applinks=Universal Link(/r でアプリ起動)、webcredentials=ネイティブ passkey。
-/// アプリが設定されていなければ 404。
+/// passkey の RP ID は IdP の host なので、この IdP で passkey を使うアプリはどれも
+/// webcredentials に載る必要がある。applinks に載るのは登録の画面が渡すアプリだけ。
+/// アプリが 1 つも設定されていなければ 404。
 pub(super) async fn apple_app_site_association(State(p): State<Arc<Provider>>) -> Response {
-    let Some(app) = &p.mobile_app else {
+    let mut apps: Vec<&str> = p
+        .mobile_app
+        .iter()
+        .map(|a| a.apple_app_id.as_str())
+        .collect();
+    for id in &p.passkey_apple_app_ids {
+        if !apps.contains(&id.as_str()) {
+            apps.push(id);
+        }
+    }
+    if apps.is_empty() {
         return StatusCode::NOT_FOUND.into_response();
-    };
-    let id = app.apple_app_id.as_str();
+    }
+    let details: Vec<_> = p
+        .mobile_app
+        .iter()
+        .map(|a| serde_json::json!({"appID": a.apple_app_id, "paths": ["/r", "/r?*"]}))
+        .collect();
     Json(serde_json::json!({
-        "applinks": {"apps": [], "details": [{"appID": id, "paths": ["/r", "/r?*"]}]},
-        "webcredentials": {"apps": [id]},
+        "applinks": {"apps": [], "details": details},
+        "webcredentials": {"apps": apps},
     }))
     .into_response()
 }
