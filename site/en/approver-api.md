@@ -157,7 +157,7 @@ Sends the passkey assertion made with the options above. Send it without an acce
 }
 ```
 
-rust-idp checks that the challenge was issued for this request, that the request belongs to the same user, and that the assertion is valid with user verification. The `origin` in `clientDataJSON` must equal the OP's origin exactly, and the RP ID is the issuer's host. For an iOS app, the OP serves `https://<host>/.well-known/apple-app-site-association` at the origin's root, not under `{i}`. It lists the configured app (`APPLE_APP_ID`) under `webcredentials`, and it is served only when `APP_NAME`, `APP_SCHEME`, `APP_ANDROID_PACKAGE` and `APPLE_APP_ID` are all set (404 otherwise). The OP does not serve `assetlinks.json` and does not accept `android:apk-key-hash:` origins today.
+rust-idp checks that the challenge was issued for this request, that the request belongs to the same user, and that the assertion is valid with user verification. The `origin` in `clientDataJSON` must equal the OP's origin exactly, and the RP ID is the issuer's host. For an iOS app, the OP serves `https://<host>/.well-known/apple-app-site-association` at the origin's root, not under `{i}`. Its `webcredentials` lists the app set by `APPLE_APP_ID` (used only when `APP_NAME`, `APP_SCHEME`, `APP_ANDROID_PACKAGE` and `APPLE_APP_ID` are all set) and every app in `PASSKEY_APPLE_APP_IDS` (comma-separated `<Team ID>.<Bundle ID>`). Your approver app must be one of them. If neither lists an app, the file is 404. The OP does not serve `assetlinks.json` and does not accept `android:apk-key-hash:` origins today.
 
 | Status | Meaning |
 |---|---|

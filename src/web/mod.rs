@@ -1518,6 +1518,53 @@ mod legacy_host_tests {
         assert_eq!(r.status(), StatusCode::NOT_FOUND);
     }
 
+    async fn aasa_body(p: Provider) -> (StatusCode, String) {
+        let r = send(
+            router_with_legacy_hosts(p, ""),
+            "GET",
+            "/.well-known/apple-app-site-association",
+            None,
+        )
+        .await;
+        let status = r.status();
+        let body = axum::body::to_bytes(r.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    /// 登録の画面が渡すアプリが無くても、passkey だけのアプリは webcredentials に載る。
+    /// applinks には載せない（/r を開くのは登録の画面が渡すアプリだけ）。
+    #[tokio::test]
+    async fn aasa_lists_passkey_only_apps_in_webcredentials() {
+        let p = Provider::new("https://new.example/oidc".to_string())
+            .with_base_path("/oidc")
+            .with_passkey_apple_app_ids(vec!["TEAM123456.com.example.approver".into()]);
+        let (status, body) = aasa_body(p).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            r#"{"applinks":{"apps":[],"details":[]},"webcredentials":{"apps":["TEAM123456.com.example.approver"]}}"#
+        );
+    }
+
+    /// 両方あれば、登録の画面が渡すアプリを先に、重ねて書いたものは 1 度だけ載せる。
+    #[tokio::test]
+    async fn aasa_lists_every_app_once_in_webcredentials() {
+        let p =
+            with_app(Provider::new("https://new.example/oidc".to_string()).with_base_path("/oidc"))
+                .with_passkey_apple_app_ids(vec![
+                    "TEAM123456.com.example.approver".into(),
+                    "TEAM123456.com.example.demo".into(),
+                ]);
+        let (status, body) = aasa_body(p).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            r#"{"applinks":{"apps":[],"details":[{"appID":"TEAM123456.com.example.demo","paths":["/r","/r?*"]}]},"webcredentials":{"apps":["TEAM123456.com.example.demo","TEAM123456.com.example.approver"]}}"#
+        );
+    }
+
     #[tokio::test]
     async fn nothing_is_redirected_when_legacy_hosts_is_empty() {
         for legacy in ["", " , "] {
