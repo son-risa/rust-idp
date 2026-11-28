@@ -32,7 +32,7 @@ async function start(){
   const u=new URL(ISSUER+'/authorize');
   u.searchParams.set('client_id','demo-rp');
   u.searchParams.set('response_type','code');
-  u.searchParams.set('scope','openid profile email offline_access');
+  u.searchParams.set('scope','openid profile email offline_access ciba:approve');
   u.searchParams.set('redirect_uri',ISSUER+'/callback');
   u.searchParams.set('state',b64url(crypto.getRandomValues(new Uint8Array(16))));
   u.searchParams.set('nonce',b64url(crypto.getRandomValues(new Uint8Array(16))));

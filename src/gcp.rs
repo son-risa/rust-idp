@@ -322,6 +322,7 @@ fn static_app_clients(issuer: &str, ciba_rp_secret_hash: String) -> Vec<Client> 
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: Some("ciba:approve".into()),
         },
         // Flutter ネイティブアプリ fido2demo（public + PKCE, custom scheme, DPoP）。
         Client {
@@ -338,6 +339,7 @@ fn static_app_clients(issuer: &str, ciba_rp_secret_hash: String) -> Vec<Client> 
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: Some("ciba:approve".into()),
         },
         // CIBA Consumption Device 用クライアント（poll, client_secret_basic）。
         Client {
@@ -354,6 +356,7 @@ fn static_app_clients(issuer: &str, ciba_rp_secret_hash: String) -> Vec<Client> 
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         },
     ]
 }

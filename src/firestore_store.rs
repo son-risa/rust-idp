@@ -669,6 +669,7 @@ mod revoke_family_tests {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         };
         let form = |t: &str| {
             std::collections::HashMap::from([("refresh_token".to_string(), t.to_string())])

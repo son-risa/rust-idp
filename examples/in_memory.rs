@@ -60,6 +60,7 @@ async fn main() {
             require_par: false,
             require_pkce: true,
             id_token_signed_response_alg: None,
+            scope: None,
         });
     tokio::spawn(async move {
         axum::serve(listener, rust_idp::router(provider))

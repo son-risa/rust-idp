@@ -53,6 +53,7 @@ fn client(id: &str, method: &str, secret: Option<String>, grants: &[&str]) -> Cl
         require_par: false,
         require_pkce: true,
         id_token_signed_response_alg: None,
+        scope: None,
     }
 }
 

@@ -1440,6 +1440,7 @@ mod tests {
             require_par: false,
             require_pkce: true,
             id_token_signed_response_alg: None,
+            scope: None,
         }
     }
 
@@ -2789,6 +2790,7 @@ mod tests {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         }
     }
 

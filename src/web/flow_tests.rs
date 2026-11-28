@@ -65,6 +65,7 @@ fn with_test_clients(p: Provider) -> Arc<Provider> {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         })
         .with_client(Client {
             client_id: "rp-entry".into(),
@@ -80,6 +81,7 @@ fn with_test_clients(p: Provider) -> Arc<Provider> {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         });
     Arc::new(p)
 }
@@ -1019,6 +1021,21 @@ async fn sign_count_update_preserves_account_id() {
         .unwrap();
     assert_eq!(cred.sign_count, 2);
     assert!(cred.last_used_at.is_some());
+}
+
+/// CIBA を始める RP は、登録で許されていなければ `ciba:approve` を要求できない（承認の口の token を CIBA で得させない）。
+#[tokio::test]
+async fn a_ciba_rp_cannot_ask_for_the_approve_scope() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let mut form = HashMap::new();
+    form.insert("client_id".to_string(), "test-ciba-rp".to_string());
+    form.insert("login_hint".to_string(), email);
+    form.insert("scope".to_string(), "openid ciba:approve".to_string());
+    let resp = ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(form)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_scope");
 }
 
 #[tokio::test]
