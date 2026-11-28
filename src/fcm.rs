@@ -61,7 +61,30 @@ pub async fn save_token(
         device_doc(account_id, token, platform, &firestore::rfc3339(now())),
     )
     .await?;
+    // 同じ token を古い形で持つ別の人がいれば外す。残すと、この文書が後で消えたときに
+    // その人宛ての知らせがこの端末へ行く。
+    for (other, _) in fs.query_eq(LEGACY, "token", token).await? {
+        if other != account_id {
+            fs.delete_doc(LEGACY, &other).await?;
+        }
+    }
     trim(fs, account_id).await
+}
+
+/// 端末の文書を、持ち主が `account_id` のままのときだけ消す。読んでから消すまでの間に
+/// 別の人が同じ token を登録し直していたら、その人の文書は残す。
+async fn delete_device_if_owned(
+    fs: &dyn DocumentStore,
+    id: &str,
+    account_id: &str,
+) -> Result<(), String> {
+    let Some((f, at)) = fs.get_doc_with_update_time(DEVICES, id).await? else {
+        return Ok(());
+    };
+    if firestore::field_str(&f, "accountId") == Some(account_id) {
+        fs.delete_doc_if_unchanged(DEVICES, id, &at).await?;
+    }
+    Ok(())
 }
 
 /// 古い形の 1 つを新しい形へ移す。その token が既に誰かの端末として在れば、そちらを残す。
@@ -99,7 +122,7 @@ async fn trim(fs: &dyn DocumentStore, account_id: &str) -> Result<(), String> {
         tb.cmp(&ta).then_with(|| ib.cmp(ia))
     });
     for (id, _) in &docs[MAX_DEVICES..] {
-        fs.delete_doc(DEVICES, id).await?;
+        delete_device_if_owned(fs, id, account_id).await?;
     }
     Ok(())
 }
@@ -110,7 +133,7 @@ pub async fn delete_account_devices(
     account_id: &str,
 ) -> Result<(), String> {
     for (id, _) in fs.query_eq(DEVICES, "accountId", account_id).await? {
-        fs.delete_doc(DEVICES, &id).await?;
+        delete_device_if_owned(fs, &id, account_id).await?;
     }
     fs.delete_doc(LEGACY, account_id).await
 }
@@ -186,7 +209,12 @@ pub async fn send_ciba_request(
         match send(fs, message).await {
             Ok(()) => {}
             Err(SendError::Unregistered) => {
-                if let Err(e) = DocumentStore::delete_doc(fs, col, &id).await {
+                let removed = if col == DEVICES {
+                    delete_device_if_owned(fs, &id, account_id).await
+                } else {
+                    DocumentStore::delete_doc(fs, col, &id).await
+                };
+                if let Err(e) = removed {
                     errors.push(format!("delete stale token: {e}"));
                 }
             }
@@ -367,6 +395,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_does_not_reach_a_legacy_token_after_its_new_owner_drops_it() {
+        let (host, state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        DocumentStore::set_doc(
+            &fs,
+            LEGACY,
+            "acct-a",
+            json!({ "token": firestore::s("tok-x") }),
+        )
+        .await
+        .unwrap();
+        save_token(&fs, "acct-b", "tok-x", "ios").await.unwrap();
+        delete_account_devices(&fs, "acct-b").await.unwrap();
+        send(&fs, "acct-a").await.unwrap();
+        assert!(state.fcm_sent_messages().is_empty());
+    }
+
+    #[tokio::test]
     async fn send_skips_a_legacy_token_now_registered_by_another_account() {
         let (host, state) = fake_firestore::spawn().await;
         let fs = Firestore::new_for_test("proj", host);
@@ -449,6 +495,28 @@ mod store_tests {
         save_token(&fs, "acct-a", "tok-new", "ios").await.unwrap();
         assert_eq!(tokens_of(&fs, "acct-a").await, ["tok-new", "tok-old"]);
         assert!(fs.get_doc(LEGACY, "acct-a").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn registering_a_token_drops_it_from_another_accounts_legacy_doc() {
+        let fs = MemoryDocumentStore::default();
+        fs.set_doc(LEGACY, "acct-a", json!({ "token": firestore::s("tok-x") }))
+            .await
+            .unwrap();
+        save_token(&fs, "acct-b", "tok-x", "ios").await.unwrap();
+        assert!(fs.get_doc(LEGACY, "acct-a").await.unwrap().is_none());
+        assert_eq!(tokens_of(&fs, "acct-b").await, ["tok-x"]);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_device_spares_a_token_another_account_took_over() {
+        let fs = MemoryDocumentStore::default();
+        save_token(&fs, "acct-a", "tok-x", "ios").await.unwrap();
+        save_token(&fs, "acct-b", "tok-x", "ios").await.unwrap();
+        delete_device_if_owned(&fs, &device_id("tok-x"), "acct-a")
+            .await
+            .unwrap();
+        assert_eq!(tokens_of(&fs, "acct-b").await, ["tok-x"]);
     }
 
     #[tokio::test]
