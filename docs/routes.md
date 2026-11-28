@@ -51,9 +51,9 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
 | base | PUT | `/me/profile` | RP | access token | はい | いいえ |
 | base | POST | `/backchannel-authentication` | RP | client 認証 | はい | いいえ |
 | base | GET | `/ciba` | ブラウザ | cookie（sid） | いいえ | いいえ |
-| base | GET | `/ciba/pending` | アプリ | access token（承認のアプリの client のもの） | はい | いいえ |
-| base | GET | `/ciba/history` | アプリ | access token（承認のアプリの client のもの） | はい | いいえ |
-| base | POST | `/ciba/fcm-tokens` | アプリ | access token（承認のアプリの client のもの） | はい | いいえ |
+| base | GET | `/ciba/pending` | アプリ | access token（`ciba:approve` の scope を持つもの） | はい | いいえ |
+| base | GET | `/ciba/history` | アプリ | access token（`ciba:approve` の scope を持つもの） | はい | いいえ |
+| base | POST | `/ciba/fcm-tokens` | アプリ | access token（`ciba:approve` の scope を持つもの） | はい | いいえ |
 | base | POST | `/ciba/{auth_req_id}/passkey-options` | ブラウザ、アプリ | cookie（sid、自分の origin から）か access token。要求の宛先の利用者に限る | はい | いいえ |
 | base | POST | `/ciba/{auth_req_id}/approve` | ブラウザ、アプリ | passkey | はい | いいえ |
 | base | POST | `/ciba/{auth_req_id}/reject` | ブラウザ、アプリ | cookie（sid、自分の origin から）か access token。要求の宛先の利用者に限る | はい | いいえ |
@@ -128,8 +128,11 @@ rust-idp が受ける HTTP の経路（method と path の組）の届け出。`
   自分の画面（`/account` と管理画面）のログアウトは、`confirm` を付けた form の POST なので、確かめの画面を出さない。
 - `/ciba/{auth_req_id}/passkey-options` と `/reject` は、`auth_req_id` を知っているだけでは呼べない（`auth_req_id` は path に載り、ログに残る）。
   `Authorization` があれば access token（`/ciba/pending` と同じ）、無ければ cookie（sid）で名乗り、要求の宛先の利用者でなければ 404。
-- `/ciba/pending`・`/ciba/history`・`/ciba/fcm-tokens` と、上の 2 つの access token の道は、承認のアプリ（`demo-rp`・`mobile-rp`）の token だけを受け、
-  ほかの client の token は利用者が同じでも 403。RP が利用者の token を持っていても、他の RP の要求の一覧・拒否、credential ID、通知先の登録には触れさせない。
+- `/ciba/pending`・`/ciba/history`・`/ciba/fcm-tokens` と、上の 2 つの access token の道は、`ciba:approve` の scope を持つ token だけを受ける。
+  この scope は、client の登録の `scope`（RFC 7591）に `ciba:approve` が書かれた client しか、`/authorize`・PAR・CIBA の要求で求められない
+  （ほかの client が求めると `invalid_scope`）。DCR では付けられず、管理者が登録に書く。
+  受けるときにも今の登録を見るので、登録から外した client の token は、期限の前でも 403。
+  scope の無い token と、許されていない client の token は、利用者が同じでも 403。RP が利用者の token を持っていても、他の RP の要求の一覧・拒否、credential ID、通知先の登録には触れさせない。
   cookie で名乗るときは、管理画面の門と同じ `from_own_origin` で自分の origin からの要求に限る（違えば 403）。
   名乗りが無い（`Authorization` も sid も無い）ときは 401。`auth_req_id` が Firestore の文書 ID にできない形
   （129 文字以上、`__` で始まるなど）なら、引かずに 404。

@@ -176,6 +176,7 @@ mod tests {
             require_par: true,
             require_pkce: true,
             id_token_signed_response_alg: None,
+            scope: None,
         }
     }
 

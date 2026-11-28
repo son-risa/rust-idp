@@ -12,6 +12,7 @@ pub enum AdminCommand {
     EnableAccount,
     MigrateStaticClients,
     MigrateCredentials,
+    SetClientScope,
 }
 
 impl AdminCommand {
@@ -25,6 +26,7 @@ impl AdminCommand {
             "enable-account" => Self::EnableAccount,
             "migrate-static-clients" => Self::MigrateStaticClients,
             "migrate-credentials" => Self::MigrateCredentials,
+            "set-client-scope" => Self::SetClientScope,
             _ => return None,
         })
     }

@@ -94,6 +94,40 @@ pub async fn put_client_if_unchanged(
     .await
 }
 
+/// [`set_client_scope`] の結果。
+#[cfg(feature = "gcp")]
+#[derive(Debug, PartialEq, Eq)]
+pub enum SetScopeResult {
+    Updated,
+    Unchanged,
+    NotFound,
+    /// 読んでから書くまでに別の書き込みが入った。読み直して流し直す。
+    Conflict,
+}
+
+/// 既にある client の登録の `scope` を置き換える（`set-client-scope`）。他の項目は変えない。
+/// 移行（`migrate-static-clients`）は create_if_absent で既存の登録に書けないので、
+/// 制限付きの scope を後から許すのはこの口だけ。
+#[cfg(feature = "gcp")]
+pub async fn set_client_scope(
+    fs: &dyn DocumentStore,
+    client_id: &str,
+    scope: Option<String>,
+) -> Result<SetScopeResult, String> {
+    let Some((mut c, version)) = load_client_with_version(fs, client_id).await? else {
+        return Ok(SetScopeResult::NotFound);
+    };
+    if c.scope == scope {
+        return Ok(SetScopeResult::Unchanged);
+    }
+    c.scope = scope;
+    Ok(if put_client_if_unchanged(fs, &c, &version).await? {
+        SetScopeResult::Updated
+    } else {
+        SetScopeResult::Conflict
+    })
+}
+
 /// clients/ 全件を列挙する（管理UIの一覧表示用）。壊れたJSONブロブはスキップする
 /// （load_client と同じ fail-closed だが沈黙しない方針）。
 pub async fn list_clients(fs: &dyn DocumentStore) -> Result<Vec<Client>, String> {
@@ -269,6 +303,7 @@ mod tests {
             require_par: true,
             require_pkce: true,
             id_token_signed_response_alg: None,
+            scope: None,
         }
     }
 
@@ -345,6 +380,29 @@ mod tests {
     }
 
     // 未知の client は None（作らない）。
+    #[tokio::test]
+    async fn set_client_scope_changes_only_the_scope() {
+        let (host, _state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        save_client(&fs, &client("app")).await.unwrap();
+
+        let r = set_client_scope(&fs, "app", Some("ciba:approve".into())).await;
+        assert_eq!(r, Ok(SetScopeResult::Updated));
+        let stored = load_client(&fs, "app").await.unwrap();
+        assert_eq!(stored.scope.as_deref(), Some("ciba:approve"));
+        assert_eq!(stored.redirect_uris, vec!["https://rp.example.com/cb"]);
+        assert!(stored.require_par);
+
+        let again = set_client_scope(&fs, "app", Some("ciba:approve".into())).await;
+        assert_eq!(again, Ok(SetScopeResult::Unchanged));
+        let missing = set_client_scope(&fs, "nobody", Some("ciba:approve".into())).await;
+        assert_eq!(missing, Ok(SetScopeResult::NotFound));
+
+        let cleared = set_client_scope(&fs, "app", None).await;
+        assert_eq!(cleared, Ok(SetScopeResult::Updated));
+        assert_eq!(load_client(&fs, "app").await.unwrap().scope, None);
+    }
+
     #[tokio::test]
     async fn load_client_with_version_returns_none_for_unknown() {
         let (host, _state) = fake_firestore::spawn().await;

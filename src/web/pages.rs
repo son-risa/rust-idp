@@ -32,7 +32,7 @@ async function start(){
   const u=new URL(ISSUER+'/authorize');
   u.searchParams.set('client_id','demo-rp');
   u.searchParams.set('response_type','code');
-  u.searchParams.set('scope','openid profile email offline_access');
+  u.searchParams.set('scope','__SCOPE__');
   u.searchParams.set('redirect_uri',ISSUER+'/callback');
   u.searchParams.set('state',b64url(crypto.getRandomValues(new Uint8Array(16))));
   u.searchParams.set('nonce',b64url(crypto.getRandomValues(new Uint8Array(16))));
@@ -41,7 +41,22 @@ async function start(){
   location.href=u.toString();
 }
 </script></body></html>"##;
-    Html(localize(page, Lang::from_headers(&headers)).replace("__ISSUER__", &p.issuer))
+    // 登録が許すときだけ ciba:approve を求める。求めて断られると invalid_scope でサインインごと止まり、
+    // 同じ画面を通る管理画面にも入れなくなる。
+    let approve = p
+        .resolve_client("demo-rp")
+        .await
+        .is_some_and(|c| c.forbidden_scope("ciba:approve").is_none());
+    let scope = if approve {
+        "openid profile email offline_access ciba:approve"
+    } else {
+        "openid profile email offline_access"
+    };
+    Html(
+        localize(page, Lang::from_headers(&headers))
+            .replace("__ISSUER__", &p.issuer)
+            .replace("__SCOPE__", scope),
+    )
 }
 
 // demo_callback の script の覚え書き（ページに載せると英語の画面に日本語が混ざるので、ここに置く）:

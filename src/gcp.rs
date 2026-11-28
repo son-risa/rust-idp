@@ -206,6 +206,7 @@ pub async fn run_admin_command(argv: &[String]) -> bool {
         C::EnableAccount => enable_account_cmd(args).await,
         C::MigrateStaticClients => migrate_static_clients_cmd(args).await,
         C::MigrateCredentials => migrate_credentials_cmd(args).await,
+        C::SetClientScope => set_client_scope_cmd(args).await,
     }
     true
 }
@@ -322,6 +323,7 @@ fn static_app_clients(issuer: &str, ciba_rp_secret_hash: String) -> Vec<Client> 
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: Some("ciba:approve".into()),
         },
         // Flutter ネイティブアプリ fido2demo（public + PKCE, custom scheme, DPoP）。
         Client {
@@ -338,6 +340,7 @@ fn static_app_clients(issuer: &str, ciba_rp_secret_hash: String) -> Vec<Client> 
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: Some("ciba:approve".into()),
         },
         // CIBA Consumption Device 用クライアント（poll, client_secret_basic）。
         Client {
@@ -354,6 +357,7 @@ fn static_app_clients(issuer: &str, ciba_rp_secret_hash: String) -> Vec<Client> 
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         },
     ]
 }
@@ -424,6 +428,59 @@ fn parse_email_arg(cmd: &str, args: &[String]) -> String {
     }
     eprintln!("{cmd}: usage: rust-idp {cmd} --email <email>");
     std::process::exit(2);
+}
+
+/// 既にある client の登録の scope を置き換える。`--scope ""` で外す。
+///
+/// `rust-idp set-client-scope --client <client_id> --scope ciba:approve`
+async fn set_client_scope_cmd(args: &[String]) {
+    let usage = || -> ! {
+        eprintln!(
+            "set-client-scope: usage: rust-idp set-client-scope --client <client_id> --scope <scope>"
+        );
+        std::process::exit(2);
+    };
+    let (mut client_id, mut scope) = (None, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--client" => client_id = it.next().cloned(),
+            "--scope" => {
+                scope = it
+                    .next()
+                    .map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "))
+            }
+            // 引用符を付けずに `--scope openid ciba:approve` と書くと、後ろの語が黙って捨てられる。
+            _ => usage(),
+        }
+    }
+    let (Some(client_id), Some(scope)) = (client_id, scope) else {
+        usage()
+    };
+    let scope = (!scope.is_empty()).then_some(scope);
+    let fs = firestore::Firestore::new(resolve_project());
+    match dcr_store::set_client_scope(&fs, &client_id, scope.clone()).await {
+        Ok(dcr_store::SetScopeResult::Updated) => {
+            let detail = format!("scope={}", scope.as_deref().unwrap_or(""));
+            audit_log::record(&fs, "cli", "set_client_scope", &client_id, &detail).await;
+            println!("updated: {client_id} {detail}");
+        }
+        Ok(dcr_store::SetScopeResult::Unchanged) => println!("unchanged: {client_id}"),
+        Ok(dcr_store::SetScopeResult::NotFound) => {
+            eprintln!("set-client-scope: Firestore に {client_id} がありません");
+            std::process::exit(1);
+        }
+        Ok(dcr_store::SetScopeResult::Conflict) => {
+            eprintln!(
+                "set-client-scope: 他の書き込みと競合しました。もう一度実行してください: {client_id}"
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("set-client-scope: 失敗: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// 管理者権限の付与（初回シード含む）。

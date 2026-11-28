@@ -42,9 +42,24 @@ pub struct Client {
     pub require_pkce: bool,
     /// id_token の署名 alg（OIDC `id_token_signed_response_alg`）。None は既定（ES256）。
     pub id_token_signed_response_alg: Option<String>,
+    /// この client が要求してよい、登録で許す scope（RFC 7591 の `scope`、空白区切り）。
+    /// 今は [`RESTRICTED_SCOPES`] にだけ効く。DCR では付けられず、管理者が Firestore の登録に書く。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
+/// 登録の `scope` に書かれた client だけが要求できる scope。
+/// `ciba:approve`: CIBA の承認の口（`/ciba/pending` など）に access token で入る。
+pub const RESTRICTED_SCOPES: &[&str] = &["ciba:approve"];
+
 impl Client {
+    /// 要求された scope のうち、この client に許されていない制限付きの scope を 1 つ返す。
+    pub fn forbidden_scope<'a>(&self, requested: &'a str) -> Option<&'a str> {
+        let allowed = self.scope.as_deref().unwrap_or("");
+        requested
+            .split_whitespace()
+            .find(|s| RESTRICTED_SCOPES.contains(s) && !allowed.split_whitespace().any(|a| a == *s))
+    }
     pub fn is_public(&self) -> bool {
         self.token_endpoint_auth_method == "none"
     }

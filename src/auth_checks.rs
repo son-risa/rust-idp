@@ -73,7 +73,7 @@ impl AuthorizationCheck for CheckResponseType {
     }
 }
 
-/// scope は openid を含む必要がある（OIDC リクエスト）。
+/// scope は openid を含む必要がある（OIDC リクエスト）。制限付きの scope は、登録で許された client だけが要求できる。
 pub struct CheckScope;
 #[async_trait]
 impl AuthorizationCheck for CheckScope {
@@ -81,6 +81,11 @@ impl AuthorizationCheck for CheckScope {
         let scope = req.params.scope.as_deref().unwrap_or("");
         if !scope.split_whitespace().any(|s| s == "openid") {
             return Err(OAuthError::InvalidScope("openid scope required".into()));
+        }
+        if let Some(s) = req.client.forbidden_scope(scope) {
+            return Err(OAuthError::InvalidScope(format!(
+                "{s} is not allowed for this client"
+            )));
         }
         Ok(())
     }
@@ -139,6 +144,7 @@ mod tests {
             require_par: false,
             require_pkce,
             id_token_signed_response_alg: None,
+            scope: None,
         }
     }
 
@@ -299,6 +305,56 @@ mod tests {
         assert_matches!(
             CheckScope.check(&p, &no).await,
             Err(OAuthError::InvalidScope(_))
+        );
+    }
+
+    /// `ciba:approve` は、登録の scope に書かれた client だけが要求できる。他の scope は今までどおり。
+    #[tokio::test]
+    async fn a_restricted_scope_needs_the_clients_registration() {
+        let p = Provider::new("https://op");
+        let asking = |scope: &str, c: Client| {
+            addressed(
+                AuthParams {
+                    scope: Some(scope.into()),
+                    ..params()
+                },
+                c,
+            )
+        };
+        assert_matches!(
+            CheckScope
+                .check(&p, &asking("openid ciba:approve", client(true, false)))
+                .await,
+            Err(OAuthError::InvalidScope(_))
+        );
+        let other = Client {
+            scope: Some("profile".into()),
+            ..client(true, false)
+        };
+        assert_matches!(
+            CheckScope
+                .check(&p, &asking("openid ciba:approve", other))
+                .await,
+            Err(OAuthError::InvalidScope(_))
+        );
+        let approver = Client {
+            scope: Some("ciba:approve".into()),
+            ..client(true, false)
+        };
+        assert!(
+            CheckScope
+                .check(&p, &asking("openid ciba:approve offline_access", approver))
+                .await
+                .is_ok()
+        );
+        assert!(
+            CheckScope
+                .check(
+                    &p,
+                    &asking("openid profile offline_access", client(true, false))
+                )
+                .await
+                .is_ok()
         );
     }
 

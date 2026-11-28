@@ -1,9 +1,11 @@
 use super::*;
 
-/// 承認の口に access token で来てよいのは、rust-idp 自身のアプリ（OP のデモの画面と、承認のアプリ）だけ。
+/// 承認の口に access token で来てよいのは、`ciba:approve` の scope を持つ token だけ。
+/// その scope は登録で許された client しか受けられない（[`crate::model::Client::forbidden_scope`]）。
+/// 発行の後に登録から外された client の token も、ここで今の登録を見て断る。
 /// RP が利用者の token を持っていても、その利用者宛ての他の RP の要求の一覧・拒否、passkey の credential ID、
 /// 通知先の登録には触れさせない。
-const APPROVER_CLIENTS: &[&str] = &["demo-rp", "mobile-rp"];
+const APPROVE_SCOPE: &str = "ciba:approve";
 
 async fn approver_token(
     p: &Provider,
@@ -12,7 +14,12 @@ async fn approver_token(
     path_suffix: &str,
 ) -> Result<crate::model::AccessToken, Response> {
     let at = authenticate_token(p, headers, method, path_suffix, None).await?;
-    if !APPROVER_CLIENTS.contains(&at.client_id.as_str()) {
+    let has_scope = at.scope.split_whitespace().any(|s| s == APPROVE_SCOPE);
+    let still_allowed = has_scope
+        && p.resolve_client(&at.client_id)
+            .await
+            .is_some_and(|c| c.forbidden_scope(APPROVE_SCOPE).is_none());
+    if !still_allowed {
         tracing::warn!(event = "ciba_foreign_client_rejected", path = path_suffix);
         return Err((StatusCode::FORBIDDEN, "forbidden").into_response());
     }
@@ -185,6 +192,10 @@ pub(super) async fn backchannel_auth(
         .unwrap_or_else(|| "openid".into());
     if !scope.split_whitespace().any(|s| s == "openid") {
         return OAuthError::InvalidScope("openid scope required".into()).into_response();
+    }
+    if let Some(s) = client.forbidden_scope(&scope) {
+        return OAuthError::InvalidScope(format!("{s} is not allowed for this client"))
+            .into_response();
     }
     let binding = form.get("binding_message").cloned().unwrap_or_default();
     // RFC 9396 authorization_details: 任意。JSON 配列で各要素に type 必須。
@@ -451,7 +462,7 @@ setInterval(()=>{if(!window.__busy)location.reload();},4000);
 /// 知っているだけでは足りないようにする。名乗り方は approve の呼び手に合わせて 2 つ。
 /// - ブラウザ（`/ciba` の画面）: cookie（sid）。`__Host-sid` は兄弟のサブドメインからの POST にも付くので、
 ///   管理画面の門と同じく自分の origin から来た要求に限る。
-/// - アプリ（承認インボックス）: `/ciba/pending` と同じ access token（承認のアプリの client のものだけ）。
+/// - アプリ（承認インボックス）: `/ciba/pending` と同じ access token（`ciba:approve` の scope を持つものだけ）。
 ///
 /// 無い要求と他人の要求は、どちらも 404 にして見分けさせない。期限切れは呼び手が扱う。
 async fn own_request(
@@ -725,8 +736,33 @@ mod tests {
             .unwrap();
         let p = Provider::new("https://idp.example")
             .with_firestore(fs)
-            .with_ciba(ciba.clone());
+            .with_ciba(ciba.clone())
+            .with_client(app_client(APPROVER, Some("ciba:approve")))
+            .with_client(app_client(PLAIN_APP, None));
         (Arc::new(p), ciba, id.0)
+    }
+
+    /// 登録で `ciba:approve` を許された client と、許されていない client。
+    const APPROVER: &str = "approver-app";
+    const PLAIN_APP: &str = "plain-app";
+
+    fn app_client(id: &str, scope: Option<&str>) -> crate::model::Client {
+        crate::model::Client {
+            client_id: id.into(),
+            redirect_uris: vec![],
+            token_endpoint_auth_method: "none".into(),
+            client_secret: None,
+            grant_types: vec!["authorization_code".into()],
+            post_logout_redirect_uris: vec![],
+            initiate_login_uri: None,
+            dpop_bound: false,
+            jwks: vec![],
+            jwks_uri: None,
+            require_par: false,
+            require_pkce: false,
+            id_token_signed_response_alg: None,
+            scope: scope.map(Into::into),
+        }
     }
 
     async fn approve_with(p: &Arc<Provider>, auth_req_id: &str, signer: &SigningKey) -> StatusCode {
@@ -838,17 +874,22 @@ mod tests {
 
     /// アプリの名乗り: access token（Bearer）。
     async fn app_of(p: &Provider, account: &str) -> (HeaderMap, CookieJar) {
-        token_of(p, account, "mobile-rp").await
+        token_with(p, account, APPROVER, "openid ciba:approve").await
     }
 
-    async fn token_of(p: &Provider, account: &str, client: &str) -> (HeaderMap, CookieJar) {
-        let token = format!("at-{client}-{account}");
+    async fn token_with(
+        p: &Provider,
+        account: &str,
+        client: &str,
+        scope: &str,
+    ) -> (HeaderMap, CookieJar) {
+        let token = format!("at-{client}-{account}-{}", scope.replace(' ', "_"));
         p.store
             .save_access_token(crate::model::AccessToken {
                 token: token.clone(),
                 client_id: client.into(),
                 account_id: account.into(),
-                scope: "openid".into(),
+                scope: scope.into(),
                 jkt: None,
                 aud: None,
                 acr: None,
@@ -950,41 +991,63 @@ mod tests {
         );
     }
 
-    /// 利用者の access token を持つ RP でも、承認の口には入れない。入れるのは承認のアプリ（demo-rp・mobile-rp）の token だけ。
+    /// 承認の口に入れるのは、登録で `ciba:approve` を許された client の、その scope を持つ token だけ。
+    /// 利用者の token を持つ RP でも、scope が無い・登録で許されていない・壊れた Authorization なら入れない。
     #[tokio::test]
-    async fn an_rps_token_for_the_user_cannot_use_the_approval_endpoints() {
+    async fn only_tokens_with_the_approve_scope_of_an_allowed_client_reach_the_approval_endpoints()
+    {
         let owner = SigningKey::generate();
         let (p, ciba, id) = seeded(&owner).await;
-        let rp = || token_of(&p, ACCOUNT, "rp");
 
-        assert_eq!(reject_as(&p, &id, rp().await).await, StatusCode::FORBIDDEN);
-        assert_eq!(
-            options_as(&p, &id, rp().await).await.status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            ciba_pending_list(State(p.clone()), rp().await.0)
+        let refused: Vec<(&str, &str)> = vec![
+            ("rp", "openid"),
+            // 登録の無い client が、何かの道で scope を持った token（登録の前に出たものなど）。
+            ("rp", "openid ciba:approve"),
+            // 許された client でも、scope の無い token。
+            (APPROVER, "openid"),
+            // 登録はあるが scope を許されていない client。
+            (PLAIN_APP, "openid ciba:approve"),
+        ];
+        for (client, scope) in refused {
+            let who = || token_with(&p, ACCOUNT, client, scope);
+            let case = format!("{client} / {scope}");
+            assert_eq!(
+                reject_as(&p, &id, who().await).await,
+                StatusCode::FORBIDDEN,
+                "{case}"
+            );
+            assert_eq!(
+                options_as(&p, &id, who().await).await.status(),
+                StatusCode::FORBIDDEN,
+                "{case}"
+            );
+            assert_eq!(
+                ciba_pending_list(State(p.clone()), who().await.0)
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN,
+                "{case}"
+            );
+            assert_eq!(
+                ciba_history(State(p.clone()), who().await.0).await.status(),
+                StatusCode::FORBIDDEN,
+                "{case}"
+            );
+            assert_eq!(
+                fcm_token_register(
+                    State(p.clone()),
+                    who().await.0,
+                    Json(FcmTokenReq {
+                        token: "rp-device".into(),
+                        platform: None,
+                    }),
+                )
                 .await
                 .status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            ciba_history(State(p.clone()), rp().await.0).await.status(),
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            fcm_token_register(
-                State(p.clone()),
-                rp().await.0,
-                Json(FcmTokenReq {
-                    token: "rp-device".into(),
-                    platform: None,
-                }),
-            )
-            .await
-            .status(),
-            StatusCode::FORBIDDEN
-        );
+                StatusCode::FORBIDDEN,
+                "{case}"
+            );
+        }
         assert_eq!(
             ciba.get(&id).await.unwrap().unwrap().status,
             CibaStatus::Pending
@@ -1005,31 +1068,26 @@ mod tests {
             CibaStatus::Pending
         );
 
-        for app in ["demo-rp", "mobile-rp"] {
-            assert_eq!(
-                ciba_pending_list(State(p.clone()), token_of(&p, ACCOUNT, app).await.0)
-                    .await
-                    .status(),
-                StatusCode::OK,
-                "{app}"
-            );
-            assert_eq!(
-                ciba_history(State(p.clone()), token_of(&p, ACCOUNT, app).await.0)
-                    .await
-                    .status(),
-                StatusCode::OK,
-                "{app}"
-            );
-            assert_eq!(
-                options_as(&p, &id, token_of(&p, ACCOUNT, app).await)
-                    .await
-                    .status(),
-                StatusCode::OK,
-                "{app}"
-            );
-        }
         assert_eq!(
-            reject_as(&p, &id, token_of(&p, ACCOUNT, "demo-rp").await).await,
+            ciba_pending_list(State(p.clone()), app_of(&p, ACCOUNT).await.0)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            ciba_history(State(p.clone()), app_of(&p, ACCOUNT).await.0)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            options_as(&p, &id, app_of(&p, ACCOUNT).await)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            reject_as(&p, &id, app_of(&p, ACCOUNT).await).await,
             StatusCode::NO_CONTENT
         );
     }
@@ -1043,7 +1101,8 @@ mod tests {
         let p = Arc::new(
             Provider::new("https://idp.example")
                 .with_firestore(fs)
-                .with_ciba(ciba),
+                .with_ciba(ciba)
+                .with_client(app_client(APPROVER, Some("ciba:approve"))),
         );
         let too_long = "a".repeat(200);
         for id in ["__x__", too_long.as_str()] {

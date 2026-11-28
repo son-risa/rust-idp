@@ -65,6 +65,7 @@ fn with_test_clients(p: Provider) -> Arc<Provider> {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         })
         .with_client(Client {
             client_id: "rp-entry".into(),
@@ -80,6 +81,7 @@ fn with_test_clients(p: Provider) -> Arc<Provider> {
             require_par: false,
             require_pkce: false,
             id_token_signed_response_alg: None,
+            scope: None,
         });
     Arc::new(p)
 }
@@ -1019,6 +1021,21 @@ async fn sign_count_update_preserves_account_id() {
         .unwrap();
     assert_eq!(cred.sign_count, 2);
     assert!(cred.last_used_at.is_some());
+}
+
+/// CIBA を始める RP は、登録で許されていなければ `ciba:approve` を要求できない（承認の口の token を CIBA で得させない）。
+#[tokio::test]
+async fn a_ciba_rp_cannot_ask_for_the_approve_scope() {
+    let p = test_provider().await;
+    let email = format!("probe-{}@example.com", uuid::Uuid::new_v4());
+    register_test_account(&p, &email).await;
+    let mut form = HashMap::new();
+    form.insert("client_id".to_string(), "test-ciba-rp".to_string());
+    form.insert("login_hint".to_string(), email);
+    form.insert("scope".to_string(), "openid ciba:approve".to_string());
+    let resp = ciba::backchannel_auth(State(p.clone()), HeaderMap::new(), Form(form)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_scope");
 }
 
 #[tokio::test]
@@ -2991,4 +3008,25 @@ async fn a_recovery_that_could_not_delete_the_previous_session_does_not_sign_in(
     );
     assert_eq!(passkeys_of(&p, &email).await, 2);
     assert!(p.store.get_session(&old).await.unwrap().is_some());
+}
+
+/// デモの画面は、demo-rp の登録が許すときだけ `ciba:approve` を求める。許さない登録で求めると
+/// `/authorize` が invalid_scope を返し、同じ画面を通る管理画面のサインインまで止まる。
+#[tokio::test]
+async fn the_demo_page_asks_for_the_approve_scope_only_when_the_registration_allows_it() {
+    let base = test_provider().await.clients["rp-entry"].clone();
+    for (scope, expected) in [(None, false), (Some("ciba:approve".to_string()), true)] {
+        let demo = Client {
+            client_id: "demo-rp".into(),
+            scope: scope.clone(),
+            ..base.clone()
+        };
+        let p = Arc::new(Provider::new("http://localhost:8099".to_string()).with_client(demo));
+        let body = pages::demo_start(State(p), HeaderMap::new()).await.0;
+        assert_eq!(body.contains("ciba:approve"), expected, "{scope:?}");
+        assert!(
+            body.contains("'openid profile email offline_access"),
+            "{scope:?}"
+        );
+    }
 }

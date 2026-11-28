@@ -205,5 +205,6 @@ fn fapi_client_from_env(client_id: &str, prefix: &str) -> Option<Client> {
         require_par: true,
         require_pkce: true,
         id_token_signed_response_alg: None,
+        scope: None,
     })
 }

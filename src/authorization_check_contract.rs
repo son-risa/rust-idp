@@ -36,6 +36,7 @@ fn client(public: bool) -> Client {
         require_par: false,
         require_pkce: false,
         id_token_signed_response_alg: None,
+        scope: None,
     }
 }
 
