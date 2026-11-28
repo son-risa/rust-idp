@@ -62,6 +62,7 @@ nav:
   - ユースケース: use-cases.md
   - 使い始める: get-started.md
   - 拡張のしかた: extending.md
+  - 承認の API: approver-api.md
   - 検証: verification.md
   - 要件:
       - 要件一覧: ../requirements/
