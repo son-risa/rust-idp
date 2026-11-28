@@ -171,7 +171,7 @@ pub async fn delete_account(
         return Err(incomplete(&counts));
     }
     registration::delete_all_credentials(fs, &cred).await?;
-    fs.delete_doc("fcmTokens", &cred.account_id).await?;
+    crate::fcm::delete_account_devices(fs, &cred.account_id).await?;
     fs.delete_doc("profiles", &cred.account_id).await?;
     fs.delete_doc("accountsByUuid", &cred.account_id).await?;
     fs.delete_doc("accounts", email).await?;

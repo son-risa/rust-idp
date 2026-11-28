@@ -118,6 +118,8 @@ Registers the device's Firebase Cloud Messaging token, so rust-idp can notify th
 
 `platform` is optional and defaults to `ios`. Returns 204. Push notifications need the Firestore deployment.
 
+A user can register several devices; a new request is sent to each of them. rust-idp keeps the 10 most recently registered devices per user. A token belongs to the user who registered it last, so when a device switches users, the previous user's requests stop going to it. Tokens that FCM reports as no longer registered are removed.
+
 ### POST /ciba/{auth_req_id}/passkey-options
 
 Starts an approval. Returns the options for a WebAuthn assertion:

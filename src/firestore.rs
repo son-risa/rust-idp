@@ -919,6 +919,8 @@ pub(crate) mod fake_firestore {
         next_version: Mutex<u64>,
         /// fcm.rs の send() が投げた message body をそのまま記録する（identifier 一貫性の検証用）。
         fcm_sent: Mutex<Vec<Value>>,
+        /// FCM が 404（UNREGISTERED）を返す token。
+        fcm_unregistered: Mutex<Vec<String>>,
         /// 失敗の注入: (メソッド, col, id) に合う次の要求に 1 回だけ、その状態の番号を返す。id が None なら col の全ての id に合う。
         failures: Mutex<Vec<Failure>>,
         /// 受けた要求を Firestore の課金の数え方で数えた記録（1 件が 1 回）。注入した失敗は数えない。
@@ -962,6 +964,12 @@ pub(crate) mod fake_firestore {
             self.docs.lock().unwrap().keys().cloned().collect()
         }
 
+        pub fn fcm_unregister(&self, token: &str) {
+            self.fcm_unregistered
+                .lock()
+                .unwrap()
+                .push(token.to_string());
+        }
         pub fn fcm_sent_messages(&self) -> Vec<Value> {
             self.fcm_sent.lock().unwrap().clone()
         }
@@ -1194,6 +1202,17 @@ pub(crate) mod fake_firestore {
     /// fcm.rs::send() が叩く `POST /v1/projects/{project}/messages:send` を模す。
     /// 実際に外部へは送らず、message body を記録して 200 を返すだけ。
     async fn fcm_send(State(st): State<Arc<FakeState>>, Json(body): Json<Value>) -> Response {
+        let token = body["message"]["token"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if st.fcm_unregistered.lock().unwrap().contains(&token) {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": { "status": "NOT_FOUND", "details": [{ "errorCode": "UNREGISTERED" }] } })),
+            )
+                .into_response();
+        }
         st.fcm_sent.lock().unwrap().push(body);
         Json(json!({ "name": "projects/fake/messages/1" })).into_response()
     }
