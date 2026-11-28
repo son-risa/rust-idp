@@ -61,14 +61,23 @@ pub async fn save_token(
         device_doc(account_id, token, platform, &firestore::rfc3339(now())),
     )
     .await?;
-    // 同じ token を古い形で持つ別の人がいれば外す。残すと、この文書が後で消えたときに
-    // その人宛ての知らせがこの端末へ行く。
+    drop_other_legacy(fs, account_id, token).await?;
+    trim(fs, account_id).await
+}
+
+/// 同じ token を古い形で持つ別の人がいれば外す。残すと、端末の文書が後で消えたときに
+/// その人宛ての知らせがこの端末へ行く。
+async fn drop_other_legacy(
+    fs: &dyn DocumentStore,
+    account_id: &str,
+    token: &str,
+) -> Result<(), String> {
     for (other, _) in fs.query_eq(LEGACY, "token", token).await? {
         if other != account_id {
             fs.delete_doc(LEGACY, &other).await?;
         }
     }
-    trim(fs, account_id).await
+    Ok(())
 }
 
 /// 端末の文書を、持ち主が `account_id` のままのときだけ消す。読んでから消すまでの間に
@@ -88,6 +97,7 @@ async fn delete_device_if_owned(
 }
 
 /// 古い形の 1 つを新しい形へ移す。その token が既に誰かの端末として在れば、そちらを残す。
+/// 古い作りでは 2 人が同じ token を古い形で持ちえたので、移した人を持ち主とし、他の人の分は外す。
 async fn migrate_legacy(fs: &dyn DocumentStore, account_id: &str) -> Result<(), String> {
     let Some(f) = fs.get_doc(LEGACY, account_id).await? else {
         return Ok(());
@@ -100,12 +110,16 @@ async fn migrate_legacy(fs: &dyn DocumentStore, account_id: &str) -> Result<(), 
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| firestore::rfc3339(0));
-        fs.create_if_absent(
-            DEVICES,
-            &device_id(token),
-            device_doc(account_id, token, platform, &updated_at),
-        )
-        .await?;
+        if fs
+            .create_if_absent(
+                DEVICES,
+                &device_id(token),
+                device_doc(account_id, token, platform, &updated_at),
+            )
+            .await?
+        {
+            drop_other_legacy(fs, account_id, token).await?;
+        }
     }
     fs.delete_doc(LEGACY, account_id).await
 }
@@ -407,6 +421,21 @@ mod tests {
         .await
         .unwrap();
         save_token(&fs, "acct-b", "tok-x", "ios").await.unwrap();
+        delete_account_devices(&fs, "acct-b").await.unwrap();
+        send(&fs, "acct-a").await.unwrap();
+        assert!(state.fcm_sent_messages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn migrating_a_legacy_token_shared_by_two_accounts_keeps_it_from_the_other() {
+        let (host, state) = fake_firestore::spawn().await;
+        let fs = Firestore::new_for_test("proj", host);
+        for acct in ["acct-a", "acct-b"] {
+            DocumentStore::set_doc(&fs, LEGACY, acct, json!({ "token": firestore::s("tok-x") }))
+                .await
+                .unwrap();
+        }
+        save_token(&fs, "acct-b", "tok-y", "ios").await.unwrap();
         delete_account_devices(&fs, "acct-b").await.unwrap();
         send(&fs, "acct-a").await.unwrap();
         assert!(state.fcm_sent_messages().is_empty());
